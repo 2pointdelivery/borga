@@ -46,7 +46,15 @@ jobs:
           cache-dependency-path: landing-site/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        # --ignore-workspace: this repo's pnpm-workspace.yaml lives one
+        # directory up. pnpm walks up for the outermost lockfile/workspace
+        # file and, without this flag, silently installs relative to that
+        # outer root instead of landing-site/ — leaving landing-site with no
+        # node_modules at all and the build failing with "Could not find the
+        # Next.js package". The checked-in landing-site/.npmrc sets this too,
+        # but CI has shown it isn't consistently honored before the workspace
+        # walk happens, so it's passed explicitly here as well.
+        run: pnpm install --frozen-lockfile --ignore-workspace
 
       - name: Build static export
         env:
