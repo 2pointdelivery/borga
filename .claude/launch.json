@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "borga-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "pnpm@10.33.4", "dev"],
+      "port": 13000
+    },
+    {
+      "name": "landing-static",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "serve", "landing-site/out"],
+      "port": 14100,
+      "autoPort": true
+    }
+  ]
+}

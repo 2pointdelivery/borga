@@ -1,0 +1,139 @@
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
+import { isValidUserId } from '@/lib/borga/keys';
+
+function reqToken(req: NextRequest): string | undefined {
+  const c = req.cookies.get(sessionCookieName());
+  if (!c) return undefined;
+  if (typeof c === 'string') return c;
+  if (typeof c === 'object' && 'value' in c) return (c as { value: string }).value;
+  return undefined;
+}
+
+// Simple in-memory fixed-window rate limiter (per Edge isolate).
+const WINDOW_MS = 60_000;
+const MAX_REQUESTS = 120;
+const SWEEP_INTERVAL_MS = 5 * 60_000;
+const MAX_TRACKED_KEYS = 50_000; // hard cap — a long-lived isolate must never grow this unbounded
+const hits = new Map<string, { count: number; reset: number }>();
+let lastSweep = 0;
+
+// Expired windows are never otherwise removed, so a long-lived isolate would
+// accumulate one entry per (ip, route-bucket) pair forever. Sweep periodically,
+// and hard-evict the oldest entries if something still blows past the cap.
+function sweepExpired(now: number): void {
+  if (now - lastSweep < SWEEP_INTERVAL_MS && hits.size < MAX_TRACKED_KEYS) return;
+  lastSweep = now;
+  for (const [k, v] of hits) {
+    if (v.reset < now) hits.delete(k);
+  }
+  if (hits.size > MAX_TRACKED_KEYS) {
+    const excess = hits.size - MAX_TRACKED_KEYS;
+    let i = 0;
+    for (const k of hits.keys()) {
+      if (i++ >= excess) break;
+      hits.delete(k);
+    }
+  }
+}
+
+function rateLimited(req: NextRequest): boolean {
+  const ip =
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    req.headers.get('x-real-ip') ||
+    'unknown';
+  const bucket = req.nextUrl.pathname.split('/').slice(0, 4).join('/');
+  const key = `${ip}:${bucket}`;
+  const now = Date.now();
+  sweepExpired(now);
+  const rec = hits.get(key);
+  if (!rec || rec.reset < now) {
+    hits.set(key, { count: 1, reset: now + WINDOW_MS });
+    return false;
+  }
+  rec.count += 1;
+  return rec.count > MAX_REQUESTS;
+}
+
+export async function proxy(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+
+  // --- Page-level auth gating ---
+  if (!pathname.startsWith('/api/borga')) {
+    const uid = await verifySessionToken(reqToken(req));
+    const authed = !!uid && isValidUserId(uid);
+
+    if (pathname.startsWith('/app')) {
+      if (!authed) {
+        const url = new URL('/login', req.url);
+        url.searchParams.set('next', pathname + req.nextUrl.search);
+        return NextResponse.redirect(url);
+      }
+      return NextResponse.next();
+    }
+
+    if (pathname === '/') {
+      if (authed) return NextResponse.redirect(new URL('/app', req.url));
+      return NextResponse.next();
+    }
+
+    return NextResponse.next();
+  }
+
+  // --- API surface (/api/borga) ---
+  const res = NextResponse.next();
+
+  // Rate limit all Borga API traffic.
+  if (rateLimited(req)) {
+    return NextResponse.json({ ok: false, error: 'Too many requests' }, { status: 429 });
+  }
+
+  // Twilio's own servers fetch these two endpoints when a real outbound call
+  // connects (TwiML, then the ElevenLabs audio to <Play>) — they carry no
+  // session cookie of ours. They authenticate themselves via a signed,
+  // server-generated id instead (see lib/borga/secrets.ts verifyPayloadSignature),
+  // so it's safe to skip the cookie check here specifically for them.
+  const isVoiceCallWebhook = pathname === '/api/borga/voice/call/twiml' || pathname === '/api/borga/voice/call/audio';
+  if (isVoiceCallWebhook) {
+    return res;
+  }
+
+  // Authentication gate — full HMAC signature verification (Edge runtime).
+  const uid = await verifySessionToken(reqToken(req));
+  if (!uid || !isValidUserId(uid)) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
+  res.headers.set('x-user-id', uid);
+
+  // Restrict methods to those the routes actually expose.
+  if (!['GET', 'POST', 'OPTIONS'].includes(req.method)) {
+    return NextResponse.json({ ok: false, error: 'Method not allowed' }, { status: 405 });
+  }
+
+  // Optional shared-secret gate for mutations. Enabled only when
+  // BORGA_ADMIN_TOKEN is set; external automations send it as a Bearer token.
+  const authToken = process.env.BORGA_ADMIN_TOKEN;
+  const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+  if (isWrite) {
+    if (authToken) {
+      const auth = req.headers.get('authorization') ?? '';
+      if (auth !== `Bearer ${authToken}`) {
+        return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      }
+    } else {
+      // CSRF guard: the dashboard must attach this custom header to every write.
+      // Browsers won't send a custom header cross-site without CORS preflight
+      // (which we don't allow), so a malicious page can't mutate app state.
+      if (req.headers.get('x-borga-client') !== 'borga-dashboard') {
+        return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 });
+      }
+    }
+  }
+
+  return res;
+}
+
+export const config = {
+  matcher: ['/', '/app/:path*', '/api/borga/:path*'],
+};

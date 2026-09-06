@@ -1,0 +1,83 @@
+name: Deploy landing page to GitHub Pages
+
+# Publishes only landing-site/ — the static marketing page — to GitHub
+# Pages. The main Borga app (app/, components/borga/, api/*) is a dynamic,
+# database-backed, session-authenticated Next.js app and cannot run on GitHub
+# Pages (no server, no API routes, no Postgres). It keeps deploying wherever
+# it already does (Docker / Cloudflare via wrangler.toml). This workflow
+# builds the standalone static export in landing-site/ and deploys it
+# separately, with its "Sign in" / "Get started" buttons pointed at the real
+# app's URL via the APP_URL repository variable.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'landing-site/**'
+      - '.github/workflows/deploy-landing.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: landing-site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: landing-site/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static export
+        env:
+          # A project page (the common case: https://<user>.github.io/<repo>/)
+          # must be served from a /<repo> subpath. A user/org root page
+          # (repo literally named <user>.github.io) or a custom domain
+          # (configure one via Settings > Pages > Custom domain, and add a
+          # CNAME file below) needs no prefix.
+          BASE_PATH: ${{ !endsWith(github.event.repository.name, '.github.io') && format('/{0}', github.event.repository.name) || '' }}
+          # Point "Sign in" / "Get started" at the real deployed app. Set the
+          # APP_URL repository variable (Settings > Secrets and variables >
+          # Actions > Variables) to override the https://borga.example.com
+          # placeholder baked in otherwise.
+          NEXT_PUBLIC_APP_URL: ${{ vars.APP_URL }}
+        run: pnpm build
+
+      - name: Add .nojekyll
+        run: touch out/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing-site/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
