@@ -53,9 +53,11 @@ function ShellInner() {
   const {
     userName, log, voice, hydrate, synced, dbAvailable, activeWorkspaceId, activeWorkspace,
     finance, invoices, bills, vendors, customers, leads, goals, journals, bankTxns, bankAccounts, employees,
-    memories, addMemory, knowledge, setKnowledge, settings, setSettings,
+    memories, addMemory, knowledge, setKnowledge, settings, setSettings, agents, llm, llmCatalog,
   } = useBorga();
   const { setMode, resolvedDark } = useTheme();
+  // What the AI actually is right now: the selected provider, or the built-in demo that needs no key.
+  const aiLabel = llm.providerId === 'llm-demo' ? 'Demo' : (llmCatalog.find((p) => p.id === llm.providerId)?.label ?? llm.providerId);
   const { startListening, stopListening } = useVoice();
   const [route, setRoute] = useState<ActiveRoute>({ page: 'overview' });
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -179,15 +181,23 @@ function ShellInner() {
     greeted.current = true;
     const h = new Date().getHours();
     const part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-    const msg = `${part}, ${userName}. Borga is online. All systems running smoothly — how can I help today?`;
     log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Awakened — ${part}, ${userName}.` });
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      const u = new SpeechSynthesisUtterance(msg);
-      u.rate = 1.02;
-      u.pitch = 0.72;
-      setTimeout(() => window.speechSynthesis.speak(u), 500);
-    }
   }, [userName, log]);
+
+  // Spoken greeting: only for people who turned voice on (Settings). Nothing plays, and no microphone is requested, on a fresh install.
+  const spoke = useRef(false);
+  useEffect(() => {
+    if (!synced || spoke.current || !voiceEnabled || !settings.notifications.voice) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    spoke.current = true;
+    const h = new Date().getHours();
+    const part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+    const u = new SpeechSynthesisUtterance(`${part}, ${userName}. Borga is listening — how can I help today?`);
+    u.rate = 1.02;
+    u.pitch = 0.72;
+    const t = setTimeout(() => window.speechSynthesis.speak(u), 500);
+    return () => clearTimeout(t);
+  }, [synced, voiceEnabled, settings.notifications.voice, userName]);
 
   // Always-listening voice: when "Wake on name" is on in Settings, keep the
   // mic continuously live app-wide (not just while the voice panel is open),
@@ -274,8 +284,10 @@ function ShellInner() {
         </nav>
         <div className="border-t p-4 text-xs text-sidebar-foreground/60">
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
-            <span>Fleet online — brain linked</span>
+            <span className={cn('h-2 w-2 rounded-full', dbAvailable ? 'bg-emerald-500' : 'bg-amber-500')} />
+            <span title={dbAvailable ? 'Your data is saved to the database.' : 'The database is not reachable, so changes are only saved on this device.'}>
+              {dbAvailable ? `${agents.length} agents · AI: ${aiLabel}` : 'Offline: saved on this device only'}
+            </span>
           </div>
         </div>
       </aside>

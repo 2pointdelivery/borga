@@ -20,7 +20,7 @@ const PALETTE = ['#6366f1', '#22d3ee', '#f472b6', '#f59e0b', '#34d399', '#a78bfa
 
 export function AgentsTab() {
   const { agents, updateAgent, addAgent, addMemory, memories, log, activeAgentId, setActiveAgentId, placeCall, elevenlabs, leads,
-    finance, invoices, bills, vendors, customers, goals, journals, bankTxns, bankAccounts, employees, activeWorkspace, llm } = useBorga();
+    finance, invoices, bills, vendors, customers, goals, journals, bankTxns, bankAccounts, employees, activeWorkspace, llm, agentRuns } = useBorga();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
@@ -69,7 +69,7 @@ export function AgentsTab() {
       skills: ['Auto-assign'],
       model: llm.model,
       tasksCompleted: 0,
-      accuracy: 90,
+      accuracy: 0,
       brainLinked: true,
       description: 'Custom agent added by the user.',
       instructions: instructions.trim() || 'Follow the shared brain and cooperate with the rest of the fleet.',
@@ -89,17 +89,23 @@ export function AgentsTab() {
     setEditingId(null);
   };
 
-  const evolve = (a: Agent) => {
-    updateAgent(a.id, { status: 'learning', accuracy: Math.min(100, a.accuracy + 1) });
-    log({ agentId: a.id, agentName: a.name, actor: 'agent', kind: 'learn', message: `${a.name} fine-tuned from recent outcomes — accuracy improved.` });
-  };
-
   const collaborate = (a: Agent) => {
     log({ agentId: a.id, agentName: a.name, actor: 'agent', kind: 'handoff', message: `${a.name} requested help from the shared brain and peers.` });
   };
 
-  const totalTasks = agents.reduce((s, a) => s + a.tasksCompleted, 0);
-  const avgAcc = Math.round(agents.reduce((s, a) => s + a.accuracy, 0) / agents.length);
+  // Real track record: finished runs and how many of the finished ones succeeded (a run that errored or was stopped is not a success).
+  const runStats = useMemo(() => {
+    const m = new Map<string, { done: number; finished: number }>();
+    for (const r of agentRuns) {
+      if (r.status === 'running') continue;
+      const e = m.get(r.agentId) ?? { done: 0, finished: 0 };
+      e.finished += 1;
+      if (r.status === 'complete') e.done += 1;
+      m.set(r.agentId, e);
+    }
+    return m;
+  }, [agentRuns]);
+  const totalTasks = [...runStats.values()].reduce((s, e) => s + e.done, 0);
 
   // Live business learning: derive insights from every module; one click makes
   // them durable agent memories (skills) the whole fleet reasons over.
@@ -127,7 +133,7 @@ export function AgentsTab() {
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Agent fleet" sub={`${agents.length} agents — ${totalTasks} tasks completed — ${avgAcc}% avg accuracy`} />
+        <SectionTitle title="Agent fleet" sub={`${agents.length} agents — ${totalTasks} runs completed`} />
         <Button onClick={() => setOpen(true)}>
           <Plus className="h-4 w-4" /> Add agent
         </Button>
@@ -236,12 +242,14 @@ export function AgentsTab() {
 
             <div className="mt-3 space-y-2 text-xs">
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Tasks done</span>
-                <span className="font-medium">{a.tasksCompleted}</span>
+                <span className="text-muted-foreground">Runs completed</span>
+                <span className="font-medium">{runStats.get(a.id)?.done ?? 0}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Accuracy</span>
-                <span className="font-medium text-emerald-600">{a.accuracy}%</span>
+                <span className="text-muted-foreground">Success rate</span>
+                <span className="font-medium text-emerald-600" title="Finished runs that completed without error">
+                  {(() => { const e = runStats.get(a.id); return e && e.finished > 0 ? `${Math.round((e.done / e.finished) * 100)}%` : '—'; })()}
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Model</span>
@@ -268,9 +276,6 @@ export function AgentsTab() {
                 </Button>
                 <Button size="icon" variant="ghost" className="h-7 w-7" title="Collaborate" onClick={() => collaborate(a)}>
                   <Zap className="h-3.5 w-3.5" />
-                </Button>
-                <Button size="icon" variant="ghost" className="h-7 w-7" title="Evolve & learn" onClick={() => evolve(a)}>
-                  <BrainCircuit className="h-3.5 w-3.5" />
                 </Button>
               </div>
             </div>

@@ -114,7 +114,7 @@ export interface Workflow {
 }
 
 // ---- Agent fleet: one specialist per department, personas from agency-agents ----
-export const AGENTS: Agent[] = [
+const RAW_AGENTS: Agent[] = [
   {
     id: 'a-borga', name: 'Borga', role: 'Orchestrator — Brain Hub', department: 'Command',
     status: 'active', avatarColor: '#6366f1',
@@ -556,6 +556,9 @@ export const AGENTS: Agent[] = [
     type: 'Testing', emoji: '🔌', vibe: 'Breaks your API before your users do.',
   },
 ];
+
+// The literal above carried invented stats (for example 1284 tasks done, 97% accuracy). Every agent starts at zero.
+export const AGENTS: Agent[] = RAW_AGENTS.map((a) => ({ ...a, tasksCompleted: 0, accuracy: 0 }));
 
 // Operational KPI baselines across every functional area. These seed the
 // "KPIs & Reports" tab and are fully editable/additive per company.
@@ -1267,53 +1270,14 @@ export interface OpsState {
   tracking: TrackingEvent[];
 }
 
+// A new company has no operations data. The Company Engine tab fills this from the connected API, or the user adds records.
 export const INITIAL_OPS: OpsState = {
-  clients: [
-    { id: 'c1', name: 'Northwind Logistics', contact: 'j.parker@northwind.io', city: 'Chicago', segment: 'Enterprise', active: true, bookingCount: 42 },
-    { id: 'c2', name: 'Ferry Freight', contact: 'm.diaz@ferryfreight.com', city: 'Newark', segment: 'Mid-market', active: true, bookingCount: 27 },
-    { id: 'c3', name: 'Gulfstream Marine', contact: 'r.lee@gulfstreammar.com', city: 'Houston', segment: 'Enterprise', active: true, bookingCount: 18 },
-    { id: 'c4', name: 'Atlas Distribution', contact: 's.kim@atlasdist.net', city: 'LA', segment: 'Mid-market', active: false, bookingCount: 9 },
-  ],
-  bookings: [
-    { id: 'b1', ref: 'BK-11024', client: 'Northwind Logistics', origin: 'Chicago IL', dest: 'Columbus OH', date: 'Today 09:00', status: 'in-transit', value: 12400, vehicle: 'TLX-420', driver: 'O. Rahman' },
-    { id: 'b2', ref: 'BK-11025', client: 'Ferry Freight', origin: 'Newark NJ', dest: 'Baltimore MD', date: 'Today 11:30', status: 'confirmed', value: 8600, vehicle: 'TLX-118', driver: 'D. Whitfield' },
-    { id: 'b3', ref: 'BK-11026', client: 'Gulfstream Marine', origin: 'Houston TX', dest: 'Dallas TX', date: 'Today 14:00', status: 'pending', value: 15900, vehicle: 'TRL-77', driver: '…' },
-    { id: 'b4', ref: 'BK-11022', client: 'Northwind Logistics', origin: 'Cleveland OH', dest: 'Detroit MI', date: 'Yesterday', status: 'delivered', value: 7300, vehicle: 'TLX-306', driver: 'O. Rahman' },
-    { id: 'b5', ref: 'BK-11020', client: 'Atlas Distribution', origin: 'LA CA', dest: 'Phoenix AZ', date: 'Mon', status: 'delivered', value: 10900, vehicle: 'TLX-512', driver: 'R. Osei' },
-    { id: 'b6', ref: 'BK-11019', client: 'Ferry Freight', origin: 'Newark NJ', dest: 'Boston MA', date: 'Sun', status: 'cancelled', value: 6200, vehicle: '…', driver: '…' },
-  ],
-  drivers: [
-    { id: 'd1', name: 'Omar Rahman', status: 'active', vehicle: 'TLX-420', joined: '2021', licence: 'CDL-A — HAZMAT' },
-    { id: 'd2', name: 'DeShawn Whitfield', status: 'active', vehicle: 'TLX-118', joined: '2022', licence: 'CDL-A' },
-    { id: 'd3', name: 'Roselyn Osei', status: 'active', vehicle: 'TLX-512', joined: '2022', licence: 'CDL-A — Tanker' },
-    { id: 'd4', name: 'Mateo Silva', status: 'onboarding', vehicle: 'TLX-221', joined: 'This week', licence: 'CDL-B (in review)' },
-    { id: 'd5', name: 'Grace Okafor', status: 'pending', vehicle: '…', joined: 'Screening', licence: 'CDL-A pending' },
-  ],
-  sla: [
-    { id: 's1', label: 'On-time delivery', value: 96, target: 98, unit: '%' },
-    { id: 's2', label: 'Avg pickup delay', value: 9, target: 15, unit: 'min' },
-    { id: 's3', label: 'Booking confirm time', value: 42, target: 60, unit: 'min' },
-    { id: 's4', label: 'Tracking coverage', value: 100, target: 95, unit: '%' },
-  ],
-  analytics: {
-    series: [
-      { label: 'W1', bookings: 118, revenue: 384, onTime: 95 },
-      { label: 'W2', bookings: 132, revenue: 412, onTime: 96 },
-      { label: 'W3', bookings: 141, revenue: 455, onTime: 94 },
-      { label: 'W4', bookings: 158, revenue: 491, onTime: 97 },
-      { label: 'W5', bookings: 149, revenue: 473, onTime: 96 },
-      { label: 'W6', bookings: 172, revenue: 528, onTime: 97 },
-    ],
-    byStatus: { pending: 14, confirmed: 22, 'in-transit': 31, delivered: 118, cancelled: 9 },
-    revenue: 528000,
-    activeFleet: 14,
-  },
-  tracking: [
-    { id: 't1', time: '14:32', ref: 'BK-11024', location: 'Toledo OH — I-75', state: 'in-transit', note: 'Arrived at hub 3, ETA 16:40.' },
-    { id: 't2', time: '13:05', ref: 'BK-11022', location: 'Detroit MI', state: 'delivered', note: 'Signed off by A. Mercer.' },
-    { id: 't3', time: '11:47', ref: 'BK-11025', location: 'Trenton NJ', state: 'confirmed', note: 'Loaded, awaiting departure window.' },
-    { id: 't4', time: '09:58', ref: 'BK-11026', location: 'Houston TX', state: 'pending', note: 'Awaiting vehicle assignment.' },
-  ],
+  clients: [],
+  bookings: [],
+  drivers: [],
+  sla: [],
+  analytics: { series: [], byStatus: { pending: 0, confirmed: 0, 'in-transit': 0, delivered: 0, cancelled: 0 }, revenue: 0, activeFleet: 0 },
+  tracking: [],
 };
 
 export const BOOKING_STATUS_ORDER: BookingStatus[] = ['pending', 'confirmed', 'in-transit', 'delivered', 'cancelled'];
@@ -1498,7 +1462,8 @@ export interface KpiGroup {
 export const INITIAL_KPI_GROUPS: KpiGroup[] = DEPARTMENTS.map((d) => ({
   id: d.id,
   name: d.name,
-  kpis: d.kpis.map((k) => ({ ...k })),
+  // Labels and units only. The seeded numbers were invented; live KPIs come from real data, the rest are entered by the user.
+  kpis: d.kpis.map((k) => ({ ...k, value: 0, target: 0, delta: 0 })),
 }));
 
 export interface KpiOverride {
@@ -1740,38 +1705,8 @@ export const KNOWLEDGE_CATEGORIES: { id: KnowledgeCategoryId; label: string; hin
   { id: 'process', label: 'Process & Playbooks', hint: 'How agents should operate' },
 ];
 
-export const KNOWLEDGE_SEED: KnowledgeEntry[] = [
-  {
-    id: 'kb1', category: 'company',
-    title: 'What is our company name, purpose and mission?',
-    answer: 'Replace this placeholder with your company overview. Provide the company name, primary purpose, core mission and key differentiators.',
-    source: 'Company dashboard', updatedAt: 'Today 08:00',
-  },
-  {
-    id: 'kb2', category: 'services',
-    title: 'What products and services do we offer?',
-    answer: 'Replace this placeholder with details of your products, services, pricing tiers, SLAs and any unique value propositions. Include key specifications and delivery models.',
-    source: 'Product docs', updatedAt: 'Today 08:05',
-  },
-  {
-    id: 'kb3', category: 'funding',
-    title: 'What funding programs and grants are available?',
-    answer: 'Replace this placeholder with current funding programs, grant opportunities, application deadlines and funding status.',
-    source: 'Finance', updatedAt: 'Today 08:30',
-  },
-  {
-    id: 'kb4', category: 'content',
-    title: 'Where can we find our public content and resources?',
-    answer: 'Replace this placeholder with links to your website, blog, documentation, brand assets and any public resources agents should reference.',
-    source: 'Web', updatedAt: 'Today 09:00',
-  },
-  {
-    id: 'kb-valuation', category: 'company',
-    title: 'What is our current valuation and financial position?',
-    answer: 'Replace this placeholder with key financial metrics: valuation, revenue multiples, enterprise value, share price, financial projections, margins and funding status.',
-    source: 'Finance + Eqvista', updatedAt: 'Today 09:00',
-  },
-];
+// Empty on purpose: a company's knowledge base holds only what the company has written (onboarding adds the first entries).
+export const KNOWLEDGE_SEED: KnowledgeEntry[] = [];
 
 export const KNOWLEDGE_QUESTIONS: KbQuestion[] = [
   { id: 'q1', category: 'services', question: 'What are our exact service packages, pricing tiers and contract SLAs?', source: 'Sales team' },
@@ -1858,7 +1793,7 @@ export interface SettingsState {
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
-  notifications: { tasks: true, handoffs: true, sync: false, voice: true, kpi: false },
+  notifications: { tasks: true, handoffs: true, sync: false, voice: false, kpi: false },
   crmUrl: '', // Configure in Company Settings
   autonomousMode: false,
 };
@@ -1981,7 +1916,7 @@ export interface AgentRun {
   triggeredBy: 'user' | 'scheduler' | 'webhook' | 'handoff';
 }
 
-export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = [
+const SCHEDULED_TASK_TEMPLATES: ScheduledTask[] = [
   {
     id: 'sched-1', name: 'Morning Fleet Brief', agentId: 'a-borga',
     goal: 'Review all department KPIs, flag any below-target metrics, create follow-up tasks for issues found, store key observations as memories, and log a morning brief summary to the activity feed.',
@@ -2008,6 +1943,9 @@ export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = [
     interval: 'daily', enabled: false, lastRun: null, nextRun: null, runCount: 0,
   },
 ];
+
+// Templates only: nothing runs on a schedule until the user switches it on.
+export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = SCHEDULED_TASK_TEMPLATES.map((t) => ({ ...t, enabled: false, nextRun: null }));
 
 // ---------------------------------------------------------------------------
 // Inbound webhook routing — maps event sources to responsible agents
@@ -2153,8 +2091,8 @@ export function deriveValuation(finance: FinanceEntry[], knowledge: KnowledgeEnt
 export type WorkspacePlan = 'trial' | 'growth' | 'scale' | 'enterprise';
 
 /** Display symbol per workspace currency — single source of truth for every money() helper. */
-export const CURRENCY_SYMBOL: Record<'USD' | 'CAD' | 'EUR' | 'GBP', string> = {
-  USD: '$', CAD: 'C$', EUR: '€', GBP: '£',
+export const CURRENCY_SYMBOL: Record<'USD' | 'CAD' | 'EUR' | 'GBP' | 'GHS', string> = {
+  USD: '$', CAD: 'C$', EUR: '€', GBP: '£', GHS: 'GH₵',
 };
 
 // ---------------------------------------------------------------------------
@@ -2212,7 +2150,7 @@ export interface Workspace {
   industry: string;
   plan: WorkspacePlan;
   color: string; // avatar accent, same convention as agents
-  currency: 'USD' | 'CAD' | 'EUR' | 'GBP';
+  currency: 'USD' | 'CAD' | 'EUR' | 'GBP' | 'GHS';
   createdAt: string;
 
   // ── Full company profile (Settings → Company information) ────────────────
@@ -3011,6 +2949,8 @@ export interface TaxProfile {
   rate: number; // percentage, e.g. 20 for 20%
   category: TaxCategory;
   description?: string;
+  /** The profile pre-selected on new invoices and bills. Stored on the profile so the choice survives a reload. */
+  isDefault?: boolean;
 }
 
 export const TAX_CATEGORY_LABEL: Record<TaxCategory, string> = {
@@ -3022,15 +2962,78 @@ export const TAX_CATEGORY_LABEL: Record<TaxCategory, string> = {
   custom: 'Custom',
 };
 
-export const INITIAL_TAX_PROFILES: TaxProfile[] = [
-  { id: 'tax-standard', name: 'Standard', rate: 20, category: 'vat', description: 'Default taxable rate', },
-  { id: 'tax-reduced', name: 'Reduced', rate: 5, category: 'vat', description: 'Reduced-rate goods & services' },
-  { id: 'tax-gst', name: 'GST', rate: 5, category: 'gst', description: 'Goods & Services Tax' },
-  { id: 'tax-vat-ca', name: 'VAT (Canada)', rate: 13, category: 'vat', description: 'Harmonized VAT' },
-  { id: 'tax-zero', name: 'Zero-rated', rate: 0, category: 'custom', description: 'Exempt / zero-rated supplies' },
-];
+// Starter tax profiles by country. A new company used to be seeded with "Standard 20% VAT", which would have charged 20% on
+// every invoice in the USA, Canada or Ghana. Now an unknown country starts at 0% ("set your rate"), and the profiles below are
+// applied when the company's country is set (see applyTaxPreset in the store). Only rates that are certain are filled in:
+// Canada GST 5%, Ontario HST 13% and Ghana standard VAT 15%. Everything else (US state and local sales tax, other Canadian
+// provinces, Ghana levies) is left at 0% for the company to enter. Every preset says it is a starter, to be confirmed.
+export type TaxRegion = 'US' | 'CA' | 'GH' | 'OTHER';
 
-export const DEFAULT_TAX_PROFILE_ID = 'tax-standard';
+const ZERO_RATED: TaxProfile = { id: 'tax-zero', name: 'Zero-rated', rate: 0, category: 'custom', description: 'Exempt / zero-rated supplies' };
+const CONFIRM = 'Starter rate: confirm with your accountant or the tax authority before relying on it.';
+
+export const TAX_PRESETS: Record<TaxRegion, { profiles: TaxProfile[]; note: string }> = {
+  OTHER: {
+    note: 'No tax rate is set. Add the rate that applies to your company (VAT, GST or sales tax) before sending invoices.',
+    profiles: [
+      { id: 'tax-default', name: 'Tax (set your rate)', rate: 0, category: 'custom', description: 'Placeholder at 0%. Change the rate to the one that applies to you.', isDefault: true },
+      ZERO_RATED,
+    ],
+  },
+  US: {
+    note: 'The United States has no federal sales tax. Rates differ by state, county and city, so enter the rate for where you sell. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-us-sales', name: 'Sales tax (set your state / local rate)', rate: 0, category: 'sales', description: CONFIRM, isDefault: true },
+      ZERO_RATED,
+    ],
+  },
+  CA: {
+    note: 'Canadian rates depend on the province. GST (5%) and Ontario HST (13%) are filled in; enter other provincial rates yourself. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-ca-gst', name: 'GST (federal)', rate: 5, category: 'gst', description: 'Federal Goods and Services Tax. ' + CONFIRM, isDefault: true },
+      { id: 'tax-ca-hst-on', name: 'HST (Ontario)', rate: 13, category: 'gst', description: 'Harmonized Sales Tax in Ontario. ' + CONFIRM },
+      { id: 'tax-ca-other', name: 'PST / QST / other HST (set your rate)', rate: 0, category: 'sales', description: 'Enter the rate for your province.' },
+      ZERO_RATED,
+    ],
+  },
+  GH: {
+    note: 'Ghana standard VAT (15%) is filled in. Levies such as NHIL and GETFund, and any flat-rate scheme, are not: confirm the current rules with the Ghana Revenue Authority or your accountant. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-gh-vat', name: 'VAT (Ghana standard)', rate: 15, category: 'vat', description: 'Standard-rated VAT. Levies may apply on top. ' + CONFIRM, isDefault: true },
+      { id: 'tax-gh-levy', name: 'Levy (set your rate)', rate: 0, category: 'custom', description: 'Enter any levy that applies to you, such as NHIL or GETFund.' },
+      ZERO_RATED,
+    ],
+  },
+};
+
+/** Maps free-text country names ("USA", "United States", "canada", "GH") to a preset region. */
+export function taxRegionFor(country?: string | null): TaxRegion {
+  const c = (country ?? '').trim().toLowerCase().replace(/\./g, '');
+  if (['us', 'usa', 'united states', 'united states of america'].includes(c)) return 'US';
+  if (['ca', 'canada'].includes(c)) return 'CA';
+  if (['gh', 'ghana'].includes(c)) return 'GH';
+  return 'OTHER';
+}
+
+export const INITIAL_TAX_PROFILES: TaxProfile[] = TAX_PRESETS.OTHER.profiles;
+
+/** Rates of every profile this app has ever seeded (including the old 20% set), to tell an untouched setup from an edited one. */
+const SEEDED_RATES: Record<string, number> = {
+  'tax-standard': 20, 'tax-reduced': 5, 'tax-gst': 5, 'tax-vat-ca': 13, 'tax-zero': 0,
+  ...Object.fromEntries(Object.values(TAX_PRESETS).flatMap((p) => p.profiles.map((t) => [t.id, t.rate]))),
+};
+
+/** True while every profile is still exactly as seeded, so choosing a country may replace the set without losing anyone's edits. */
+export function isUntouchedTaxSetup(profiles: TaxProfile[]): boolean {
+  return profiles.every((p) => SEEDED_RATES[p.id] === p.rate);
+}
+
+/** The default profile of a list: the flagged one, else the legacy default id, else the first. */
+export function defaultTaxIdOf(profiles: TaxProfile[]): string {
+  return (profiles.find((p) => p.isDefault) ?? profiles.find((p) => p.id === 'tax-standard') ?? profiles[0])?.id ?? DEFAULT_TAX_PROFILE_ID;
+}
+
+export const DEFAULT_TAX_PROFILE_ID = 'tax-default';
 
 // ---------------------------------------------------------------------------
 // Banking — connected accounts, imported statements and reconciliation

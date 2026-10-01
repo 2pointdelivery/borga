@@ -125,16 +125,18 @@ export async function buildAgentContext(agentId: string, ws?: string | null, use
     ? activity.map((e) => `[${e.time}] ${e.agentName}: ${e.message}`).join('\n')
     : 'No recent activity.';
 
-  const kpiSummary = kpiGroups.length
-    ? kpiGroups
-        .map((g) => {
-          const below = g.kpis.filter((k) => k.value < k.target);
-          return below.length
-            ? `${g.name}: ${below.map((k) => `${k.label} ${k.value}${k.unit} vs target ${k.target}${k.unit}`).join(', ')} BELOW TARGET`
-            : `${g.name}: all KPIs on track`;
-        })
-        .join('\n')
-    : '';
+  // Only KPIs that have a target can be on or off track. A KPI nobody has set up says nothing (it must not read as "on track").
+  const kpiLines = kpiGroups
+    .map((g) => {
+      const scored = g.kpis.filter((k) => k.target > 0);
+      if (!scored.length) return '';
+      const below = scored.filter((k) => k.value < k.target);
+      return below.length
+        ? `${g.name}: ${below.map((k) => `${k.label} ${k.value}${k.unit} vs target ${k.target}${k.unit}`).join(', ')} BELOW TARGET`
+        : `${g.name}: all KPIs with a target are on track`;
+    })
+    .filter(Boolean);
+  const kpiSummary = kpiLines.join('\n');
 
   const totalRevenue = finance.filter((f) => f.kind === 'revenue' && !f.voidedAt).reduce((s, f) => s + f.amount, 0);
   const totalExpense = finance.filter((f) => f.kind === 'expense' && !f.voidedAt).reduce((s, f) => s + f.amount, 0);

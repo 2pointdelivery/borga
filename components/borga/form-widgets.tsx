@@ -182,6 +182,7 @@ const CURRENCIES: { code: Workspace['currency']; label: string }[] = [
   { code: 'CAD', label: 'CAD — Canadian Dollar' },
   { code: 'EUR', label: 'EUR — Euro' },
   { code: 'GBP', label: 'GBP — British Pound' },
+  { code: 'GHS', label: 'GHS — Ghana Cedi' },
 ];
 
 export function CurrencySelect({ value, onChange }: { value: string; onChange: (v: Workspace['currency']) => void }) {

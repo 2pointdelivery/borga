@@ -126,6 +126,10 @@ INITIAL_APPROVALS,
   INITIAL_BANK_TXNS,
   INITIAL_TAX_PROFILES,
   DEFAULT_TAX_PROFILE_ID,
+  TAX_PRESETS,
+  taxRegionFor,
+  isUntouchedTaxSetup,
+  defaultTaxIdOf,
   type TaxProfile,
   type Budget,
   INITIAL_BUDGETS,
@@ -456,6 +460,8 @@ interface BorgaStore {
   updateTaxProfile: (id: string, patch: Partial<TaxProfile>) => void;
   deleteTaxProfile: (id: string) => void;
   setDefaultTaxProfile: (id: string) => void;
+  /** Replaces the starter tax profiles with the ones for `country`, but only while nobody has edited them. Returns true if it applied. */
+  applyTaxPreset: (country?: string | null) => boolean;
   bankAccounts: BankAccount[];
   addBankAccount: (b: BankAccount) => void;
   updateBankAccount: (id: string, patch: Partial<BankAccount>) => void;
@@ -862,8 +868,11 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('workspaces', get().workspaces);
   },
   updateWorkspace: (id, patch) => {
+    const before = get().workspaces.find((w) => w.id === id)?.country;
     set((s) => ({ workspaces: s.workspaces.map((w) => (w.id === id ? { ...w, ...patch } : w)) }));
     persist('workspaces', get().workspaces);
+    // Setting the country gives the company starter tax profiles for it (only while the tax setup is still untouched).
+    if (patch.country !== undefined && patch.country !== before && id === get().activeWorkspaceId) get().applyTaxPreset(patch.country);
   },
   deleteWorkspace: (id) => {
     set((s) => {
@@ -1550,13 +1559,27 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('taxProfiles', get().taxProfiles);
   },
   deleteTaxProfile: (id) => {
-    set((s) => ({ taxProfiles: s.taxProfiles.filter((t) => t.id !== id) }));
+    set((s) => {
+      const left = s.taxProfiles.filter((t) => t.id !== id);
+      // If the default was deleted, the first remaining profile becomes the default.
+      const hasDefault = left.some((t) => t.isDefault);
+      const fixed = hasDefault || !left.length ? left : left.map((t, i) => ({ ...t, isDefault: i === 0 }));
+      return { taxProfiles: fixed, defaultTaxProfileId: defaultTaxIdOf(fixed) };
+    });
     persist('taxProfiles', get().taxProfiles);
   },
   setDefaultTaxProfile: (id) => {
     if (!get().taxProfiles.some((t) => t.id === id)) return;
-    set({ defaultTaxProfileId: id });
+    // The default is stored on the profiles themselves so it is saved with them (it used to live only in memory and reset on reload).
+    set((s) => ({ taxProfiles: s.taxProfiles.map((t) => ({ ...t, isDefault: t.id === id })), defaultTaxProfileId: id }));
     persist('taxProfiles', get().taxProfiles);
+  },
+  applyTaxPreset: (country) => {
+    if (!isUntouchedTaxSetup(get().taxProfiles)) return false;
+    const profiles = TAX_PRESETS[taxRegionFor(country)].profiles;
+    set({ taxProfiles: profiles, defaultTaxProfileId: defaultTaxIdOf(profiles) });
+    persist('taxProfiles', profiles);
+    return true;
   },
 
   bankAccounts: INITIAL_BANK_ACCOUNTS,
@@ -2676,6 +2699,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         timeEntries: Array.isArray(d.timeEntries) ? d.timeEntries : [],
         invites: Array.isArray(d.invites) ? d.invites : [],
         taxProfiles: Array.isArray(d.taxProfiles) ? d.taxProfiles : INITIAL_TAX_PROFILES,
+        defaultTaxProfileId: defaultTaxIdOf(Array.isArray(d.taxProfiles) && d.taxProfiles.length ? d.taxProfiles : INITIAL_TAX_PROFILES),
         budgets: Array.isArray(d.budgets) ? d.budgets : INITIAL_BUDGETS,
         revenueTracks: Array.isArray(d.revenueTracks) ? d.revenueTracks : INITIAL_REVENUE_TRACKS,
         recurringInvoices: Array.isArray(d.recurringInvoices) ? d.recurringInvoices : [],

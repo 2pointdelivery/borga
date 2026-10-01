@@ -23,6 +23,8 @@ import {
   TAX_CATEGORY_LABEL,
   type TaxCategory,
   type TaxProfile,
+  TAX_PRESETS,
+  taxRegionFor,
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
@@ -41,7 +43,7 @@ export function TaxTab() {
   const {
     taxProfiles, defaultTaxProfileId,
     addTaxProfile, updateTaxProfile, deleteTaxProfile, setDefaultTaxProfile,
-    log,
+    log, activeWorkspace,
   } = useBorga();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -99,6 +101,10 @@ export function TaxTab() {
           <Plus className="h-4 w-4" /> New tax profile
         </Button>
       </div>
+
+      <Card className="border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-300">
+        {TAX_PRESETS[taxRegionFor(activeWorkspace()?.country)].note}
+      </Card>
 
       <Card className="overflow-hidden">
         <div className="border-b bg-muted/40 px-4 py-2.5">

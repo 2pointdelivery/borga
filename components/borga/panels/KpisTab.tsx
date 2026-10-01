@@ -25,6 +25,9 @@ import { SectionTitle } from '../bits';
 import { KpiEditDialog } from './KpiEditDialog';
 import { cn } from '@/lib/utils';
 
+/** A KPI can only be scored against a target the company has actually set. */
+const hasTarget = (k: { target: number }) => k.target > 0;
+
 function fmt(value: number, unit: string) {
   if (unit === '$') {
     return value >= 1000 ? `$${(value / 1000).toFixed(0)}K` : `$${value}`;
@@ -57,13 +60,16 @@ export function KpisTab() {
 
   // Real composite score per department (target attainment), not a fabricated
   // time-series trend — this app doesn't persist historical KPI snapshots yet.
-  const deptScores = displayGroups.map((g) => ({
-    name: g.name,
-    score: g.kpis.length
-      ? Math.round(g.kpis.reduce((s, k) => s + Math.min(100, (k.value / Math.max(1, k.target)) * 100), 0) / g.kpis.length)
-      : 0,
-  }));
-  const overallScore = deptScores.length ? Math.round(deptScores.reduce((s, d) => s + d.score, 0) / deptScores.length) : 0;
+  const deptScores = displayGroups.map((g) => {
+    const withTarget = g.kpis.filter(hasTarget);
+    return {
+      name: g.name,
+      score: withTarget.length ? Math.round(withTarget.reduce((s, k) => s + Math.min(100, (k.value / k.target) * 100), 0) / withTarget.length) : 0,
+    };
+  });
+  // Only departments that have at least one KPI with a target take part; with none, there is no score to show.
+  const scoredDepts = displayGroups.map((g, i) => ({ score: deptScores[i].score, has: g.kpis.some(hasTarget) })).filter((d) => d.has);
+  const overallScore = scoredDepts.length ? Math.round(scoredDepts.reduce((s, d) => s + d.score, 0) / scoredDepts.length) : null;
 
   const submit = () => {
     if (!form.label.trim()) return;
@@ -97,8 +103,8 @@ export function KpisTab() {
             <p className="text-sm font-semibold">Overall momentum</p>
             <p className="text-xs text-muted-foreground">Target attainment by department, right now</p>
           </div>
-          <Badge className={cn('gap-1', overallScore >= 70 ? 'bg-emerald-500/10 text-emerald-600' : overallScore >= 40 ? 'bg-amber-500/10 text-amber-600' : 'bg-red-500/10 text-red-600')}>
-            {overallScore >= 70 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />} {overallScore}% overall
+          <Badge className={cn('gap-1', overallScore == null ? 'bg-muted text-muted-foreground' : overallScore >= 70 ? 'bg-emerald-500/10 text-emerald-600' : overallScore >= 40 ? 'bg-amber-500/10 text-amber-600' : 'bg-red-500/10 text-red-600')}>
+            {overallScore == null ? 'No targets set yet' : <>{overallScore >= 70 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />} {overallScore}% overall</>}
           </Badge>
         </div>
         <div className="h-52">
@@ -121,9 +127,8 @@ export function KpisTab() {
       {/* Per-department KPI cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-2">
         {displayGroups.map((d) => {
-          const avg = d.kpis.length
-            ? Math.round(d.kpis.reduce((s, k) => s + Math.min(100, (k.value / Math.max(1, k.target)) * 100), 0) / d.kpis.length)
-            : 0;
+          const withTarget = d.kpis.filter(hasTarget);
+          const avg = withTarget.length ? Math.round(withTarget.reduce((s, k) => s + Math.min(100, (k.value / k.target) * 100), 0) / withTarget.length) : null;
           return (
             <Card key={d.id} className="p-5">
               <div className="flex items-center justify-between">
@@ -133,14 +138,15 @@ export function KpisTab() {
                   </span>
                   <div>
                     <p className="font-semibold">{d.name}</p>
-                    <p className="text-xs text-muted-foreground">Target attainment {avg}% — {d.kpis.length} KPIs</p>
+                    <p className="text-xs text-muted-foreground">{avg == null ? 'No targets set yet' : `Target attainment ${avg}%`} — {d.kpis.length} KPIs</p>
                   </div>
                 </div>
-                <Progress value={avg} className="h-1.5 w-24" />
+                <Progress value={avg ?? 0} className="h-1.5 w-24" />
               </div>
               <div className="mt-4 grid grid-cols-3 gap-3">
                 {d.kpis.map((k) => {
-                  const pct = Math.min(100, Math.round((k.value / Math.max(1, k.target)) * 100));
+                  const pct = hasTarget(k) ? Math.min(100, Math.round((k.value / k.target) * 100)) : null;
+                  const unset = !k.live && k.value === 0 && k.target === 0;
                   return (
                     <div key={k.label} className="rounded-xl border bg-muted/20 p-3">
                       <div className="flex items-center justify-between gap-1">
@@ -156,23 +162,25 @@ export function KpisTab() {
                         )}
                       </div>
                       <p className="mt-1 text-lg font-semibold">
-                        {fmt(k.value, k.unit)}
-                        {k.unit === '%' && <span className="text-xs font-normal text-muted-foreground"> /{k.target}%</span>}
+                        {unset ? <span className="text-muted-foreground">Not set</span> : fmt(k.value, k.unit)}
+                        {!unset && k.unit === '%' && k.target > 0 && <span className="text-xs font-normal text-muted-foreground"> /{k.target}%</span>}
                       </p>
                       <div className="mt-2 flex items-center gap-1">
                         {k.live ? (
                           <span className="text-[10px] font-medium text-emerald-600">live</span>
+                        ) : unset ? (
+                          <span className="text-[10px] text-muted-foreground">Use the pencil to enter a value</span>
                         ) : k.delta >= 0 ? (
                           <TrendingUp className="h-3 w-3 text-emerald-500" />
                         ) : (
                           <TrendingDown className="h-3 w-3 text-rose-500" />
                         )}
-                        {!k.live && (
+                        {!k.live && !unset && (
                           <span className={`text-[11px] font-medium ${k.delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {k.delta > 0 ? '+' : ''}{k.delta}%
                           </span>
                         )}
-                        <span className="ml-auto text-[10px] text-muted-foreground">{pct}%</span>
+                        {pct != null && <span className="ml-auto text-[10px] text-muted-foreground">{pct}%</span>}
                       </div>
                     </div>
                   );

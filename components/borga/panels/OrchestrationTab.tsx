@@ -191,8 +191,9 @@ export function OrchestrationTab() {
 
   const activeBookings = ops.bookings.filter((b) => b.status !== 'delivered' && b.status !== 'cancelled');
   const newDrivers = ops.drivers.filter((d) => d.status !== 'active').length;
-  const onTimeSla = ops.sla.find((s) => s.label === 'On-time delivery')?.value ?? 96;
-  const onTimeTarget = ops.sla.find((s) => s.label === 'On-time delivery')?.target ?? 98;
+  const onTimeSla = ops.sla.find((s) => s.label === 'On-time delivery')?.value ?? null;
+  const onTimeTarget = ops.sla.find((s) => s.label === 'On-time delivery')?.target ?? null;
+  const hasOpsData = ops.clients.length + ops.bookings.length + ops.drivers.length + ops.tracking.length > 0;
   const revenue = ops.analytics.revenue;
   const pieData = (Object.entries(ops.analytics.byStatus) as [BookingStatus, number][]).map(([name, value]) => ({ name, value }));
 
@@ -241,9 +242,9 @@ export function OrchestrationTab() {
   const kpis = [
     { label: 'Active bookings', value: String(activeBookings.length), icon: Truck, color: 'text-sky-600' },
     { label: 'Active clients', value: String(ops.clients.filter((c) => c.active).length), icon: Users, color: 'text-violet-600' },
-    { label: 'On-time SLA', value: `${onTimeSla}%`, sub: `target ${onTimeTarget}%`, icon: ShieldCheck, color: 'text-emerald-600' },
+    { label: 'On-time SLA', value: onTimeSla == null ? '—' : `${onTimeSla}%`, sub: onTimeTarget == null ? 'no SLA data yet' : `target ${onTimeTarget}%`, icon: ShieldCheck, color: 'text-emerald-600' },
     { label: 'New drivers', value: String(newDrivers), icon: UserPlus, color: 'text-amber-600' },
-    { label: 'Revenue', value: `$${Math.round(revenue / 1000)}K`, icon: Wallet, color: 'text-primary' },
+    { label: 'Revenue', value: revenue > 0 ? `$${Math.round(revenue / 1000)}K` : '—', icon: Wallet, color: 'text-primary' },
     { label: 'Tracking events', value: String(ops.tracking.length), icon: Activity, color: 'text-rose-600' },
   ];
 
@@ -328,7 +329,7 @@ export function OrchestrationTab() {
       </Card>
 
       <details className="rounded-xl border p-4">
-        <summary className="cursor-pointer text-sm font-semibold">Operations dashboard <span className="font-normal text-muted-foreground">— sample logistics data for illustration; it is not pulled from your CRM</span></summary>
+        <summary className="cursor-pointer text-sm font-semibold">Operations dashboard <span className="font-normal text-muted-foreground">— shows only the clients, bookings and drivers you add here; nothing is pulled from your CRM</span></summary>
         <div className="mt-4 space-y-5">
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
@@ -343,6 +344,12 @@ export function OrchestrationTab() {
           </Card>
         ))}
       </div>
+
+      {!hasOpsData && (
+        <Card className="border-dashed p-4 text-sm text-muted-foreground">
+          No operations data yet. Nothing here is sample data: connect your system under Integrations, or add clients, bookings and drivers below, and these figures will fill in.
+        </Card>
+      )}
 
       {/* Analytics */}
       <div className="grid gap-5 lg:grid-cols-3">
