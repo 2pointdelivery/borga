@@ -83,8 +83,7 @@
       ".next/**",
       "!.next/cache/**",
       "public/**/*",
-      "package.json",
-      ".env"
+      "package.json"
     ],
     "win": {
       "target": [
