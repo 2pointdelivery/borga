@@ -43,6 +43,7 @@ import { AIPlatformPage } from './pages/AIPlatformPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { SettingsTab } from './panels/SettingsTab';
 import { OnboardingStatus } from './OnboardingStatus';
+import { SaveConflictBanner } from './SaveConflictBanner';
 
 interface ActiveRoute {
   page: PageId;
@@ -252,6 +253,7 @@ function ShellInner() {
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
+      <SaveConflictBanner />
       {/* Sidebar */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r bg-sidebar text-sidebar-foreground lg:flex">
         <div className="flex items-center gap-2 px-5 py-5">

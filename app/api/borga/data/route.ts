@@ -107,7 +107,7 @@ import {
   type ReconciliationRule,
   type McpServer,
 } from '@/lib/borga/data';
-import { getBorgaStatesByPrefixOrThrow, setBorgaState } from '@/lib/borga/persistence';
+import { getBorgaRowsByPrefixOrThrow, setBorgaState, setBorgaStateIfVersion } from '@/lib/borga/persistence';
 import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
@@ -211,15 +211,19 @@ export async function GET(req: NextRequest) {
   // The ping write runs concurrently to stamp the sentinel key.
   // A database error must not look like "no data": that would be shown as seed data and
   // then saved back over the user's real records. Fail with 503 and let the client hold writes.
-  let all: Record<string, unknown>;
+  const all: Record<string, unknown> = {};
+  // Version of each stored entity, keyed by entity name. The dashboard saves with the version it last read (see POST).
+  const versions: Record<string, number> = {};
   let pinged: boolean;
   try {
-    [all, pinged] = await Promise.all([
-      ws
-        ? getBorgaStatesByPrefixOrThrow(userWsKey(userId, ws, ''))
-        : getBorgaStatesByPrefixOrThrow(userWorkspacesKey(userId)),
-      setBorgaState('borga_ping', Date.now()),
-    ]);
+    const prefix = ws ? userWsKey(userId, ws, '') : userWorkspacesKey(userId);
+    const [rows, ok] = await Promise.all([getBorgaRowsByPrefixOrThrow(prefix), setBorgaState('borga_ping', Date.now())]);
+    pinged = ok;
+    for (const [k, r] of Object.entries(rows)) {
+      all[k] = r.value;
+      if (ws) versions[k.slice(prefix.length)] = r.version;
+      else if (k === prefix) versions.workspaces = r.version;
+    }
   } catch {
     return NextResponse.json({ error: 'database_unavailable', workspaces: [], persisted: false }, { status: 503 });
   }
@@ -233,6 +237,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       workspaces: workspaces.length ? workspaces : INITIAL_WORKSPACES,
       persisted: pinged === true,
+      versions,
     });
   }
 
@@ -241,6 +246,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     workspace: ws,
     workspaces,
+    versions,
     agents: get<Agent[]>('agents') ?? DEFAULT_STATE.agents,
     goals: get<Goal[]>('goals') ?? DEFAULT_STATE.goals,
     approvals: get<Approval[]>('approvals') ?? DEFAULT_STATE.approvals,
@@ -325,7 +331,7 @@ export async function POST(req: NextRequest) {
     if (!raw || Buffer.byteLength(raw) > MAX_PAYLOAD_BYTES) {
       return NextResponse.json({ ok: false, error: 'Payload too large' }, { status: 413 });
     }
-    const body = JSON.parse(raw) as { entity?: string; value?: unknown; ws?: unknown };
+    const body = JSON.parse(raw) as { entity?: string; value?: unknown; ws?: unknown; baseVersion?: unknown };
     const entity = body?.entity;
     if (typeof entity !== 'string' || !ALLOWED_ENTITIES.has(entity)) {
       return NextResponse.json({ ok: false, error: 'Unknown entity' }, { status: 400 });
@@ -341,6 +347,24 @@ export async function POST(req: NextRequest) {
       key = userWsKey(userId, body.ws as string, entity);
     }
 
+    // Optimistic save: the client says which version of this entity it last read. If the stored version has moved on (another
+    // tab or device saved, or an agent changed it), nothing is written and the current copy comes back with 409, so a stale
+    // tab can never silently overwrite newer data. A body without baseVersion is the older unconditional save.
+    // A present but malformed baseVersion is an error, never "no check": a buggy client must not switch the protection off.
+    if (body.baseVersion !== undefined && !(typeof body.baseVersion === 'number' && Number.isInteger(body.baseVersion) && body.baseVersion >= 0)) {
+      return NextResponse.json({ ok: false, error: 'baseVersion must be a non-negative integer' }, { status: 400 });
+    }
+    const baseVersion = body.baseVersion as number | undefined;
+    if (baseVersion !== undefined) {
+      let r;
+      try {
+        r = await setBorgaStateIfVersion(key, body.value ?? null, baseVersion);
+      } catch {
+        return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
+      }
+      if (!r.ok) return NextResponse.json({ ok: false, saved: false, error: 'conflict', current: r.current }, { status: 409 });
+      return NextResponse.json({ ok: true, saved: true, version: r.version });
+    }
     const ok = await setBorgaState(key, body.value ?? null);
     if (!ok) return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
     return NextResponse.json({ ok: true, saved: true });

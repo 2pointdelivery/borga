@@ -147,6 +147,7 @@ INITIAL_APPROVALS,
 } from './data';
 import { notifyEmail } from './email-client';
 import { mergeLoadedModels, repairCatalog } from './model-catalog';
+import { SaveQueue } from './save-queue';
 import { mergeCustomers, mergeLeads, type CrmCustomer, type CrmLead, type MergeSummary } from './crm-core';
 import { buildBill, buildInvoice, dueRuns, isFinished, nextBillNumber, nextInvoiceNumber, recurringBillRef, recurringRef, type RecurringBill, type RecurringInvoice } from './recurring';
 
@@ -300,27 +301,48 @@ let offlineNotified = false;
 // Set when the last load from the server failed. The screen then shows seed or local data,
 // so server writes are held: saving it later would overwrite the user's real records.
 let SERVER_LOAD_FAILED = false;
-async function persist(entity: PersistEntity, value: unknown) {
-  const ws = entity === 'workspaces' ? null : ACTIVE_WS;
-  writeLocal(ws, entity, value);
-  if (SERVER_LOAD_FAILED) return;
-  try {
-    const res = await fetch('/api/borga/data', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-      body: JSON.stringify({ entity, value, ws: entity === 'workspaces' ? undefined : ACTIVE_WS }),
-    });
-    if (res.status === 413) {
-      toast({
-        title: 'Too much data to save',
-        description: `The ${entity} list is over the 8 MB save limit. Archive or delete old records; recent changes are kept on this device only.`,
-        variant: 'error',
+interface SavePayload {
+  entity: PersistEntity;
+  ws: string | null;
+  value: unknown;
+}
+
+/**
+ * Saves go through a per-entity queue with optimistic concurrency (lib/borga/save-queue.ts): each save carries the version this
+ * tab last read, so a save made from a stale copy (another tab or device saved first, or an agent changed the data) is refused
+ * by the server instead of silently overwriting it. A refusal raises `saveConflicts`, which the shell shows as a banner.
+ */
+const SAVES = new SaveQueue<SavePayload>({
+  valueOf: (p) => p.value,
+  send: async (_id, p, baseVersion) => {
+    try {
+      const res = await fetch('/api/borga/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ entity: p.entity, value: p.value, ws: p.ws ?? undefined, baseVersion }),
       });
-      return;
+      if (res.status === 409) {
+        const j = (await res.json().catch(() => null)) as { current?: { version: number; value: unknown } | null } | null;
+        return { status: 'conflict', current: j?.current ?? null };
+      }
+      if (res.status === 413) {
+        toast({
+          title: 'Too much data to save',
+          description: `The ${p.entity} list is over the 8 MB save limit. Archive or delete old records; recent changes are kept on this device only.`,
+          variant: 'error',
+        });
+        return { status: 'rejected' };
+      }
+      if (res.status === 401) return { status: 'rejected' };
+      if (!res.ok) return { status: 'error' };
+      const j = (await res.json().catch(() => ({}))) as { version?: number };
+      offlineNotified = false;
+      return { status: 'ok', version: typeof j.version === 'number' ? j.version : baseVersion + 1 };
+    } catch {
+      return { status: 'error' };
     }
-    if (!res.ok && res.status !== 401) throw new Error('save failed');
-    offlineNotified = false;
-  } catch {
+  },
+  onError: () => {
     /* offline — state still lives in memory (+ localStorage fallback) */
     if (!offlineNotified) {
       offlineNotified = true;
@@ -330,7 +352,20 @@ async function persist(entity: PersistEntity, value: unknown) {
         variant: 'warning',
       });
     }
-  }
+  },
+  onConflict: (_id, p) => {
+    useBorga.setState((s) => (s.saveConflicts.includes(p.entity) ? s : { saveConflicts: [...s.saveConflicts, p.entity] }));
+  },
+});
+
+/** Queue id for an entity: company id (or "global") plus entity name. */
+const saveId = (ws: string | null, entity: string) => `${ws ?? 'global'}|${entity}`;
+
+async function persist(entity: PersistEntity, value: unknown) {
+  const ws = entity === 'workspaces' ? null : ACTIVE_WS;
+  writeLocal(ws, entity, value);
+  if (SERVER_LOAD_FAILED) return;
+  await SAVES.save(saveId(ws, entity), { entity, ws, value });
 }
 
 function failServerLoad() {
@@ -659,6 +694,10 @@ interface BorgaStore {
   setValuation: (config: ValuationConfig) => void;
 
   hydrate: () => Promise<void>;
+  /** Entities whose last save was refused because they were changed elsewhere (another tab, device or an agent). Cleared by loadLatest. */
+  saveConflicts: string[];
+  /** Discards this tab's unsaved edits to the conflicted entities and loads the latest data from the server. */
+  loadLatest: () => Promise<void>;
 
   tasks: Task[];
   addTask: (t: Task) => void;
@@ -2585,6 +2624,12 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('valuation', config);
   },
 
+  saveConflicts: [],
+  loadLatest: async () => {
+    set({ saveConflicts: [] });
+    await get().hydrate();
+  },
+
   hydrate: async () => {
     const seq = ++hydrateSeq;
     try {
@@ -2603,9 +2648,10 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       const regRes = await fetch('/api/borga/data', {
         headers: { 'X-Borga-Client': 'borga-dashboard' },
       });
-      const reg = await regRes.json() as { workspaces?: Workspace[]; persisted?: boolean };
+      const reg = await regRes.json() as { workspaces?: Workspace[]; persisted?: boolean; versions?: Record<string, number> };
       if (seq !== hydrateSeq) return; // superseded by a newer hydrate
       if (regRes.status === 503) failServerLoad();
+      else SAVES.setVersions('global|', reg.versions ?? {});
       const dbAvailable = reg.persisted === true;
       // When the database is available, the workspace registry is fully
       // server-authoritative (per-user) — do not merge in the global seed
@@ -2639,6 +2685,8 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         return;
       }
       SERVER_LOAD_FAILED = false;
+      // Remember which version of every entity this tab now holds; saves are refused if it has moved on by then.
+      SAVES.setVersions(`${wsId}|`, (d.versions ?? {}) as Record<string, number>);
       const dbAgents = Array.isArray(d.agents) && d.agents.length ? (d.agents as Agent[]) : null;
       const agents = dbAgents ? ensureNadia(dbAgents) : AGENTS;
       const agentsChanged = !!dbAgents && agents !== dbAgents;

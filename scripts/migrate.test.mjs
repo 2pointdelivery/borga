@@ -73,14 +73,14 @@ test('a fresh empty database gets the full schema, and a second run changes noth
   const first = await run(db.url);
   assert.equal(first.code, 0, first.out);
   assert.match(first.out, /schema verified/);
-  assert.equal(await applied(db.url), 2);
+  assert.equal(await applied(db.url), 3);
   const idx = await indexInfo(db.url);
   assert.deepEqual(idx.map((i) => [i.n, Number(i.nu)]), [['idx_users_email', 0]]);
   assert.ok((await columns(db.url)).includes('reset_token'));
   const second = await run(db.url);
   assert.equal(second.code, 0, second.out);
   assert.match(second.out, /up to date/);
-  assert.equal(await applied(db.url), 2);
+  assert.equal(await applied(db.url), 3);
 });
 
 test('a database that only has migration 0000 is upgraded, keeping its data', async () => {
@@ -89,9 +89,11 @@ test('a database that only has migration 0000 is upgraded, keeping its data', as
   assert.equal(old.code, 1, 'old-schema run stops at the schema check because 0001 is missing');
   assert.equal(await applied(db.url), 1);
   await q(db.url, "insert into borga_users (id, email, name, password_hash, created_at) values ('u1', 'keep@example.test', 'Keep', 'h', now())");
+  await q(db.url, "insert into borga_state (`key`, value, updated_at) values ('u::x::goals', '[]', now())");
   const up = await run(db.url);
   assert.equal(up.code, 0, up.out);
   assert.equal((await q(db.url, 'select count(*) n from borga_users'))[0].n, 1);
+  assert.equal(Number((await q(db.url, "select version v from borga_state where `key` = 'u::x::goals'"))[0].v), 1, 'existing rows start at version 1');
   assert.deepEqual((await indexInfo(db.url)).map((i) => Number(i.nu)), [0]);
   assert.ok((await columns(db.url)).includes('reset_token_expires'));
 });
@@ -106,7 +108,7 @@ test("the state of the real development database (0000 recorded, reset columns a
   assert.equal(r.code, 0, r.out);
   assert.equal((await q(db.url, 'select count(*) n from borga_users'))[0].n, 21, 'no rows lost');
   assert.deepEqual((await indexInfo(db.url)).map((i) => Number(i.nu)), [0], 'index is now unique');
-  assert.equal(await applied(db.url), 2);
+  assert.equal(await applied(db.url), 3);
 });
 
 test('duplicate emails are refused up front and nothing is changed', async () => {
@@ -137,7 +139,7 @@ test('--dry-run lists what would run and changes nothing', async () => {
   const db = await newDb();
   const r = await run(db.url, ['--dry-run']);
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /2 pending/);
+  assert.match(r.out, /3 pending/);
   assert.match(r.out, /dry run: nothing changed/);
   assert.equal(await applied(db.url), 0);
   assert.equal((await q(db.url, "select count(*) n from information_schema.tables where table_schema = database() and table_name = 'borga_users'"))[0].n, 0);
@@ -148,7 +150,7 @@ test('two runs at the same time are serialised and both succeed', async () => {
   const [a, b] = await Promise.all([run(db.url), run(db.url)]);
   assert.equal(a.code, 0, a.out);
   assert.equal(b.code, 0, b.out);
-  assert.equal(await applied(db.url), 2, 'each migration is recorded exactly once');
+  assert.equal(await applied(db.url), 3, 'each migration is recorded exactly once');
   assert.deepEqual((await indexInfo(db.url)).map((i) => Number(i.nu)), [0]);
 });
 

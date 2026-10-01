@@ -57,6 +57,12 @@ before(async () => {
   users.B = await signup('b');
   const { A } = users;
 
+  // WhatsApp ships switched off (T30); turn it on for the two workspaces this suite exercises it through.
+  for (const u of [users.A, users.B]) {
+    const on = await call(u, 'POST', '/api/borga/features', { ws: u.ws, id: 'whatsapp', enabled: true });
+    assert.equal(on.status, 200, 'enable whatsapp');
+  }
+
   // ── A seeds data through the real routes ────────────────────────────────────────────────────────────────────────
   const goals = await call(A, 'POST', '/api/borga/data', { entity: 'goals', ws: A.ws, value: [{ id: 'g-a', title: MARK_A }] });
   assert.equal(goals.status, 200, 'A seeds goals');
@@ -70,7 +76,7 @@ before(async () => {
   sentinel.aTicketId = ticket.json?.ticket?.id ?? ticket.json?.id ?? '';
   assert.ok(sentinel.aTicketId, 'ticket id returned');
 
-  const feat = await call(A, 'POST', '/api/borga/features', { ws: A.ws, id: 'social', enabled: false });
+  const feat = await call(A, 'POST', '/api/borga/features', { ws: A.ws, id: 'projects', enabled: false });
   assert.equal(feat.status, 200, `A turns a feature off: ${feat.text.slice(0, 200)}`);
 
   const mail = await call(A, 'POST', `/api/borga/email?ws=${A.ws}`, { action: 'saveSettings', settings: { enabled: true, recipients: [MAIL_A] } });
@@ -112,7 +118,7 @@ test('control: A can read back everything A seeded', async () => {
   const email = await call(A, 'GET', `/api/borga/email?ws=${A.ws}`);
   assert.ok(seen(email, MAIL_A).length, 'A sees own email recipients');
   const feats = await call(A, 'GET', `/api/borga/features?ws=${A.ws}`);
-  assert.equal(feats.json?.flags?.social ?? feats.json?.features?.social, false, 'A sees own feature override');
+  assert.equal(feats.json?.flags?.projects ?? feats.json?.features?.projects, false, 'A sees own feature override');
   const wa = await call(A, 'GET', `/api/borga/whatsapp?ws=${A.ws}`);
   assert.equal(wa.json?.config?.connected, true, 'A sees own whatsapp state (dashboard key and route key agree)');
   assert.equal(wa.json?.config?.phone, MARK_A);
@@ -148,7 +154,7 @@ test("B cannot read A's whatsapp state or feature overrides through A's workspac
   const wa = await call(B, 'GET', `/api/borga/whatsapp?ws=${A.ws}`);
   assert.notEqual(wa.json?.config?.connected, true);
   const feats = await call(B, 'GET', `/api/borga/features?ws=${A.ws}`);
-  assert.notEqual(feats.json?.flags?.social ?? feats.json?.features?.social, false, "B must see defaults, not A's override");
+  assert.notEqual(feats.json?.flags?.projects ?? feats.json?.features?.projects, false, "B must see defaults, not A's override");
 });
 
 test("B cannot open, change or comment on A's ticket by id", async () => {
@@ -167,7 +173,7 @@ test("everything B writes into A's workspace id lands in B's own space and never
   const writes = [
     call(B, 'POST', '/api/borga/data', { entity: 'goals', ws: A.ws, value: [{ id: 'g-b', title: MARK_B }] }),
     call(B, 'POST', `/api/borga/tickets?ws=${A.ws}`, { action: 'create', ticket: { subject: MARK_B } }),
-    call(B, 'POST', '/api/borga/features', { ws: A.ws, id: 'social', enabled: true }),
+    call(B, 'POST', '/api/borga/features', { ws: A.ws, id: 'projects', enabled: true }),
     call(B, 'POST', `/api/borga/email?ws=${A.ws}`, { action: 'saveSettings', settings: { recipients: [MAIL_B] } }),
     call(B, 'POST', '/api/borga/memory', { action: 'store', ws: A.ws, memory: { content: MARK_B, agentId: 'a1', kind: 'fact' } }),
     call(B, 'POST', '/api/borga/memory', { action: 'clear', ws: A.ws }),
@@ -184,7 +190,7 @@ test("everything B writes into A's workspace id lands in B's own space and never
   const tickets = await call(A, 'GET', `/api/borga/tickets?ws=${A.ws}`);
   assert.ok(seen(tickets, MARK_A).length && !seen(tickets, MARK_B).length, 'tickets: A keeps own, gets none of B');
   const feats = await call(A, 'GET', `/api/borga/features?ws=${A.ws}`);
-  assert.equal(feats.json?.flags?.social ?? feats.json?.features?.social, false, "B changed A's feature flag");
+  assert.equal(feats.json?.flags?.projects ?? feats.json?.features?.projects, false, "B changed A's feature flag");
   const mail = await call(A, 'GET', `/api/borga/email?ws=${A.ws}`);
   assert.ok(seen(mail, MAIL_A).length && !seen(mail, MAIL_B).length, 'email settings');
   const mem = await call(A, 'GET', `/api/borga/memory?ws=${A.ws}`);

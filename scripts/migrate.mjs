@@ -54,10 +54,12 @@ async function preflight(conn, tag) {
 async function schemaSnapshot(conn) {
   const [tables] = await conn.query('select table_name as t from information_schema.tables where table_schema = database()');
   const [cols] = await conn.query("select column_name as c from information_schema.columns where table_schema = database() and table_name = 'borga_users'");
+  const [stateCols] = await conn.query("select column_name as c from information_schema.columns where table_schema = database() and table_name = 'borga_state'");
   const [idx] = await conn.query("select distinct index_name as n, non_unique as nu from information_schema.statistics where table_schema = database() and table_name = 'borga_users' and column_name = 'email'");
   return {
     tables: tables.map((r) => r.t),
     userColumns: cols.map((r) => r.c),
+    stateColumns: stateCols.map((r) => r.c),
     emailIndexes: idx.map((r) => ({ name: r.n, unique: Number(r.nu) === 0 })),
   };
 }
@@ -112,7 +114,7 @@ async function main() {
     if (dryRun) return;
     const problems = verifySchema(await schemaSnapshot(conn));
     if (problems.length) throw new Error(`schema check failed after migrating:\n  - ${problems.join('\n  - ')}`);
-    log('schema verified (users table, reset-token columns, unique email index).');
+    log('schema verified (users table, reset-token columns, unique email index, row versions).');
   } finally {
     if (locked) await conn.query("select release_lock('borga_migrate')").catch(() => undefined);
     await conn.end().catch(() => undefined);

@@ -27,6 +27,7 @@ test('schema verification names every missing piece and rejects a non-unique ema
   const good = {
     tables: ['borga_users', 'borga_state'],
     userColumns: ['id', 'email', 'name', 'password_hash', 'reset_token', 'reset_token_expires', 'created_at'],
+    stateColumns: ['key', 'value', 'updated_at', 'version'],
     emailIndexes: [{ name: 'idx_users_email', unique: true }],
   };
   assert.deepEqual(verifySchema(good), []);
@@ -35,5 +36,6 @@ test('schema verification names every missing piece and rejects a non-unique ema
   assert.ok(problems.includes('table borga_state is missing'));
   assert.ok(problems.includes('borga_users.reset_token is missing'));
   assert.ok(problems.some((p) => p.includes('not unique')));
+  assert.ok(problems.includes('borga_state.version is missing'));
   assert.ok(verifySchema({ ...good, emailIndexes: [] }).some((p) => p.includes('index idx_users_email is missing')));
 });

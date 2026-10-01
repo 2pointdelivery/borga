@@ -60,3 +60,7 @@ next-env.d.ts
 /remote-control/data/
 !/remote-control/data/.gitkeep
 
+
+# Local database dumps (contain user data): never commit
+/backups/
+deploy/backups/

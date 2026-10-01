@@ -34,6 +34,7 @@ export const UNIQUE_EMAIL_MIGRATION = '0001_windy_pestilence';
 export const EXPECTED = {
   tables: ['borga_users', 'borga_state'],
   userColumns: ['id', 'email', 'name', 'password_hash', 'reset_token', 'reset_token_expires', 'created_at'],
+  stateColumns: ['key', 'value', 'updated_at', 'version'],
   uniqueEmailIndex: 'idx_users_email',
 };
 
@@ -42,6 +43,7 @@ export function verifySchema(snapshot) {
   const problems = [];
   for (const t of EXPECTED.tables) if (!snapshot.tables.includes(t)) problems.push(`table ${t} is missing`);
   for (const c of EXPECTED.userColumns) if (!snapshot.userColumns.includes(c)) problems.push(`borga_users.${c} is missing`);
+  for (const c of EXPECTED.stateColumns) if (!(snapshot.stateColumns ?? []).includes(c)) problems.push(`borga_state.${c} is missing`);
   const idx = snapshot.emailIndexes.find((i) => i.name === EXPECTED.uniqueEmailIndex);
   if (!idx) problems.push(`index ${EXPECTED.uniqueEmailIndex} is missing`);
   else if (!idx.unique) problems.push(`index ${EXPECTED.uniqueEmailIndex} exists but is not unique`);
