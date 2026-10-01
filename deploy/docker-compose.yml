@@ -1,0 +1,57 @@
+# Borga on a single VM (Oracle Cloud Always Free, Ampere A1 / Ubuntu works).
+#   cp .env.example .env   # fill it in
+#   docker compose up -d --build
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: borga
+      MYSQL_USER: borga
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+    volumes:
+      - dbdata:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # Not published to the host: only the app container can reach it.
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://borga:${MYSQL_PASSWORD}@db:3306/borga
+    # Loopback only: Caddy is the public entrypoint; the cron timer calls this port directly.
+    ports:
+      - "127.0.0.1:13000:13000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+
+volumes:
+  dbdata:
+  caddydata:
+  caddyconfig:
