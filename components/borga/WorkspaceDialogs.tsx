@@ -88,12 +88,15 @@ function CompanyFormFields({
   color,
   setColor,
   showPlan = true,
+  suggestCurrency = false,
 }: {
   form: CompanyForm;
   set: (patch: Partial<CompanyForm>) => void;
   color: string;
   setColor: (c: string) => void;
   showPlan?: boolean;
+  /** Picking a country also sets that country's currency (used when creating a company, not when editing one). */
+  suggestCurrency?: boolean;
 }) {
   return (
     <div className="max-h-[60vh] space-y-5 overflow-y-auto pr-1">
@@ -142,13 +145,13 @@ function CompanyFormFields({
             <Input value={form.addressLine} onChange={(e) => set({ addressLine: e.target.value })} placeholder="100 Main St, Suite 200" />
           </Field>
           <Field label="Country">
-            <CountrySelect value={form.country} onChange={(v) => set({ country: v, state: '', city: '' })} />
+            <CountrySelect value={form.country} onChange={(v) => set({ country: v, state: '', city: '' })} onPick={(c) => suggestCurrency && c.cur && set({ currency: c.cur })} />
           </Field>
           <Field label="State / Province">
             <RegionSelect country={form.country} value={form.state} onChange={(v) => set({ state: v })} />
           </Field>
           <Field label="City">
-            <CityInput country={form.country} value={form.city} onChange={(v) => set({ city: v })} />
+            <CityInput country={form.country} state={form.state} value={form.city} onChange={(v) => set({ city: v })} />
           </Field>
           <Field label="Currency">
             <CurrencySelect value={form.currency} onChange={(v) => set({ currency: v })} />
@@ -312,7 +315,7 @@ export function NewWorkspaceDialog({
             Register the company once — legal identity, tax numbers, localization and fiscal year feed every module.
           </DialogDescription>
         </DialogHeader>
-        <CompanyFormFields form={form} set={set} color={color} setColor={setColor} />
+        <CompanyFormFields form={form} set={set} color={color} setColor={setColor} suggestCurrency />
         <DialogFooter>
           <Button onClick={submit} disabled={!form.name.trim()}>Create workspace</Button>
         </DialogFooter>

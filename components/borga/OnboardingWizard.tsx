@@ -15,6 +15,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useBorga } from '@/lib/borga/store';
+import { CountrySelect, CurrencySelect } from './form-widgets';
 import { parseServices } from '@/lib/borga/services';
 import {
   makeOnboarding, industryProfile, INDUSTRY_VALUATION, deriveValuation,
@@ -54,6 +55,8 @@ export function OnboardingWizard() {
   const [fin, setFin] = useState({ revenue: '', period: 'monthly' });
   const [team, setTeam] = useState<{ name: string; role: string }[]>([{ name: '', role: '' }]);
   const [saving, setSaving] = useState(false);
+  // Once the user picks a currency themselves, choosing a country must not overwrite it.
+  const currencyChosen = useRef(false);
 
   useEffect(() => {
     if (!synced) void hydrate();
@@ -288,12 +291,20 @@ export function OnboardingWizard() {
                 <div><Label className="text-xs text-muted-foreground">Legal name</Label><Input value={profile.legalName} onChange={(e) => setProfile({ ...profile, legalName: e.target.value })} className="mt-1" /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label className="text-xs text-muted-foreground">Country</Label><Input value={profile.country} onChange={(e) => setProfile({ ...profile, country: e.target.value })} className="mt-1" /></div>
+                <div><Label className="text-xs text-muted-foreground">Country</Label>
+                  <div className="mt-1">
+                    <CountrySelect
+                      value={profile.country}
+                      onChange={(v) => setProfile((p) => ({ ...p, country: v }))}
+                      // the country's own currency, unless the user already chose one
+                      onPick={(c) => c.cur && !currencyChosen.current && setProfile((p) => ({ ...p, currency: c.cur }))}
+                    />
+                  </div>
+                </div>
                 <div><Label className="text-xs text-muted-foreground">Currency</Label>
-                  <Select value={profile.currency} onValueChange={(v) => setProfile({ ...profile, currency: v })}>
-                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                    <SelectContent>{Object.keys(CURRENCY_SYMBOL).map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select>
+                  <div className="mt-1">
+                    <CurrencySelect value={profile.currency} onChange={(v) => { currencyChosen.current = true; setProfile((p) => ({ ...p, currency: v })); }} />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

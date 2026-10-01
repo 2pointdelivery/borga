@@ -59,6 +59,7 @@ export function ModelPicker({ sections, value, onChange, leading, allowCustom = 
   const pick = (id: string) => {
     onChange(id);
     setOpen(false);
+    setSearch(''); // closing by choosing skips onOpenChange, so clear the search here or the next open starts filtered
   };
 
   const triggerText = leading && value === leading.value ? leading.label : selected ? selected.label : value ? value : placeholder;

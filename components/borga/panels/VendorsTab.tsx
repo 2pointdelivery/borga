@@ -32,7 +32,7 @@ import {
 import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
-import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect, CountrySelect, CityInput } from '../form-widgets';
 import { billHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { cn } from '@/lib/utils';
 
@@ -620,11 +620,11 @@ export function VendorsTab() {
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="text-xs font-medium text-muted-foreground">City</label>
-                <Input value={vendorForm.city} onChange={(e) => setVendorForm({ ...vendorForm, city: e.target.value })} placeholder="Toronto" className="mt-1" />
+                <div className="mt-1"><CityInput country={vendorForm.country} value={vendorForm.city} onChange={(v) => setVendorForm({ ...vendorForm, city: v })} /></div>
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Country</label>
-                <Input value={vendorForm.country} onChange={(e) => setVendorForm({ ...vendorForm, country: e.target.value })} placeholder="Canada" className="mt-1" />
+                <div className="mt-1"><CountrySelect value={vendorForm.country} onChange={(v) => setVendorForm({ ...vendorForm, country: v, city: '' })} /></div>
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Tax number</label>

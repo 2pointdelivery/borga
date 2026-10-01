@@ -16,6 +16,8 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 # Database migrations and the script that applies them (run by the "migrate" service in deploy/docker-compose.yml).
 COPY --from=builder /app/drizzle ./drizzle
+# Country, state and city lists for the address dropdowns (GeoNames, CC BY 4.0).
+COPY --from=builder /app/data ./data
 COPY --from=builder /app/scripts/migrate.mjs /app/scripts/migrate-core.mjs ./scripts/
 RUN pnpm install --frozen-lockfile --prod && chown -R node:node /app
 # Secrets (DATABASE_URL, SMTP_*, CRON_SECRET, ...) come from the host's environment, never from the image.

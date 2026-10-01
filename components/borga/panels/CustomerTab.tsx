@@ -627,7 +627,7 @@ export function CustomerTab() {
                 <RegionSelect country={custForm.country} value={custForm.state} onChange={(v) => setCustForm({ ...custForm, state: v })} />
               </Field>
               <Field label="City" className="col-span-4 sm:col-span-2">
-                <CityInput country={custForm.country} value={custForm.city} onChange={(v) => setCustForm({ ...custForm, city: v })} />
+                <CityInput country={custForm.country} state={custForm.state} value={custForm.city} onChange={(v) => setCustForm({ ...custForm, city: v })} />
               </Field>
               <Field label="Status">
                 <Select value={custForm.status} onValueChange={(v) => setCustForm({ ...custForm, status: v as CustomerStatus })}>

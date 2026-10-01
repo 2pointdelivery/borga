@@ -1,4 +1,5 @@
 // Borga — core domain types and seed data.
+import { currencySymbol } from './currencies';
 
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
@@ -2112,10 +2113,10 @@ export function deriveValuation(finance: FinanceEntry[], knowledge: KnowledgeEnt
 
 export type WorkspacePlan = 'trial' | 'growth' | 'scale' | 'enterprise';
 
-/** Display symbol per workspace currency — single source of truth for every money() helper. */
-export const CURRENCY_SYMBOL: Record<'USD' | 'CAD' | 'EUR' | 'GBP' | 'GHS', string> = {
-  USD: '$', CAD: 'C$', EUR: '€', GBP: '£', GHS: 'GH₵',
-};
+/** Display symbol per workspace currency — single source of truth for every money() helper. Works for every ISO 4217 code (lib/borga/currencies.ts). */
+export const CURRENCY_SYMBOL: Record<string, string> = new Proxy({} as Record<string, string>, {
+  get: (_target, code) => (typeof code === 'string' ? currencySymbol(code) : undefined),
+});
 
 // ---------------------------------------------------------------------------
 // Onboarding — when a company is created we collect structured context so the
@@ -2172,7 +2173,8 @@ export interface Workspace {
   industry: string;
   plan: WorkspacePlan;
   color: string; // avatar accent, same convention as agents
-  currency: 'USD' | 'CAD' | 'EUR' | 'GBP' | 'GHS';
+  /** ISO 4217 code, for example "USD", "GHS", "NGN" (see lib/borga/currencies.ts). */
+  currency: string;
   createdAt: string;
 
   // ── Full company profile (Settings → Company information) ────────────────
@@ -3216,12 +3218,6 @@ export interface BookClosure {
 // Localization option lists for the company form
 // ---------------------------------------------------------------------------
 
-export const COUNTRY_OPTIONS = [
-  'Canada', 'United States', 'United Kingdom', 'Australia', 'Germany', 'France',
-  'Denmark', 'Netherlands', 'Ireland', 'Singapore', 'South Africa', 'Nigeria', 'Kenya',
-  'Ghana', 'India', 'United Arab Emirates', 'Brazil', 'Mexico', 'Japan', 'New Zealand',
-] as const;
-
 export const TIMEZONE_OPTIONS = [
   'UTC',
   'America/St_Johns', 'America/Halifax', 'America/Toronto', 'America/Winnipeg',
@@ -3283,35 +3279,3 @@ export const INDUSTRY_OPTIONS = [
   'Government', 'Legal', 'Insurance', 'Telecommunications', 'Other',
 ] as const;
 
-export const REGIONS_BY_COUNTRY: Partial<Record<string, string[]>> = {
-  Canada: ['Alberta', 'British Columbia', 'Manitoba', 'New Brunswick', 'Newfoundland and Labrador', 'Northwest Territories', 'Nova Scotia', 'Nunavut', 'Ontario', 'Prince Edward Island', 'Quebec', 'Saskatchewan', 'Yukon'],
-  'United States': ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming', 'District of Columbia'],
-  'United Kingdom': ['England — Greater London', 'England — South East', 'England — South West', 'England — North West', 'England — North East', 'England — Midlands', 'England — Yorkshire', 'Scotland', 'Wales', 'Northern Ireland'],
-  Australia: ['New South Wales', 'Victoria', 'Queensland', 'Western Australia', 'South Australia', 'Tasmania', 'Australian Capital Territory', 'Northern Territory'],
-  Germany: ['Baden-Württemberg', 'Bayern', 'Berlin', 'Brandenburg', 'Bremen', 'Hamburg', 'Hessen', 'Niedersachsen', 'Nordrhein-Westfalen', 'Rheinland-Pfalz', 'Sachsen', 'Sachsen-Anhalt', 'Schleswig-Holstein', 'Thüringen'],
-  India: ['Delhi', 'Maharashtra', 'Karnataka', 'Tamil Nadu', 'Telangana', 'Gujarat', 'Rajasthan', 'Uttar Pradesh', 'West Bengal', 'Kerala', 'Punjab', 'Haryana'],
-  'South Africa': ['Gauteng', 'Western Cape', 'KwaZulu-Natal', 'Eastern Cape', 'Free State', 'Limpopo', 'Mpumalanga', 'North West', 'Northern Cape'],
-  Nigeria: ['Lagos', 'Abuja FCT', 'Rivers', 'Kano', 'Oyo', 'Kaduna', 'Enugu', 'Delta', 'Edo', 'Ogun'],
-  'United Arab Emirates': ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain'],
-};
-
-export const CITIES_BY_COUNTRY: Partial<Record<string, string[]>> = {
-  Canada: ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa', 'Edmonton', 'Winnipeg', 'Halifax', 'Saskatoon', 'Regina', 'Quebec City', 'Victoria'],
-  'United States': ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia', 'San Antonio', 'San Diego', 'Dallas', 'Austin', 'Seattle', 'Denver', 'Boston', 'Miami', 'Atlanta', 'San Francisco'],
-  'United Kingdom': ['London', 'Manchester', 'Birmingham', 'Leeds', 'Glasgow', 'Liverpool', 'Bristol', 'Edinburgh', 'Cardiff', 'Belfast', 'Newcastle'],
-  Australia: ['Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Canberra', 'Gold Coast', 'Hobart', 'Darwin'],
-  Germany: ['Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne', 'Stuttgart', 'Düsseldorf', 'Leipzig', 'Dortmund'],
-  France: ['Paris', 'Marseille', 'Lyon', 'Toulouse', 'Nice', 'Nantes', 'Bordeaux', 'Lille'],
-  Netherlands: ['Amsterdam', 'Rotterdam', 'The Hague', 'Utrecht', 'Eindhoven', 'Groningen'],
-  Ireland: ['Dublin', 'Cork', 'Galway', 'Limerick', 'Waterford'],
-  Singapore: ['Singapore (Downtown)', 'Jurong', 'Tampines', 'Woodlands'],
-  'South Africa': ['Johannesburg', 'Cape Town', 'Durban', 'Pretoria', 'Port Elizabeth', 'Bloemfontein'],
-  Nigeria: ['Lagos', 'Abuja', 'Port Harcourt', 'Ibadan', 'Kano', 'Benin City', 'Enugu'],
-  Kenya: ['Nairobi', 'Mombasa', 'Kisumu', 'Nakuru', 'Eldoret'],
-  India: ['Mumbai', 'Delhi', 'Bengaluru', 'Chennai', 'Hyderabad', 'Pune', 'Kolkata', 'Ahmedabad', 'Jaipur'],
-  'United Arab Emirates': ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Al Ain'],
-  Brazil: ['São Paulo', 'Rio de Janeiro', 'Brasília', 'Salvador', 'Fortaleza', 'Belo Horizonte'],
-  Mexico: ['Mexico City', 'Guadalajara', 'Monterrey', 'Cancún', 'Tijuana', 'Puebla'],
-  Japan: ['Tokyo', 'Osaka', 'Yokohama', 'Nagoya', 'Sapporo', 'Kyoto', 'Fukuoka'],
-  'New Zealand': ['Auckland', 'Wellington', 'Christchurch', 'Hamilton', 'Dunedin'],
-};

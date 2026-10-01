@@ -11,15 +11,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  CITIES_BY_COUNTRY,
-  COUNTRY_OPTIONS,
   INDUSTRY_OPTIONS,
-  REGIONS_BY_COUNTRY,
   TIMEZONE_OPTIONS,
-  type Workspace,
   type TaxProfile,
   type AccountType,
 } from '@/lib/borga/data';
+import { findCountry, type GeoCountry } from '@/lib/borga/geo';
+import { ALL_CURRENCIES, currencyLabel, currencySymbol } from '@/lib/borga/currencies';
+import { SearchSelect, type SearchOption } from './SearchSelect';
+import { useCities, useCountries, useStates } from './use-geo';
 import { useBorga } from '@/lib/borga/store';
 import { cn } from '@/lib/utils';
 
@@ -115,51 +115,64 @@ export function Field({ label, children, hint, className }: { label: string; chi
   );
 }
 
-export function CountrySelect({ value, onChange, id }: { value: string; onChange: (v: string) => void; id?: string }) {
+/** Every country (ISO 3166-1), searchable. The value is the country NAME, which is what the rest of the app stores and matches on. */
+export function CountrySelect({ value, onChange, onPick, id }: { value: string; onChange: (v: string) => void; onPick?: (country: GeoCountry) => void; id?: string }) {
+  const { data: countries, loading } = useCountries();
+  const options = useMemo<SearchOption[]>(() => countries.map((c) => ({ value: c.n, label: c.n, detail: c.c })), [countries]);
   return (
-    <Select value={value || undefined} onValueChange={onChange}>
-      <SelectTrigger id={id}><SelectValue placeholder="Select country…" /></SelectTrigger>
-      <SelectContent>
-        {COUNTRY_OPTIONS.map((c) => (
-          <SelectItem key={c} value={c}>{c}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <SearchSelect
+      id={id}
+      aria-label="Country"
+      options={options}
+      value={value}
+      loading={loading}
+      placeholder="Select country"
+      searchPlaceholder="Search countries"
+      allowCustom
+      onChange={(v) => {
+        onChange(v);
+        const c = findCountry(countries, v);
+        if (c) onPick?.(c);
+      }}
+    />
   );
 }
 
+/** State / province / region of the chosen country, searchable. Countries without a list let you type your own. */
 export function RegionSelect({ country, value, onChange }: { country: string; value: string; onChange: (v: string) => void }) {
-  const regions = country ? REGIONS_BY_COUNTRY[country] : undefined;
-  if (regions) {
-    return (
-      <Select value={value || undefined} onValueChange={onChange}>
-        <SelectTrigger><SelectValue placeholder="Select state / province…" /></SelectTrigger>
-        <SelectContent>
-          {regions.map((r) => (
-            <SelectItem key={r} value={r}>{r}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    );
-  }
-  // Free-text fallback for countries without a curated region list.
+  const { data: states, loading } = useStates(country);
+  const options = useMemo<SearchOption[]>(() => states.map((s) => ({ value: s.n, label: s.n })), [states]);
   return (
-    <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={country ? 'State / province' : 'Select country first'} disabled={!country} />
+    <SearchSelect
+      aria-label="State or province"
+      options={options}
+      value={value}
+      loading={loading}
+      disabled={!country}
+      placeholder={country ? 'Select state / province' : 'Select country first'}
+      searchPlaceholder="Search states and provinces"
+      allowCustom
+      onChange={(v) => onChange(v)}
+    />
   );
 }
 
-export function CityInput({ country, value, onChange }: { country: string; value: string; onChange: (v: string) => void }) {
-  const listId = useMemo(() => `cities-${country.replace(/\W+/g, '-').toLowerCase() || 'none'}`, [country]);
-  const cities = country ? CITIES_BY_COUNTRY[country] ?? [] : [];
+/** Cities of the chosen state (or the country's biggest cities when no state is chosen), searchable. Any other place can be typed. */
+export function CityInput({ country, state = '', value, onChange }: { country: string; state?: string; value: string; onChange: (v: string) => void }) {
+  const { data: cities, loading, hasStates } = useCities(country, state);
+  const options = useMemo<SearchOption[]>(() => cities.map((c) => ({ value: c, label: c })), [cities]);
   return (
-    <>
-      <Input list={listId} value={value} onChange={(e) => onChange(e.target.value)} placeholder={country ? 'City' : 'Select country first'} disabled={!country} autoComplete="off" />
-      <datalist id={listId}>
-        {cities.map((c) => (
-          <option key={c} value={c} />
-        ))}
-      </datalist>
-    </>
+    <SearchSelect
+      aria-label="City"
+      options={options}
+      value={value}
+      loading={loading}
+      disabled={!country}
+      placeholder={!country ? 'Select country first' : hasStates && !state ? 'Select state first (or type a city)' : 'Select city'}
+      searchPlaceholder="Search cities"
+      allowCustom
+      onChange={(v) => onChange(v)}
+    />
   );
 }
 
@@ -177,24 +190,26 @@ export function IndustryInput({ value, onChange, id }: { value: string; onChange
   );
 }
 
-const CURRENCIES: { code: Workspace['currency']; label: string }[] = [
-  { code: 'USD', label: 'USD — US Dollar' },
-  { code: 'CAD', label: 'CAD — Canadian Dollar' },
-  { code: 'EUR', label: 'EUR — Euro' },
-  { code: 'GBP', label: 'GBP — British Pound' },
-  { code: 'GHS', label: 'GHS — Ghana Cedi' },
-];
+const CURRENCY_OPTIONS: SearchOption[] = ALL_CURRENCIES.map((c) => ({
+  value: c.code,
+  label: currencyLabel(c),
+  detail: currencySymbol(c.code),
+  group: c.kind === 'currency' ? 'Currencies' : 'Other ISO 4217 codes (metals, funds, special)',
+}));
 
-export function CurrencySelect({ value, onChange }: { value: string; onChange: (v: Workspace['currency']) => void }) {
+/** Every ISO 4217 currency, searchable by code, name or symbol ("ghs", "cedi", "naira"). The value is the 3-letter code. */
+export function CurrencySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as Workspace['currency'])}>
-      <SelectTrigger><SelectValue /></SelectTrigger>
-      <SelectContent>
-        {CURRENCIES.map((c) => (
-          <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <SearchSelect
+      aria-label="Currency"
+      options={CURRENCY_OPTIONS}
+      value={value}
+      placeholder="Select currency"
+      searchPlaceholder="Search currencies"
+      clearable={false}
+      limit={200}
+      onChange={(v) => v && onChange(v)}
+    />
   );
 }
 
