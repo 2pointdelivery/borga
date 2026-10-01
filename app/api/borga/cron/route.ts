@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { tickWorkspace, listScheduledWorkspaces } from '@/lib/borga/heartbeat';
 import { loadFeatures } from '@/lib/borga/features-server';
 import { listTicketWorkspaces, pollMailbox, sweepSla } from '@/lib/borga/tickets-server';
+import { listFilingWorkspaces, sweepFilings } from '@/lib/borga/filings-server';
 import { listConnectionWorkspaces } from '@/lib/borga/connections-server';
 import { runDueSyncJobs } from '@/lib/borga/sync-jobs';
 import '@/lib/borga/sync-registry';
@@ -70,6 +71,15 @@ export async function POST(req: NextRequest) {
       tickets[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
     }
   }
+  // Tax filing reminders for companies that have confirmed their filing setup.
+  const filings: Record<string, unknown> = {};
+  for (const t of await listFilingWorkspaces()) {
+    try {
+      filings[`${t.userId}/${t.ws}`] = await sweepFilings(t.userId, t.ws);
+    } catch (e) {
+      filings[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
+    }
+  }
   // Integration sync jobs (ads, comps, scheduled posts ...) for every workspace with a connection.
   const sync: Record<string, unknown> = {};
   for (const t of await listConnectionWorkspaces()) {
@@ -80,7 +90,7 @@ export async function POST(req: NextRequest) {
     }
   }
   const webhooksPending = await processAllPendingDeliveries().catch(() => -1);
-  return NextResponse.json({ ok: true, workspaces: targets.length, results, tickets, sync, webhooksPending });
+  return NextResponse.json({ ok: true, workspaces: targets.length, results, tickets, filings, sync, webhooksPending });
 }
 
 export async function GET(req: NextRequest) {

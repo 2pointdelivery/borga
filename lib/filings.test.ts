@@ -322,3 +322,81 @@ test('a filing with no computable date is not listed for a period that ended bef
   const later = plan('Ghana', 'Greater Accra', { today: '2026-12-10', trackedFrom: '2026-10-01' });
   assert.ok(later.some((r) => r.ob.id === 'gh-permit' && r.state === 'needs-date'), 'this year\'s shows up as the year end approaches');
 });
+
+// ── reminders, stages and the filing pack ─────────────────────────────────────────────────────────────────────────────
+
+import { dueReminders, MAX_REMINDERS_PER_SWEEP } from './borga/filing-plan';
+import { buildFilingPack } from './borga/filing-pack';
+
+const on = (today: string, over: Partial<Parameters<typeof planFilings>[0]> = {}) => plan('Canada', 'Ontario', { today, trackedFrom: '2026-01-01', ...over });
+const gst = (rows: ReturnType<typeof on>) => rows.filter((r) => r.ob.id === 'ca-gsthst');
+
+test('a reminder is raised once per step: 30, 14, 7 and 1 days out, then weekly once overdue', () => {
+  // the Jul–Sep GST/HST return is due 2026-10-31
+  const at = (today: string, sent: string[] = []) => dueReminders(gst(on(today)), new Set(sent)).filter((r) => r.id.startsWith('ca-gsthst|2026-09-30'));
+  const r30 = at('2026-10-01');
+  assert.equal(r30.length, 1);
+  assert.equal(r30[0].id, 'ca-gsthst|2026-09-30@30');
+  assert.equal(r30[0].severity, 'info');
+  assert.equal(at('2026-10-01', [r30[0].id]).length, 0, 'not raised twice');
+  assert.equal(at('2026-10-20')[0].id, 'ca-gsthst|2026-09-30@14');
+  assert.equal(at('2026-10-27')[0].id, 'ca-gsthst|2026-09-30@7', 'only the current step, not 30 and 14 as well');
+  assert.equal(at('2026-10-27')[0].severity, 'noteworthy');
+  assert.equal(at('2026-10-31')[0].title, 'Due today: GST/HST return');
+  const late = at('2026-11-05');
+  assert.equal(late[0].id, 'ca-gsthst|2026-09-30@overdue-0');
+  assert.equal(late[0].severity, 'urgent');
+  assert.match(late[0].body, /5 days ago/);
+  assert.equal(at('2026-11-12')[0].id, 'ca-gsthst|2026-09-30@overdue-1', 'and again a week later');
+});
+
+test('nothing is raised for a filing that is filed, not required, or has no date, and a stage is mentioned', () => {
+  const rows = on('2026-10-27');
+  const row = gst(rows).find((r) => r.filing.key === '2026-09-30')!;
+  const key = recordKey('ca-gsthst', row.filing.key);
+  assert.equal(dueReminders(gst(on('2026-10-27', { records: [{ key, status: 'filed' }] })), new Set()).filter((r) => r.id.startsWith('ca-gsthst|2026-09-30')).length, 0);
+  assert.equal(dueReminders(gst(on('2026-10-27', { records: [{ key, status: 'not-required' }] })), new Set()).filter((r) => r.id.startsWith('ca-gsthst|2026-09-30')).length, 0);
+  const staged = dueReminders(gst(on('2026-10-27', { records: [{ key, status: 'review', preparer: 'Sam' }] })), new Set()).find((r) => r.id.startsWith('ca-gsthst|2026-09-30'));
+  assert.match(staged!.body, /waiting for review/);
+  const ohio = plan('United States', 'Ohio', { today: '2026-12-20', trackedFrom: '2026-10-01' });
+  assert.equal(dueReminders(ohio.filter((r) => r.state === 'needs-date'), new Set()).length, 0);
+});
+
+test('a stage keeps the filing open: it still counts as overdue and keeps its due date', () => {
+  const base = on('2026-11-05');
+  const row = gst(base).find((r) => r.filing.key === '2026-09-30')!;
+  const key = recordKey('ca-gsthst', row.filing.key);
+  const staged = gst(on('2026-11-05', { records: [{ key, status: 'preparing' }] })).find((r) => r.filing.key === '2026-09-30')!;
+  assert.equal(staged.state, 'overdue');
+  assert.equal(staged.record?.status, 'preparing');
+  assert.equal(normalizeFilings({ records: [{ key: 'a', status: 'review' }, { key: 'b', status: 'preparing' }, { key: 'c', status: 'nope' }] }).records.length, 2);
+});
+
+test('a catch-up never raises more than the cap, most urgent first', () => {
+  const rows = plan('Ghana', 'Greater Accra', { today: '2026-12-01', trackedFrom: '2026-01-01', profile: profile({ salesTaxFrequency: 'monthly' }), ctx: { employees: true, registered: true } });
+  const out = dueReminders(rows, new Set());
+  assert.ok(out.length <= MAX_REMINDERS_PER_SWEEP);
+  assert.equal(out[0].severity, 'urgent', 'overdue filings come first');
+});
+
+test('the filing pack carries the figures, the checklist and sign-off, and escapes what the user typed', () => {
+  const ob = find('Canada', 'Ontario', 'ca-gsthst');
+  const f = figuresFor(ob, period, { invoices: [inv({ amount: 113, taxProfileIds: ['hst'] })], bills: [], employees: [], taxProfiles: PROFILES });
+  const html = buildFilingPack({
+    company: { name: 'M', legalName: '<script>alert(1)</script> Inc.', taxNumber: '123 "RT"', country: 'Canada', state: 'Ontario', city: 'Toronto' },
+    ob, period, label: 'Jan–Mar 2026', due: '2026-04-30', figures: f,
+    record: { key: 'k', status: 'review', preparer: 'Sam & Co', reviewer: 'Lee' }, currency: 'CAD', generatedOn: '2026-04-01',
+  });
+  assert.ok(html.startsWith('<!doctype html>'));
+  assert.ok(!html.includes('<script>alert'), 'a company name cannot inject markup');
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /Sam &amp; Co/);
+  assert.match(html, /C\$13\.00/);
+  assert.match(html, /Net tax to pay/);
+  assert.match(html, /Before filing/);
+  assert.match(html, /Reviewed by \/ date/);
+  assert.match(html, /not a tax return or tax advice/);
+  const noFigures = buildFilingPack({ company: { name: 'M' }, ob: find('United States', 'Texas', 'us-est-corp'), period, label: 'x', due: null, figures: null, currency: 'USD', generatedOn: '2026-04-01' });
+  assert.ok(!noFigures.includes('Figures from the books'));
+  assert.match(noFigures, /to be confirmed/);
+});

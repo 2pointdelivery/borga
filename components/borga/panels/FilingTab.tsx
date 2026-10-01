@@ -16,6 +16,7 @@ import {
 } from '@/lib/borga/filing-catalog';
 import { planFilings, summarize, type PlanRow } from '@/lib/borga/filing-plan';
 import { figuresCsv, figuresFor } from '@/lib/borga/filing-figures';
+import { buildFilingPack } from '@/lib/borga/filing-pack';
 import { SectionTitle } from '../bits';
 import { DateInput, Field } from '../form-widgets';
 
@@ -183,6 +184,9 @@ export function FilingTab() {
                     <td className="whitespace-nowrap px-4 py-2.5">{fmtDate(r.due)}{r.record?.dueOverride && r.due === r.record.dueOverride ? <span className="ml-1 text-[10px] text-muted-foreground">(yours)</span> : null}</td>
                     <td className="px-4 py-2.5">
                       <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${STATE_STYLE[r.state]}`}>{stateText(r)}</span>
+                      {(r.record?.status === 'preparing' || r.record?.status === 'review') && (
+                        <span className="ml-1.5 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-600">{r.record.status === 'preparing' ? 'preparing' : 'in review'}</span>
+                      )}
                     </td>
                     <td className="px-2 py-2.5 text-right"><Button size="sm" variant="ghost" onClick={() => setOpen(r)}>Open</Button></td>
                   </tr>
@@ -241,10 +245,10 @@ export function FilingTab() {
       )}
       {open && (
         <FilingDialog
-          key={`${open.ob.id}|${open.filing.key}`} row={open} today={today} currency={currency} legal={ws.legalName || ws.name}
+          key={`${open.ob.id}|${open.filing.key}`} row={open} today={today} currency={currency} legal={ws.legalName || ws.name} company={ws}
           data={{ invoices, bills, employees, taxProfiles }}
           onClose={() => setOpen(null)}
-          onSave={(rec) => { saveFilingRecord(rec); log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `${open.ob.name} (${open.filing.label}) marked ${rec.status === 'filed' ? 'filed' : 'not required'}.` }); setOpen(null); }}
+          onSave={(rec) => { saveFilingRecord(rec); log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `${open.ob.name} (${open.filing.label}) marked ${rec.status === 'not-required' ? 'not required' : rec.status === 'review' ? 'waiting for review' : rec.status}.` }); setOpen(null); }}
           onClear={(key) => { clearFilingRecord(key); setOpen(null); }}
         />
       )}
@@ -266,14 +270,16 @@ function Tile({ icon: Icon, label, value, tone = '' }: { icon: React.ComponentTy
 
 // ── one filing: the worksheet and the record ──────────────────────────────────────────────────────────────────────────
 
-function FilingDialog({ row, today, currency, legal, data, onClose, onSave, onClear }: {
-  row: PlanRow; today: string; currency: string; legal: string;
+function FilingDialog({ row, today, currency, legal, company, data, onClose, onSave, onClear }: {
+  row: PlanRow; today: string; currency: string; legal: string; company: Parameters<typeof buildFilingPack>[0]['company'];
   data: Parameters<typeof figuresFor>[2];
   onClose: () => void; onSave: (rec: FilingRecord) => void; onClear: (key: string) => void;
 }) {
   const key = recordKey(row.ob.id, row.filing.key);
   const rec = row.record;
-  const [status, setStatus] = useState<'open' | 'filed' | 'not-required'>(rec?.status ?? 'open');
+  const [status, setStatus] = useState<'open' | FilingRecord['status']>(rec?.status ?? 'open');
+  const [preparer, setPreparer] = useState(rec?.preparer ?? '');
+  const [reviewer, setReviewer] = useState(rec?.reviewer ?? '');
   const [filedOn, setFiledOn] = useState(rec?.filedOn ?? today);
   const [reference, setReference] = useState(rec?.reference ?? '');
   const [amount, setAmount] = useState(rec?.amount != null ? String(rec.amount) : '');
@@ -293,6 +299,15 @@ function FilingDialog({ row, today, currency, legal, data, onClose, onSave, onCl
     URL.revokeObjectURL(a.href);
   };
 
+  const downloadPack = () => {
+    const html = buildFilingPack({ company, ob: row.ob, period: row.filing.period, label: row.filing.label, due: row.due, figures: figs, record: rec, currency, generatedOn: today });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+    a.download = `filing-pack-${row.ob.id}-${row.filing.key.replace('#', '-')}.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   const save = () => {
     if (status === 'open') { onClear(key); return; }
     const n = Number(amount);
@@ -302,6 +317,8 @@ function FilingDialog({ row, today, currency, legal, data, onClose, onSave, onCl
       reference: reference.trim() || undefined,
       amount: amount.trim() !== '' && Number.isFinite(n) ? n : undefined,
       note: note.trim() || undefined,
+      preparer: preparer.trim() || undefined,
+      reviewer: reviewer.trim() || undefined,
       dueOverride: isIso(dueOverride) ? dueOverride : undefined,
     });
   };
@@ -320,6 +337,7 @@ function FilingDialog({ row, today, currency, legal, data, onClose, onSave, onCl
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${STATE_STYLE[row.state]}`}>{stateText(row)}</span>
             <span className="text-muted-foreground">Due {fmtDate(row.due)}</span>
+            <Button size="sm" variant="outline" onClick={downloadPack}><Download className="h-3.5 w-3.5" /> Filing pack</Button>
             {row.ob.url && (
               <a href={row.ob.url} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 text-xs text-primary hover:underline">
                 Authority page <ExternalLink className="h-3 w-3" />
@@ -360,7 +378,9 @@ function FilingDialog({ row, today, currency, legal, data, onClose, onSave, onCl
                 <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="open">Open (not filed yet)</SelectItem>
+                    <SelectItem value="open">Open (not started)</SelectItem>
+                    <SelectItem value="preparing">Preparing</SelectItem>
+                    <SelectItem value="review">Waiting for review</SelectItem>
                     <SelectItem value="filed">Filed</SelectItem>
                     <SelectItem value="not-required">Not required</SelectItem>
                   </SelectContent>
@@ -368,6 +388,15 @@ function FilingDialog({ row, today, currency, legal, data, onClose, onSave, onCl
               </Field>
               {status === 'filed' && <Field label="Filed on"><DateInput value={filedOn} onChange={setFiledOn} /></Field>}
             </div>
+            {status !== 'open' && status !== 'not-required' && (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Prepared by"><Input value={preparer} onChange={(e) => setPreparer(e.target.value)} placeholder="Name or firm" /></Field>
+                <Field label="Reviewed by"><Input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="Name or firm" /></Field>
+                {preparer.trim() !== '' && preparer.trim().toLowerCase() === reviewer.trim().toLowerCase() && (
+                  <p className="col-span-2 text-[11px] text-amber-600">The same person prepared and reviewed this. A second pair of eyes catches more.</p>
+                )}
+              </div>
+            )}
             {status === 'filed' && (
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Confirmation number"><Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="From the authority" /></Field>

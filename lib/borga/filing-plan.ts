@@ -84,3 +84,55 @@ export function summarize(rows: PlanRow[]): PlanSummary {
   const n = (s: DueState) => rows.filter((r) => r.state === s).length;
   return { overdue: n('overdue'), dueSoon: n('due-soon'), needsDate: n('needs-date'), filed: n('filed') };
 }
+
+// ── reminders ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export const REMINDER_DAYS = [30, 14, 7, 1] as const;
+/** Most reminders one sweep may raise for one company, so a catch-up does not flood the inbox. */
+export const MAX_REMINDERS_PER_SWEEP = 8;
+
+export interface Reminder {
+  /** Dedupe id: the filing and how close it is. The same id is never raised twice. */
+  id: string;
+  title: string;
+  body: string;
+  severity: 'info' | 'noteworthy' | 'urgent';
+}
+
+const STAGE_TEXT: Record<string, string> = { preparing: 'being prepared', review: 'waiting for review' };
+
+/**
+ * The reminders to raise now: for each open filing, one when it first comes within 30, 14, 7 and 1 days of its date, and one a
+ * week after it is overdue, and every week after that. Only the current step is raised (a filing that is 5 days away gets the 7-day
+ * reminder, not also the 30 and 14), and ids already in `sent` are skipped.
+ */
+export function dueReminders(rows: PlanRow[], sent: ReadonlySet<string>): Reminder[] {
+  const out: Reminder[] = [];
+  for (const r of rows) {
+    if (r.state === 'filed' || r.state === 'not-required' || r.state === 'needs-date' || r.daysLeft === null || !r.due) continue;
+    const base = `${r.ob.id}|${r.filing.key}`;
+    const d = r.daysLeft;
+    const stage = r.record && STAGE_TEXT[r.record.status] ? ` It is ${STAGE_TEXT[r.record.status]}.` : '';
+    const what = `${r.ob.name}${r.ob.form ? ` (${r.ob.form})` : ''}, ${r.filing.label}, ${r.ob.authority}`;
+    if (d < 0) {
+      const weeks = Math.floor(-d / 7);
+      const id = `${base}@overdue-${weeks}`;
+      if (sent.has(id)) continue;
+      out.push({ id, title: `Overdue: ${r.ob.name}`, body: `${what} was due ${r.due}, ${-d} day${-d === 1 ? '' : 's'} ago. File it or mark it filed.${stage}`, severity: 'urgent' });
+    } else {
+      const t = [...REMINDER_DAYS].reverse().find((n) => d <= n); // the closest step that has been reached
+      if (t === undefined) continue;
+      const id = `${base}@${t}`;
+      if (sent.has(id)) continue;
+      out.push({
+        id,
+        title: d === 0 ? `Due today: ${r.ob.name}` : `Due in ${d} day${d === 1 ? '' : 's'}: ${r.ob.name}`,
+        body: `${what} is due ${r.due}.${stage}`,
+        severity: t <= 7 ? 'noteworthy' : 'info',
+      });
+    }
+  }
+  // the most urgent first, then cap
+  const rank = { urgent: 0, noteworthy: 1, info: 2 } as const;
+  return out.sort((a, b) => rank[a.severity] - rank[b.severity]).slice(0, MAX_REMINDERS_PER_SWEEP);
+}

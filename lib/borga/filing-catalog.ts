@@ -71,7 +71,8 @@ export interface FilingProfile {
   custom: CustomObligation[];
 }
 
-export type FilingStatus = 'filed' | 'not-required';
+/** preparing and review are stages of an open filing; filed and not-required close it. */
+export type FilingStatus = 'preparing' | 'review' | 'filed' | 'not-required';
 export interface FilingRecord {
   /** `${obligationId}|${key}` */
   key: string;
@@ -80,6 +81,9 @@ export interface FilingRecord {
   reference?: string;
   amount?: number;
   note?: string;
+  /** Who prepared and who reviewed it, as free text (a name or an accountant's firm). */
+  preparer?: string;
+  reviewer?: string;
   /** The user's own due date, for manual-rule obligations or when an authority granted an extension. */
   dueOverride?: string;
 }
@@ -630,7 +634,7 @@ export function normalizeFilings(raw: unknown): FilingsState {
         && Number.isFinite(c.monthsAfter) && (c.day === 'end' || Number.isFinite(c.day)))
     : [];
   const records = Array.isArray(r.records)
-    ? r.records.filter((x): x is FilingRecord => !!x && typeof x.key === 'string' && (x.status === 'filed' || x.status === 'not-required'))
+    ? r.records.filter((x): x is FilingRecord => !!x && typeof x.key === 'string' && (x.status === 'preparing' || x.status === 'review' || x.status === 'filed' || x.status === 'not-required'))
     : [];
   return {
     profile: {
