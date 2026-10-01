@@ -63,3 +63,16 @@ Known and accepted: probing an operator's own email on the signup form returns 4
 | # | Finding | Risk | Resolution path |
 |---|---|---|---|
 | 8 | `chat`, `llm-test` and agent runs send the shared provider API key to the base URL stored in the workspace catalog, which any signed-in user can edit (Advanced: edit the model catalog). A user could point a provider at their own server and receive the shared key. | Low under the one-organisation, invite-only model; High if untrusted users can sign up | Use the built-in base URL for the known providers and allow a custom URL only for `llm-custom`/`llm-ollama` (which never receive a shared provider key). The new `llm-models` route already does this. |
+
+## Update: cross-tenant test suite (T12) and the WhatsApp fix
+
+`scripts/tenancy.test.mjs` (`pnpm test:tenancy`, 9 tests) runs against a live server and database. It creates two real users; user A seeds data through the real routes (goals, knowledge, WhatsApp state, a ticket, a feature override, email settings, a memory, a scheduled task, a saved connection secret); user B then calls every session route that takes a workspace id (data, tickets, features, email, connections, memory, scheduler, whatsapp, supermemory, engine, sync) with A's workspace id and A's user id in the query, and writes into A's workspace id. It checks that B never sees A's data, nothing B writes reaches A, B cannot open, edit or comment on A's ticket, public endpoints refuse B's credentials against A's workspace, non-operators cannot change shared secrets, and no route answers without a session. It deletes its two users afterwards. To run it the target must allow open signup and not list the test users as operators (for example a production build started with `SIGNUP_MODE=open BORGA_OPERATOR_EMAILS=nobody@example.test`). It is **not yet in CI** because that needs a MySQL service and a running server.
+
+Verified: 9 of 9 pass on the fixed code. With the old WhatsApp route restored, exactly the two WhatsApp checks fail (below), so the suite is not vacuous. Isolation on the other routes holds by construction: every session route takes the user id from the signed cookie and builds storage keys from it, so another user's workspace id points into the caller's own empty space.
+
+Fixed in this pass (finding 3 above, and two more found while writing the suite):
+- `whatsapp` stored its state under an un-prefixed key. It now uses the signed-in user's own workspace key, the one the dashboard reads (previously the connected state the route saved never reached the dashboard), requires a session, and honours the per-workspace feature flag.
+- `whatsapp` `configure` with `persistKey` wrote the deployment-wide `WHATSAPP_ACCESS_TOKEN` for any signed-in user, bypassing the operator-only lock on `config`. It now requires an operator.
+- `memory` and `scheduler` fell back to a shared un-prefixed key when the user id was missing. They now answer 401 (the proxy already prevented this; it is defence in depth).
+
+Open item 3 is closed. Items 1 and 2 are unchanged from the earlier update.

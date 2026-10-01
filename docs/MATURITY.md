@@ -85,3 +85,7 @@ Found and fixed during the review:
 - `deploy/update.sh` now fails if `/api/health` does not answer after the restart, instead of reporting success.
 
 Still open: backups live on the same VM disk (copy them off the VM); there is no automatic rollback in `update.sh`; the Docker image is not scanned or pinned to digests.
+
+## Update 2026-10-01: cross-tenant test suite (T12)
+
+`pnpm test:tenancy` (9 tests, live server and database) proves one user cannot read or change another's data through any workspace-scoped route, and found three real defects (WhatsApp keyspace and operator bypass, un-prefixed fallbacks in memory and scheduler), now fixed. See docs/ROUTE_AUDIT.md. Not in CI yet. Isolation relies on the user id coming from the signed cookie; the `u` and `ws` query parameters on the public webhook and inbound-mail endpoints are authenticated by a per-workspace token or provider signature (tested).

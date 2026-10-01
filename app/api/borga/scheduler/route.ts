@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
   const wsParam = url.searchParams.get('ws');
   const ws = wsParam && /^[a-zA-Z0-9_-]{1,64}$/.test(wsParam) ? wsParam : null;
   const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const tasks = await loadTasks(ws, userId);
   return NextResponse.json({ ok: true, tasks });
 }
@@ -35,6 +36,7 @@ export async function GET(req: NextRequest) {
 // POST — manage scheduled tasks and trigger tick (thin caller of lib/borga/heartbeat)
 export async function POST(req: NextRequest) {
   const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
   let body: Record<string, unknown> = {};
   try {
