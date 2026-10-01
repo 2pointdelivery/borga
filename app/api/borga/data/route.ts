@@ -107,7 +107,7 @@ import {
   type ReconciliationRule,
   type McpServer,
 } from '@/lib/borga/data';
-import { getBorgaStatesByPrefix, setBorgaState } from '@/lib/borga/persistence';
+import { getBorgaStatesByPrefixOrThrow, setBorgaState } from '@/lib/borga/persistence';
 import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
@@ -209,12 +209,20 @@ export async function GET(req: NextRequest) {
 
   // Single bulk fetch — one DB query instead of dozens of parallel ones.
   // The ping write runs concurrently to stamp the sentinel key.
-  const [all, pinged] = await Promise.all([
-    ws
-      ? getBorgaStatesByPrefix(userWsKey(userId, ws, ''))
-      : getBorgaStatesByPrefix(userWorkspacesKey(userId)),
-    setBorgaState('borga_ping', Date.now()),
-  ]);
+  // A database error must not look like "no data": that would be shown as seed data and
+  // then saved back over the user's real records. Fail with 503 and let the client hold writes.
+  let all: Record<string, unknown>;
+  let pinged: boolean;
+  try {
+    [all, pinged] = await Promise.all([
+      ws
+        ? getBorgaStatesByPrefixOrThrow(userWsKey(userId, ws, ''))
+        : getBorgaStatesByPrefixOrThrow(userWorkspacesKey(userId)),
+      setBorgaState('borga_ping', Date.now()),
+    ]);
+  } catch {
+    return NextResponse.json({ error: 'database_unavailable', workspaces: [], persisted: false }, { status: 503 });
+  }
 
   const rawGet = <T>(key: string): T | null => (all[key] as T | undefined) ?? null;
 
@@ -327,7 +335,8 @@ export async function POST(req: NextRequest) {
     }
 
     const ok = await setBorgaState(key, body.value ?? null);
-    return NextResponse.json({ ok: true, saved: ok });
+    if (!ok) return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
+    return NextResponse.json({ ok: true, saved: true });
   } catch {
     return NextResponse.json({ ok: false, error: 'Invalid body' }, { status: 400 });
   }

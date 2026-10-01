@@ -291,15 +291,20 @@ function ensureNadia(agents: Agent[]): Agent[] {
 // also mirrored into a per-workspace localStorage composite so company-specific
 // data survives workspace switches even when the database is unavailable.
 let offlineNotified = false;
+// Set when the last load from the server failed. The screen then shows seed or local data,
+// so server writes are held: saving it later would overwrite the user's real records.
+let SERVER_LOAD_FAILED = false;
 async function persist(entity: PersistEntity, value: unknown) {
   const ws = entity === 'workspaces' ? null : ACTIVE_WS;
   writeLocal(ws, entity, value);
+  if (SERVER_LOAD_FAILED) return;
   try {
-    await fetch('/api/borga/data', {
+    const res = await fetch('/api/borga/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
       body: JSON.stringify({ entity, value, ws: entity === 'workspaces' ? undefined : ACTIVE_WS }),
     });
+    if (!res.ok && res.status !== 401) throw new Error('save failed');
     offlineNotified = false;
   } catch {
     /* offline — state still lives in memory (+ localStorage fallback) */
@@ -312,6 +317,17 @@ async function persist(entity: PersistEntity, value: unknown) {
       });
     }
   }
+}
+
+function failServerLoad() {
+  if (!SERVER_LOAD_FAILED) {
+    toast({
+      title: 'Could not load your saved data',
+      description: 'The database is not reachable. Saving to the server is paused so your records are not overwritten. Reload to retry.',
+      variant: 'error',
+    });
+  }
+  SERVER_LOAD_FAILED = true;
 }
 
 export type ThemeMode = 'system' | 'light' | 'dark' | 'midnight' | 'sunset' | 'forest';
@@ -2532,6 +2548,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       });
       const reg = await regRes.json() as { workspaces?: Workspace[]; persisted?: boolean };
       if (seq !== hydrateSeq) return; // superseded by a newer hydrate
+      if (regRes.status === 503) failServerLoad();
       const dbAvailable = reg.persisted === true;
       // When the database is available, the workspace registry is fully
       // server-authoritative (per-user) — do not merge in the global seed
@@ -2558,6 +2575,13 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       const d = await res.json();
       // Isolation guard: discard stale responses outright.
       if (seq !== hydrateSeq || get().activeWorkspaceId !== wsId) return;
+      if (!res.ok) {
+        // Database unavailable: keep what is on screen, hold server writes, never treat seed data as saved.
+        failServerLoad();
+        set({ synced: true, dbAvailable: false });
+        return;
+      }
+      SERVER_LOAD_FAILED = false;
       const dbAgents = Array.isArray(d.agents) && d.agents.length ? (d.agents as Agent[]) : null;
       const agents = dbAgents ? ensureNadia(dbAgents) : AGENTS;
       const agentsChanged = !!dbAgents && agents !== dbAgents;
@@ -2642,6 +2666,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     } catch {
       // Never leave the shell stuck on the loading spinner. Surface the app
       // with whatever local state we have so the user can recover.
+      failServerLoad();
       set({ synced: true });
     }
   },

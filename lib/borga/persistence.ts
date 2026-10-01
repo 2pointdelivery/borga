@@ -126,18 +126,27 @@ export async function healthCheck(): Promise<boolean> {
  */
 export async function getBorgaStatesByPrefix(prefix: string): Promise<Record<string, unknown>> {
   try {
-    const rows = await retryWithBackoff(
-      () => db.select().from(borgaState).where(like(borgaState.key, `${escapeLike(prefix)}%`)),
-      'getBorgaStatesByPrefix',
-    );
-    return rows.reduce((acc, row) => {
-      acc[row.key] = row.value;
-      return acc;
-    }, {} as Record<string, unknown>);
+    return await getBorgaStatesByPrefixOrThrow(prefix);
   } catch (error) {
     console.error('Failed to retrieve borga states by prefix:', error);
     return {};
   }
+}
+
+/**
+ * Same read, but a database error propagates instead of looking like "no data".
+ * The dashboard load must use this: an empty result there is rendered as seed data
+ * and can be written back over the user's real records.
+ */
+export async function getBorgaStatesByPrefixOrThrow(prefix: string): Promise<Record<string, unknown>> {
+  const rows = await retryWithBackoff(
+    () => db.select().from(borgaState).where(like(borgaState.key, `${escapeLike(prefix)}%`)),
+    'getBorgaStatesByPrefix',
+  );
+  return rows.reduce((acc, row) => {
+    acc[row.key] = row.value;
+    return acc;
+  }, {} as Record<string, unknown>);
 }
 
 /**
