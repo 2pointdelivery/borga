@@ -13,7 +13,7 @@
     "dev": "next dev -p 13000",
     "build": "pnpm check:server-boundaries && next build",
     "start": "next start -p 13000",
-    "test": "node --import tsx --test lib/request.test.ts lib/tickets.test.ts lib/features.test.ts lib/phase0.test.ts lib/recurring.test.ts lib/supermemory.test.ts lib/services.test.ts lib/crm.test.ts lib/email.test.ts lib/boot.test.ts scripts/check-server-boundaries.test.mjs",
+    "test": "node --import tsx --test lib/request.test.ts lib/tickets.test.ts lib/features.test.ts lib/phase0.test.ts lib/recurring.test.ts lib/supermemory.test.ts lib/services.test.ts lib/crm.test.ts lib/email.test.ts lib/boot.test.ts lib/ssrf.test.ts scripts/check-server-boundaries.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

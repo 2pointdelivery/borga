@@ -1,9 +1,15 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { isEmailConfigured, sendEmail } from '@/lib/auth/mailer';
+import { sessionUserId } from '@/lib/borga/features-server';
+import { getUserById } from '@/lib/auth/queries';
 
 export const runtime = 'nodejs';
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const userId = await sessionUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  const me = await getUserById(userId);
+  if (!me) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   let body: { to?: string } = {};
   try {
     body = await req.json();
@@ -11,9 +17,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'Invalid request body.' }, { status: 400 });
   }
 
-  const to = String(body.to ?? '').trim();
-  if (!to) {
-    return NextResponse.json({ ok: false, error: 'A recipient email (to) is required.' }, { status: 400 });
+  // The shared SMTP account must not be usable to mail arbitrary people: test mail goes to the caller only.
+  const to = String(body.to ?? me.email).trim();
+  if (to.toLowerCase() !== me.email.toLowerCase()) {
+    return NextResponse.json({ ok: false, error: 'The test email can only be sent to your own account address.' }, { status: 403 });
   }
 
   if (!(await isEmailConfigured())) {

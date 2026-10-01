@@ -14,6 +14,7 @@ function reqToken(req: NextRequest): string | undefined {
 // Simple in-memory fixed-window rate limiter (per Edge isolate).
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS = 120;
+const AUTH_MAX_REQUESTS = 10; // per IP per minute for each /api/auth/* route
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 const MAX_TRACKED_KEYS = 50_000; // hard cap — a long-lived isolate must never grow this unbounded
 const hits = new Map<string, { count: number; reset: number }>();
@@ -38,7 +39,7 @@ function sweepExpired(now: number): void {
   }
 }
 
-function rateLimited(req: NextRequest): boolean {
+function rateLimited(req: NextRequest, max: number = MAX_REQUESTS): boolean {
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
@@ -53,11 +54,20 @@ function rateLimited(req: NextRequest): boolean {
     return false;
   }
   rec.count += 1;
-  return rec.count > MAX_REQUESTS;
+  return rec.count > max;
 }
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // Sign-in, sign-up, password reset and the client error sink are reachable without a session,
+  // so they get a much tighter per-IP limit (brute force, signup/email spam, log flooding).
+  if (pathname.startsWith('/api/auth/') || pathname === '/api/diag') {
+    if (req.method === 'POST' && rateLimited(req, pathname === '/api/diag' ? 30 : AUTH_MAX_REQUESTS)) {
+      return NextResponse.json({ ok: false, error: 'Too many requests. Wait a minute and try again.' }, { status: 429 });
+    }
+    return NextResponse.next();
+  }
 
   // --- Page-level auth gating ---
   if (!pathname.startsWith('/api/borga')) {
@@ -159,5 +169,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/', '/app/:path*', '/api/borga/:path*'],
+  matcher: ['/', '/app/:path*', '/api/borga/:path*', '/api/auth/:path*', '/api/diag'],
 };
