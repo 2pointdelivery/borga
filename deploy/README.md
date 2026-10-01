@@ -46,3 +46,7 @@ The cron timer calls `POST /api/borga/cron` every 5 minutes: heartbeat, IMAP mai
 ## Startup checks
 
 The app exits at startup (see `docker compose logs app`) if `SESSION_SECRET`, `BORGA_SECRET_KEY` or `DATABASE_URL` is missing, too short or a placeholder. Generate each secret with `openssl rand -hex 32`. Missing `CRON_SECRET`, `SMTP_HOST` or `APP_URL` only logs a warning, but without `CRON_SECRET` the timers cannot trigger the heartbeat, SLA, mail and sync jobs.
+
+## Administrators and signup
+
+Set `BORGA_OPERATOR_EMAILS` to the administrator email(s) before the first start (the server refuses to start without it). Each listed address can always create an account, change the shared API keys under Integrations, and issue invites under Settings, Signup invitations. Everyone else needs a single-use invite link from an administrator. `SIGNUP_MODE` is `invite` by default; use `closed` to stop all new signups, or `open` only for a public product (the server warns).

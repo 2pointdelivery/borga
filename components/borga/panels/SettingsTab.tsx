@@ -15,6 +15,7 @@ import { SectionTitle } from '../bits';
 import { ValuationConfigEditor } from './ValuationConfigEditor';
 import { FeaturesCard } from './FeaturesCard';
 import { EmailUpdatesCard } from './EmailUpdatesCard';
+import { InvitesCard } from './InvitesCard';
 import { cn } from '@/lib/utils';
 
 const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
@@ -225,6 +226,7 @@ export function SettingsTab() {
       </div>
 
       <EmailUpdatesCard />
+      <InvitesCard />
 
       <FeaturesCard />
 

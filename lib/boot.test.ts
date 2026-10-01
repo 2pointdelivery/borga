@@ -7,6 +7,7 @@ const GOOD = {
   SESSION_SECRET: 'a3f1c9d27b8e4a6f90b1d2c3e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d',
   BORGA_SECRET_KEY: '9c1e7a4b2d6f80351a7c9e2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d24',
   CRON_SECRET: 'f0e1d2c3b4a5968778695a4b3c2d1e0f',
+  BORGA_OPERATOR_EMAILS: 'owner@acme.com',
   SMTP_HOST: 'smtp.example.org',
   APP_URL: 'https://borga.example.org',
 };
@@ -19,7 +20,8 @@ test('a complete production environment passes with no warnings', () => {
 
 test('missing required secrets are all reported at once', () => {
   const r = checkBootEnv({});
-  assert.equal(r.errors.length, 3);
+  assert.equal(r.errors.length, 4);
+  assert.ok(r.errors.some((e) => e.includes('BORGA_OPERATOR_EMAILS')));
   assert.ok(r.errors.some((e) => e.includes('DATABASE_URL')));
   assert.ok(r.errors.some((e) => e.includes('SESSION_SECRET')));
   assert.ok(r.errors.some((e) => e.includes('BORGA_SECRET_KEY')));
@@ -31,6 +33,15 @@ test('short, placeholder and malformed secrets are rejected', () => {
   assert.ok(checkBootEnv({ ...GOOD, BORGA_SECRET_KEY: 'not-hex' }).errors.some((e) => e.includes('64 hex')));
   assert.ok(checkBootEnv({ ...GOOD, BORGA_SECRET_KEY: '0'.repeat(64) }).errors.some((e) => e.includes('placeholder')));
   assert.ok(checkBootEnv({ ...GOOD, CRON_SECRET: 'tiny' }).errors.some((e) => e.includes('CRON_SECRET')));
+});
+
+test('operator emails and signup mode are validated; open signup warns', () => {
+  assert.ok(checkBootEnv({ ...GOOD, BORGA_OPERATOR_EMAILS: 'not-an-email' }).errors.some((e) => e.includes('valid email')));
+  assert.deepEqual(checkBootEnv({ ...GOOD, BORGA_OPERATOR_EMAILS: 'a@x.com, b@y.org' }).errors, []);
+  assert.ok(checkBootEnv({ ...GOOD, SIGNUP_MODE: 'sometimes' }).errors.some((e) => e.includes('SIGNUP_MODE')));
+  const open = checkBootEnv({ ...GOOD, SIGNUP_MODE: 'open' });
+  assert.deepEqual(open.errors, []);
+  assert.ok(open.warnings.some((w) => w.includes('SIGNUP_MODE=open')));
 });
 
 test('the session secret and encryption key must differ', () => {

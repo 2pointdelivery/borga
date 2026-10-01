@@ -44,3 +44,16 @@ Scope: every handler under `app/api/**`. Question asked of each: who can call it
 ## Routes already checking the session and scoping by user
 
 `agent/run`, `chat`, `connections`, `data`, `email`, `engine`, `features`, `llm-test`, `mcp`, `memory`, `orchestrate`, `probe`, `scheduler`, `supermemory`, `sync`, `tickets`, `webhooks/dispatch`, `auth/me`. Spot-checked: each derives the user id from the verified cookie, never from the request body.
+
+## Update: tenancy decision and operator-only config (T10, T11)
+
+Decision: launch as **one organisation with invite-only signup**. All signed-in users then belong to the same company, so the shared deployment-wide keys in open finding 2 are not a cross-tenant leak. Real multi-tenancy needs per-workspace keys first (Connections store; Phase 4 does this for Twilio).
+
+| Finding | Status |
+|---|---|
+| 1 `config` writable by any user | **Fixed.** POST needs a deployment operator (`BORGA_OPERATOR_EMAILS`); other users get 403. GET still tells everyone whether a provider is configured, but the masked value is hidden from non-operators. |
+| 2 shared keys spent by any signed-in user | **Mitigated by the tenancy decision.** `SIGNUP_MODE` defaults to `invite` in production: an operator issues a single-use code bound to the invitee's email (7 day expiry, only its hash stored, atomic single-use claim, revocable). `closed` refuses all signups except listed operators; `open` is allowed but the server warns at start. Still open if you ever run `open`: any signup can spend the shared keys. |
+
+Verified end to end on a production build (throwaway accounts, removed afterwards): stranger refused; operator can always sign up; invite works only for its email; reuse refused; two simultaneous signups with one code gave one success; revoked invite refused; a non-operator cannot read masked keys, change keys or issue invites.
+
+Known and accepted: probing an operator's own email on the signup form returns 409 (operators bypass the signup mode so the owner can always bootstrap), which reveals that an administrator email has an account.

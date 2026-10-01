@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Boxes, Loader2, ArrowRight } from 'lucide-react';
@@ -17,9 +17,23 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [needsInvite, setNeedsInvite] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const resetDone = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('reset') === '1';
+
+  // The invite link carries the code and the email it was issued for; the server says whether a code is required.
+  useEffect(() => {
+    if (!isSignup) return;
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('invite')) setInviteCode(q.get('invite') ?? '');
+    if (q.get('email')) setEmail(q.get('email') ?? '');
+    fetch('/api/auth/signup', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d: { mode?: string }) => setNeedsInvite(d.mode === 'invite'))
+      .catch(() => undefined);
+  }, [isSignup]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -29,7 +43,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
       const res = await fetch(`/api/auth/${mode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isSignup ? { name, email, password } : { email, password }),
+        body: JSON.stringify(isSignup ? { name, email, password, inviteCode: inviteCode.trim() || undefined } : { email, password }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
@@ -92,6 +106,13 @@ export function AuthForm({ mode }: { mode: 'login' | 'signup' }) {
             <Label className="text-xs font-medium text-muted-foreground">Email</Label>
             <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" autoFocus={!isSignup} className="mt-1" />
           </div>
+          {isSignup && needsInvite && (
+            <div>
+              <Label className="text-xs font-medium text-muted-foreground">Invite code</Label>
+              <Input value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} placeholder="inv_..." autoComplete="off" className="mt-1 font-mono text-sm" />
+              <p className="mt-1 text-[11px] text-muted-foreground">Signup is by invitation. Use the email address the invite was sent to.</p>
+            </div>
+          )}
           <div>
             <div className="flex items-center justify-between">
               <Label className="text-xs font-medium text-muted-foreground">Password</Label>

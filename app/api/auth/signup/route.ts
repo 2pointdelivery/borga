@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createSessionToken, sessionCookieName, sessionMaxAge, isSecureContext } from '@/lib/auth/session';
 import { hashPassword } from '@/lib/auth/password';
 import { createUser, getUserByEmail } from '@/lib/auth/queries';
-import { setBorgaState } from '@/lib/borga/persistence';
+import { setBorgaState, getBorgaState, insertBorgaStateIfAbsent, deleteBorgaState } from '@/lib/borga/persistence';
+import { checkInvite, decideSignup, hashInviteCode, inviteKey, inviteUsedKey, signupMode, type InviteRecord } from '@/lib/auth/signup-policy';
 import { userWorkspacesKey } from '@/lib/borga/keys';
 import { makeOnboarding, type Workspace } from '@/lib/borga/data';
 
@@ -11,7 +12,13 @@ export const runtime = 'nodejs';
 
 const COLORS = ['#6366f1', '#0ea5e9', '#059669', '#f59e0b', '#ec4899', '#8b5cf6'];
 
+/** Lets the signup page know whether to ask for an invite code. */
+export async function GET() {
+  return NextResponse.json({ ok: true, mode: signupMode(process.env) });
+}
+
 export async function POST(req: Request) {
+  let claimed: string | null = null;
   try {
     const body = await req.json().catch(() => null);
     const email = String(body?.email ?? '').toLowerCase().trim();
@@ -28,9 +35,29 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'Your name is required.' }, { status: 400 });
     }
 
+    // Decide access before looking the email up, so an uninvited visitor cannot probe which emails have accounts.
+    const inviteCode = String(body?.inviteCode ?? '').trim();
+    const decision = decideSignup(signupMode(process.env), email, inviteCode.length > 0, process.env);
+    if (!decision.allow) {
+      return NextResponse.json({ ok: false, error: decision.error }, { status: decision.status });
+    }
+    let inviteHash: string | null = null;
+    if (decision.consumeInvite) {
+      inviteHash = hashInviteCode(inviteCode);
+      const check = checkInvite(await getBorgaState<InviteRecord>(inviteKey(inviteHash)), email, Date.now());
+      if (!check.ok) return NextResponse.json({ ok: false, error: check.error }, { status: 403 });
+    }
+
     const existing = await getUserByEmail(email);
     if (existing) {
       return NextResponse.json({ ok: false, error: 'An account with this email already exists.' }, { status: 409 });
+    }
+
+    // Single use: only one concurrent signup can claim the code. Released again if account creation fails.
+    if (inviteHash) {
+      const won = await insertBorgaStateIfAbsent(inviteUsedKey(inviteHash), { email, at: Date.now() });
+      if (!won) return NextResponse.json({ ok: false, error: 'That invite code has already been used.' }, { status: 403 });
+      claimed = inviteHash;
     }
 
     const user = await createUser({
@@ -68,6 +95,7 @@ export async function POST(req: Request) {
     });
     return res;
   } catch {
+    if (claimed) await deleteBorgaState(inviteUsedKey(claimed)).catch(() => false);
     return NextResponse.json({ ok: false, error: 'Could not create account. Try again.' }, { status: 500 });
   }
 }

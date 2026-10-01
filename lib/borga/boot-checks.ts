@@ -38,6 +38,12 @@ export function checkBootEnv(env: Env): BootReport {
 
   if (session && key && session === key) errors.push('SESSION_SECRET and BORGA_SECRET_KEY must be different values.');
 
+  const ops = get('BORGA_OPERATOR_EMAILS');
+  if (!ops) errors.push('BORGA_OPERATOR_EMAILS is not set: nobody could change the shared API keys or issue signup invites (comma-separated admin emails).');
+  else if (!ops.split(',').every((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e.trim()))) errors.push('BORGA_OPERATOR_EMAILS must be a comma-separated list of valid email addresses.');
+  if (get('SIGNUP_MODE') && !['open', 'invite', 'closed'].includes(get('SIGNUP_MODE').toLowerCase())) errors.push('SIGNUP_MODE must be open, invite or closed.');
+  if (get('SIGNUP_MODE').toLowerCase() === 'open') warnings.push('SIGNUP_MODE=open: anyone who finds the site can create an account and spend the shared API keys.');
+
   const cron = get('CRON_SECRET');
   if (!cron) warnings.push('CRON_SECRET is not set: /api/borga/cron answers 401, so heartbeats, SLA sweeps, mail polling and sync jobs never run.');
   else if (cron.length < 24 || weak(cron)) errors.push('CRON_SECRET is too short (24+ characters) or a placeholder.');

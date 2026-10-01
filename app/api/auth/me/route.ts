@@ -4,6 +4,7 @@ import { getUserById } from '@/lib/auth/queries';
 import { getBorgaStatesByPrefix } from '@/lib/borga/persistence';
 import { userWorkspacesKey, isValidUserId } from '@/lib/borga/keys';
 import type { Workspace } from '@/lib/borga/data';
+import { isOperator } from '@/lib/auth/signup-policy';
 
 export const runtime = 'nodejs';
 
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest) {
   const workspaces = (rows[userWorkspacesKey(user.id)] as Workspace[] | undefined) ?? [];
 
   return NextResponse.json({
-    user: { id: user.id, email: user.email, name: user.name },
+    user: { id: user.id, email: user.email, name: user.name, isOperator: isOperator(user.email, process.env) },
     workspaces,
     activeWorkspaceId: workspaces[0]?.id ?? null,
   });
