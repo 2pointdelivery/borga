@@ -47,6 +47,8 @@ export function isAllowedKey(envVar: string): envVar is ConfigurableEnvVar {
 function encKey(): Buffer {
   const raw = process.env.BORGA_SECRET_KEY ?? '';
   if (/^[0-9a-f]{64}$/i.test(raw)) return Buffer.from(raw, 'hex');
+  // A key derived from DATABASE_URL is guessable by anyone who has the URL; development only.
+  if (process.env.NODE_ENV === 'production') throw new Error('BORGA_SECRET_KEY (64 hex characters) must be set in production');
   const seed = process.env.DATABASE_URL ?? 'borga-secrets-please-set-BORGA_SECRET_KEY-in-env';
   return createHash('sha256').update(seed).digest();
 }

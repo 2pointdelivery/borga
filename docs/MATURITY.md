@@ -52,3 +52,7 @@ Optional, off by default: agent memory, knowledge-base retrieval, company profil
 
 ## Email updates (2026-10-01)
 Per-workspace transactional emails and digest (docs/EMAIL_UPDATES.md). Tested against a local SMTP sink only. Known gaps: one shared SMTP sender, no bounce handling, browser-raised events need the dashboard open.
+
+## Update 2026-10-01: boot-time secret checks (T14)
+
+In production the server now refuses to start (exit code 1, message lists every problem) unless `DATABASE_URL`, `SESSION_SECRET` (32+ chars, not a placeholder) and `BORGA_SECRET_KEY` (64 hex chars, different from the session secret) are set. A weak or placeholder `CRON_SECRET` also blocks startup; a missing one, `SMTP_HOST` or `APP_URL` only warns. The encryption, password-reset and unsubscribe-token code paths also throw in production instead of using a built-in fallback. `next build` is unaffected. Checks live in `lib/borga/boot-checks.ts` (tested in `lib/boot.test.ts`) and run from `instrumentation.ts`.

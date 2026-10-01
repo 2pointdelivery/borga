@@ -95,7 +95,12 @@ async function workspaceInfo(u: string, ws: string): Promise<Info> {
   return { name: w?.name ?? 'Your company', color: w?.color ?? '#6366f1', currency: w?.currency ?? 'USD', timezone: w?.timezone, email: w?.email };
 }
 
-const unsubSecret = () => process.env.BORGA_SECRET_KEY || process.env.SESSION_SECRET || 'dev-insecure-session-secret-change-me';
+const unsubSecret = (): string => {
+  const s = process.env.BORGA_SECRET_KEY || process.env.SESSION_SECRET;
+  if (s) return s;
+  if (process.env.NODE_ENV === 'production') throw new Error('BORGA_SECRET_KEY or SESSION_SECRET must be set in production');
+  return 'dev-insecure-session-secret-change-me';
+};
 
 export function appBaseUrl(settings: EmailSettings): string | undefined {
   const raw = (process.env.APP_URL || settings.appUrl || '').trim().replace(/\/+$/, '');

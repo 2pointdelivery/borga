@@ -42,3 +42,7 @@ The cron timer calls `POST /api/borga/cron` every 5 minutes: heartbeat, IMAP mai
 - Backups are local to the VM. Copy them off-box (e.g. Oracle Object Storage free tier, `rclone`) before trusting them.
 - `docker compose down` keeps data; `down -v` **deletes the database volume**.
 - Outbound port 25 is blocked on Oracle; use an SMTP provider on 587/465.
+
+## Startup checks
+
+The app exits at startup (see `docker compose logs app`) if `SESSION_SECRET`, `BORGA_SECRET_KEY` or `DATABASE_URL` is missing, too short or a placeholder. Generate each secret with `openssl rand -hex 32`. Missing `CRON_SECRET`, `SMTP_HOST` or `APP_URL` only logs a warning, but without `CRON_SECRET` the timers cannot trigger the heartbeat, SLA, mail and sync jobs.
