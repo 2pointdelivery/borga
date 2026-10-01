@@ -81,7 +81,7 @@ export function SalesPipelineTab() {
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Sales & leads pipeline" sub="Drag deals between stages — recorded in Borga, pull your CRM data from AI Platform → Company Engine" />
+        <SectionTitle title="Sales & leads pipeline" sub="Drag deals between stages — recorded in Borga, pull your CRM data from Company → Company Engine" />
         <div className="flex flex-wrap gap-2">
           <div className="flex overflow-hidden rounded-lg border bg-muted/20">
             <button

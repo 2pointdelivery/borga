@@ -149,6 +149,9 @@ import { mergeLoadedModels, repairCatalog } from './model-catalog';
 import { SaveQueue } from './save-queue';
 import { fmtMoneyFull } from './currencies';
 import { EMPTY_FILINGS, normalizeFilings, type FilingProfile, type FilingRecord, type FilingsState } from './filing-catalog';
+import { EMPTY_FIXED_ASSETS, normalizeFixedAssets, planPostings, type DepreciationRun, type FixedAssetsState, type PostingPlan } from './fixed-asset-journals';
+import { ASSET_ACCOUNTS, assetPolicyFor } from './fixed-asset-standards';
+import type { AssetEvent, FixedAsset } from './fixed-assets';
 import { mergeCustomers, mergeLeads, type CrmCustomer, type CrmLead, type MergeSummary } from './crm-core';
 import { buildBill, buildInvoice, dueRuns, isFinished, nextBillNumber, nextInvoiceNumber, recurringBillRef, recurringRef, type RecurringBill, type RecurringInvoice } from './recurring';
 
@@ -211,6 +214,7 @@ type PersistEntity =
   | 'reconciliationRules'
   | 'mcpServers'
   | 'filings'
+  | 'fixedAssets'
   | 'notices';
 
 // Active workspace id is tracked at module level so the fire-and-forget
@@ -278,7 +282,7 @@ const LS_FALLBACK_FIELDS: [keyof BorgaStore, string][] = [
   ['taxProfiles', 'taxProfiles'], ['valuation', 'valuation'],
   ['budgets', 'budgets'], ['revenueTracks', 'revenueTracks'], ['recurringInvoices', 'recurringInvoices'], ['recurringBills', 'recurringBills'], ['projects', 'projects'],
   ['reconciliationRules', 'reconciliationRules'], ['mcpServers', 'mcpServers'],
-  ['filings', 'filings'], ['notices', 'notices'],
+  ['filings', 'filings'], ['fixedAssets', 'fixedAssets'], ['notices', 'notices'],
 ];
 
 // The fundraising agent (Nadia) is a core built-in: whenever the agent list
@@ -543,6 +547,25 @@ interface BorgaStore {
 
   /** Merges CRM records (from the Company Engine) into customers and deals. Idempotent. */
   importCrmRecords: (customers: CrmCustomer[] | null, leads: CrmLead[] | null) => { customers?: MergeSummary; leads?: MergeSummary };
+
+  // ── Fixed asset register (see lib/borga/fixed-assets.ts) ──
+  fixedAssets: FixedAssetsState;
+  addFixedAsset: (a: FixedAsset) => void;
+  updateFixedAsset: (id: string, patch: Partial<FixedAsset>) => void;
+  /** Only an asset with nothing posted can be deleted; otherwise record a disposal. */
+  deleteFixedAsset: (id: string) => boolean;
+  addAssetEvent: (assetId: string, e: AssetEvent) => void;
+  /** Only an event that has not been posted can be removed. */
+  removeAssetEvent: (assetId: string, eventId: string) => boolean;
+  setAssetTransferSurplus: (on: boolean) => void;
+  /** Adds the ledger accounts the register posts to, where the chart of accounts does not have them yet. */
+  ensureAssetAccounts: () => void;
+  /** What posting through `through` would do, without doing it. */
+  planAssetPostings: (through: string) => PostingPlan;
+  /** Posts depreciation and the acquisition, revaluation, impairment and disposal entries through `through`. */
+  postAssetEntries: (through: string) => { periods: number; entries: number; blocked?: { period: string; label: string } };
+  /** Reverses the most recent run (a linked reversing entry for each, so the audit trail stays whole). */
+  reverseLastAssetRun: () => boolean;
 
   // ── Tax and statutory filings (the company's filing setup, and which returns are filed) ──
   filings: FilingsState;
@@ -1824,6 +1847,120 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     return out;
   },
 
+  fixedAssets: EMPTY_FIXED_ASSETS,
+  addFixedAsset: (a) => {
+    set((s) => ({ fixedAssets: { ...s.fixedAssets, assets: [...s.fixedAssets.assets, a] } }));
+    persist('fixedAssets', get().fixedAssets);
+  },
+  updateFixedAsset: (id, patch) => {
+    set((s) => ({ fixedAssets: { ...s.fixedAssets, assets: s.fixedAssets.assets.map((a) => (a.id === id ? { ...a, ...patch } : a)) } }));
+    persist('fixedAssets', get().fixedAssets);
+  },
+  deleteFixedAsset: (id) => {
+    const a = get().fixedAssets.assets.find((x) => x.id === id);
+    if (!a || a.acquisitionJournalId || a.events.some((e) => e.journalId)) return false;
+    if (get().fixedAssets.runs.some((r) => r.lines.some((l) => l.assetId === id && (l.amount !== 0 || l.transfer !== 0)))) return false;
+    set((s) => ({ fixedAssets: { ...s.fixedAssets, assets: s.fixedAssets.assets.filter((x) => x.id !== id) } }));
+    persist('fixedAssets', get().fixedAssets);
+    return true;
+  },
+  addAssetEvent: (assetId, e) => {
+    set((s) => ({ fixedAssets: { ...s.fixedAssets, assets: s.fixedAssets.assets.map((a) => (a.id === assetId ? { ...a, events: [...a.events, e] } : a)) } }));
+    persist('fixedAssets', get().fixedAssets);
+  },
+  removeAssetEvent: (assetId, eventId) => {
+    const a = get().fixedAssets.assets.find((x) => x.id === assetId);
+    const e = a?.events.find((x) => x.id === eventId);
+    if (!a || !e || e.journalId) return false;
+    set((s) => ({ fixedAssets: { ...s.fixedAssets, assets: s.fixedAssets.assets.map((x) => (x.id === assetId ? { ...x, events: x.events.filter((y) => y.id !== eventId) } : x)) } }));
+    persist('fixedAssets', get().fixedAssets);
+    return true;
+  },
+  setAssetTransferSurplus: (on) => {
+    set((s) => ({ fixedAssets: { ...s.fixedAssets, transferSurplus: on } }));
+    persist('fixedAssets', get().fixedAssets);
+  },
+  ensureAssetAccounts: () => {
+    const have = new Set(get().coa.map((a) => a.id));
+    const missing = Object.values(ASSET_ACCOUNTS).filter((d) => !have.has(d.id));
+    if (!missing.length) return;
+    // never clash with a code the company already uses for something else
+    const codes = new Set(get().coa.map((a) => a.code));
+    const add = missing.map((d) => ({ id: d.id, code: codes.has(d.code) ? `${d.code}-FA` : d.code, name: d.name, type: d.type, description: d.description }));
+    set((s) => ({ coa: [...s.coa, ...add] }));
+    persist('coa', get().coa);
+  },
+  planAssetPostings: (through) => {
+    const st = get();
+    const policy = assetPolicyFor(st.activeWorkspace()?.country);
+    return planPostings(st.fixedAssets, policy, through, {
+      cashAccountId: st.coa.find((a) => a.isCash)?.id,
+      closures: st.closures.map((c) => ({ startDate: c.startDate, endDate: c.endDate, label: c.label })),
+    });
+  },
+  postAssetEntries: (through) => {
+    get().ensureAssetAccounts();
+    const plan = get().planAssetPostings(through);
+    if (!plan.periods.length) return { periods: 0, entries: 0, blocked: plan.blocked };
+    const nowIso = new Date().toISOString();
+    const stamp = Date.now().toString(36);
+    const journals: JournalEntry[] = [];
+    const runs = [...get().fixedAssets.runs];
+    const assets = get().fixedAssets.assets.map((a) => ({ ...a, events: a.events.map((e) => ({ ...e })) }));
+    let n = 0;
+    for (const p of plan.periods) {
+      const run: DepreciationRun = { id: `far-${p.period}-${stamp}`, period: p.period, postedAt: nowIso, lines: p.lines, events: [] };
+      for (const e of p.entries) {
+        const id = `je-fa-${p.period}-${e.kind}-${n++}-${stamp}`;
+        journals.unshift({
+          id, date: new Date(`${e.dateIso}T00:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }), dateIso: e.dateIso, memo: e.memo, description: e.description,
+          reference: e.reference, status: 'posted', createdAt: nowIso, auto: 'asset', projectId: e.projectId,
+          lines: e.lines.map((l) => ({ accountId: l.accountId, debit: l.debit, credit: l.credit })),
+        });
+        if (e.kind === 'depreciation') run.depreciationJournalId = id;
+        else if (e.kind === 'transfer') run.transferJournalId = id;
+        else if (e.assetId && e.key) {
+          run.events.push({ assetId: e.assetId, key: e.key, journalId: id });
+          const a = assets.find((x) => x.id === e.assetId);
+          if (a) { if (e.key === 'acquisition') a.acquisitionJournalId = id; else { const ev = a.events.find((x) => x.id === e.key); if (ev) ev.journalId = id; } }
+        }
+      }
+      runs.push(run);
+    }
+    set((s) => ({ journals: [...journals, ...s.journals], fixedAssets: { ...s.fixedAssets, assets, runs } }));
+    persist('journals', get().journals);
+    persist('fixedAssets', get().fixedAssets);
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Fixed asset register: posted ${n} journal entr${n === 1 ? 'y' : 'ies'} for ${plan.periods.length} month${plan.periods.length === 1 ? '' : 's'}, through ${plan.periods[plan.periods.length - 1].period}.${plan.blocked ? ` Stopped before ${plan.blocked.label}: the period is closed.` : ''}` });
+    return { periods: plan.periods.length, entries: n, blocked: plan.blocked };
+  },
+  reverseLastAssetRun: () => {
+    const runs = get().fixedAssets.runs;
+    const last = runs.reduce<DepreciationRun | undefined>((m, r) => (!m || r.period > m.period ? r : m), undefined);
+    if (!last) return false;
+    const ids = [last.depreciationJournalId, last.transferJournalId, ...last.events.map((e) => e.journalId)].filter((x): x is string => !!x);
+    const now = new Date();
+    const reversals: JournalEntry[] = [];
+    for (const id of ids) {
+      const orig = get().journals.find((j) => j.id === id);
+      if (!orig || orig.status !== 'posted') continue;
+      reversals.push({
+        id: `je-rev-${id}`, date: now.toLocaleDateString([], { month: 'short', day: 'numeric' }), dateIso: now.toISOString().slice(0, 10), memo: `Reversal: ${orig.memo}`,
+        description: `Reversal of fixed asset entry ${orig.reference ?? orig.id}.`, reference: orig.reference, status: 'posted', createdAt: now.toISOString(), auto: 'reversal', reversalOf: orig.id,
+        lines: orig.lines.map((l) => ({ accountId: l.accountId, debit: l.credit, credit: l.debit })),
+      });
+    }
+    const assets = get().fixedAssets.assets.map((a) => {
+      const keys = new Set(last.events.filter((e) => e.assetId === a.id).map((e) => e.key));
+      if (!keys.size) return a;
+      return { ...a, acquisitionJournalId: keys.has('acquisition') ? undefined : a.acquisitionJournalId, events: a.events.map((e) => (keys.has(e.id) ? { ...e, journalId: undefined } : e)) };
+    });
+    set((s) => ({ journals: [...reversals, ...s.journals], fixedAssets: { ...s.fixedAssets, assets, runs: s.fixedAssets.runs.filter((r) => r.id !== last.id) } }));
+    persist('journals', get().journals);
+    persist('fixedAssets', get().fixedAssets);
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Fixed asset register: reversed the ${last.period} run with ${reversals.length} reversing entr${reversals.length === 1 ? 'y' : 'ies'}. Post again to rebook it.` });
+    return true;
+  },
+
   filings: EMPTY_FILINGS,
   setFilingProfile: (patch) => {
     set((s) => ({ filings: { ...s.filings, profile: { ...s.filings.profile, ...patch } } }));
@@ -2777,6 +2914,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         recurringInvoices: Array.isArray(d.recurringInvoices) ? d.recurringInvoices : [],
         recurringBills: Array.isArray(d.recurringBills) ? d.recurringBills : [],
         filings: normalizeFilings(d.filings),
+        fixedAssets: normalizeFixedAssets(d.fixedAssets),
         projects: Array.isArray(d.projects) ? d.projects : INITIAL_PROJECTS,
         reconciliationRules: Array.isArray(d.reconciliationRules) ? d.reconciliationRules : INITIAL_RECONCILIATION_RULES,
       });

@@ -115,6 +115,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'valuation', label: 'Valuation' },
       { id: 'fundraising', label: 'Fundraising' },
       { id: 'knowledge', label: 'Knowledge Base' },
+      { id: 'engine', label: 'Company Engine' },
     ],
   },
   {
@@ -122,7 +123,6 @@ export const NAV_PAGES: NavPage[] = [
     tabs: [
       { id: 'agents', label: 'Agents' },
       { id: 'runner', label: 'Agent Runner' },
-      { id: 'engine', label: 'Company Engine' },
       { id: 'planner', label: 'Planner' },
       { id: 'activity', label: 'Activity Log' },
     ],

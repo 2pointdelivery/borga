@@ -36,7 +36,7 @@ export const PROVIDERS: ProviderDef[] = [
   {
     id: 'company_engine',
     label: 'Company Engine (your CRM / company API)',
-    description: "This company's own API portal. Pulls customers and deals straight from your CRM into Borga, and runs engine workflows. Configure it under AI Platform → Company Engine.",
+    description: "This company's own API portal. Pulls customers and deals straight from your CRM into Borga, and runs engine workflows. Configure it under Company → Company Engine.",
     fields: [
       { key: 'baseUrl', label: 'API base URL', secret: false, required: true, placeholder: 'https://crm.yourcompany.com/api/v1', hint: 'https only (public address)', pattern: '^https?://\\S+' + '$' },
       { key: 'apiKey', label: 'API key / token', secret: true, required: true },

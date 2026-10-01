@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { LedgerTab } from '../panels/LedgerTab';
 import { AccountingTab } from '../panels/AccountingTab';
+import { FixedAssetsTab } from '../panels/FixedAssetsTab';
 import { BankingTab } from '../panels/BankingTab';
 import { VendorsTab } from '../panels/VendorsTab';
 import { ReportsCenter } from '../panels/ReportsCenter';
@@ -25,6 +26,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
       <TabsList>
         <TabsTrigger value="ledger">Ledger</TabsTrigger>
         <TabsTrigger value="accounting">Accounting</TabsTrigger>
+        <TabsTrigger value="assets">Fixed Assets</TabsTrigger>
         {banking && <TabsTrigger value="banking">Banking</TabsTrigger>}
         <TabsTrigger value="vendors">Vendors &amp; AP</TabsTrigger>
         <TabsTrigger value="recurring-bills">Recurring Bills</TabsTrigger>
@@ -37,6 +39,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
       </TabsList>
       <TabsContent value="ledger"><LedgerTab /></TabsContent>
       <TabsContent value="accounting"><AccountingTab /></TabsContent>
+      <TabsContent value="assets"><FixedAssetsTab /></TabsContent>
       {banking && <TabsContent value="banking"><BankingTab /></TabsContent>}
       <TabsContent value="vendors"><VendorsTab /></TabsContent>
       <TabsContent value="recurring-bills"><RecurringBillsTab /></TabsContent>

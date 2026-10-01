@@ -318,7 +318,7 @@ export async function POST(req: NextRequest) {
   // Validate engine URL
   if (!isValidEngineUrl(ENGINE_URL)) {
     return NextResponse.json(
-      { ok: false, engine: ENGINE_URL, mode: 'unconfigured', error: 'No engine endpoint configured for this workspace. Set it under AI Platform → Company Engine.' },
+      { ok: false, engine: ENGINE_URL, mode: 'unconfigured', error: 'No engine endpoint configured for this workspace. Set it under Company → Company Engine.' },
       { status: 400 },
     );
   }

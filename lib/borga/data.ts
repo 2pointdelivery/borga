@@ -658,7 +658,7 @@ export const CONNECTORS: Connector[] = [
   { id: 'c-drive', name: 'Google Drive', provider: 'Composio — Drive', kind: 'composio', status: 'off', description: 'Search and summarise documents & schemas.', lastSync: '…' },
   { id: 'c-facebook', name: 'Facebook', provider: 'Composio — Social', kind: 'composio', status: 'off', description: 'Schedule and publish to Facebook pages.', lastSync: '…' },
   { id: 'c-linkedin', name: 'LinkedIn', provider: 'Composio — Social', kind: 'composio', status: 'off', description: 'Post updates and monitor engagement.', lastSync: '…' },
-  { id: 'c-crm', name: 'Company CRM', provider: 'Company Engine API', kind: 'crm', status: 'off', description: 'Pull customers and deals from your CRM (AI Platform → Company Engine).', lastSync: '…' },
+  { id: 'c-crm', name: 'Company CRM', provider: 'Company Engine API', kind: 'crm', status: 'off', description: 'Pull customers and deals from your CRM (Company → Company Engine).', lastSync: '…' },
   { id: 'c-graphify', name: 'Graphify', provider: 'knowledge graph', kind: 'data', status: 'off', description: 'Queryable knowledge graph over docs & code.', lastSync: '…' },
 ];
 
@@ -2601,7 +2601,7 @@ export interface JournalEntry {
   status: 'draft' | 'posted' | 'voided';
   lines: JournalLine[];
   createdAt?: string; // ISO timestamp — every transaction is stamped
-  auto?: 'closing' | 'reversal'; // system-generated closing/reversal entries
+  auto?: 'closing' | 'reversal' | 'asset'; // system-generated closing, reversal and fixed asset register entries
   closesPeriod?: string; // closure id that produced this entry
   voidedAt?: string; // ISO — posted entries are never deleted, only voided
   voidReason?: string;
@@ -2955,6 +2955,13 @@ export const INITIAL_COA: GlAccount[] = [
   { id: 'gl-2400', code: '2400', name: 'Deferred Revenue', type: 'liability' },
   { id: 'gl-3200', code: '3200', name: 'Share Capital', type: 'equity' },
   { id: 'gl-4600', code: '4600', name: 'Other Income', type: 'revenue' },
+  // posted to by the fixed asset register (lib/borga/fixed-asset-standards.ts ASSET_ACCOUNTS)
+  { id: 'gl-1410', code: '1410', name: 'Accumulated Depreciation & Impairment', type: 'asset', description: 'Contra asset: depreciation and impairment losses to date' },
+  { id: 'gl-3300', code: '3300', name: 'Revaluation Surplus', type: 'equity', description: 'Revaluation gains held in equity (other comprehensive income)' },
+  { id: 'gl-4610', code: '4610', name: 'Gain on Disposal of Assets', type: 'revenue' },
+  { id: 'gl-4620', code: '4620', name: 'Impairment Reversal & Revaluation Gains', type: 'revenue' },
+  { id: 'gl-5910', code: '5910', name: 'Impairment & Revaluation Losses', type: 'expense' },
+  { id: 'gl-5920', code: '5920', name: 'Loss on Disposal of Assets', type: 'expense' },
 ];
 
 export const INITIAL_JOURNAL: JournalEntry[] = [];

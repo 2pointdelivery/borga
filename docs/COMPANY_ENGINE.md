@@ -4,7 +4,7 @@ AI Platform → **Company Engine** (formerly "2Point Engine"). Each company conn
 
 ## Connect
 1. Create an API key in your CRM (read access is enough).
-2. AI Platform → Company Engine → enter the **API base URL** and **key**. The key is stored encrypted, per company, and is never returned to the browser.
+2. Company → Company Engine → enter the **API base URL** and **key**. The key is stored encrypted, per company, and is never returned to the browser.
 3. If your API differs from the defaults, set the optional fields: auth header (default `Authorization`), prefix (default `Bearer`; `none` sends the raw key), **customers path** (`/customers`), **deals path** (`/leads`), **list key** (the field holding the array).
 4. **Test connection**, then **Pull now**.
 

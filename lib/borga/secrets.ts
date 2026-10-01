@@ -24,7 +24,7 @@ export const CONFIGURABLE_KEYS = [
   { envVar: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', hint: 'console.twilio.com — required for real outbound calls', kind: 'key' as const },
   { envVar: 'TWILIO_FROM_PHONE', label: 'Twilio From Number', hint: 'E.164 format, e.g. +14155550100 — your Twilio caller ID', kind: 'url' as const },
   { envVar: 'BORGA_ADMIN_TOKEN', label: 'Borga Engine', hint: 'Authentication token for orchestration engine', kind: 'key' as const },
-  { envVar: 'COMPANY_ENGINE_API_KEY', label: 'Company Engine (deployment key)', hint: 'Optional fallback key for the company API; each company can save its own under AI Platform → Company Engine', kind: 'key' as const },
+  { envVar: 'COMPANY_ENGINE_API_KEY', label: 'Company Engine (deployment key)', hint: 'Optional fallback key for the company API; each company can save its own under Company → Company Engine', kind: 'key' as const },
   { envVar: 'LLM_BASE_URL', label: 'Custom LLM base URL', hint: 'e.g. http://localhost:8000/v1', kind: 'url' as const },
   { envVar: 'LLM_API_KEY', label: 'Custom LLM API key', hint: 'Bearer token for custom endpoint', kind: 'key' as const },
   { envVar: 'OLLAMA_BASE_URL', label: 'Ollama base URL', hint: 'default: http://127.0.0.1:11434/v1', kind: 'url' as const },
