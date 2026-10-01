@@ -37,7 +37,7 @@ test('resolves tsconfig path aliases in client boundary checks', () => {
       "'use client'\nimport { secret } from '@server/auth'\nexport const Client = () => secret\n"
     )
 
-    const result = spawnSync(process.execPath, [checkerPath], {
+    const result = spawnSync(process.execPath, [checkerPath, '--strict'], {
       cwd: fixtureRoot,
       encoding: 'utf8',
     })
