@@ -1,5 +1,5 @@
 import 'server-only';
-import { eq, like } from 'drizzle-orm';
+import { eq, like, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { borgaState } from '@/db/schemas/borga';
 
@@ -44,6 +44,11 @@ async function retryWithBackoff<T>(
   
   console.error(`Borga persistence ${operationName} failed after ${MAX_RETRIES} attempts:`, lastError);
   throw lastError;
+}
+
+/** Escapes LIKE wildcards (ids may contain `_`, which would otherwise match any character). */
+function escapeLike(v: string): string {
+  return v.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 export async function getBorgaState<T>(key: string): Promise<T | null> {
@@ -122,7 +127,7 @@ export async function healthCheck(): Promise<boolean> {
 export async function getBorgaStatesByPrefix(prefix: string): Promise<Record<string, unknown>> {
   try {
     const rows = await retryWithBackoff(
-      () => db.select().from(borgaState).where(like(borgaState.key, `${prefix}%`)),
+      () => db.select().from(borgaState).where(like(borgaState.key, `${escapeLike(prefix)}%`)),
       'getBorgaStatesByPrefix',
     );
     return rows.reduce((acc, row) => {
@@ -132,5 +137,31 @@ export async function getBorgaStatesByPrefix(prefix: string): Promise<Record<str
   } catch (error) {
     console.error('Failed to retrieve borga states by prefix:', error);
     return {};
+  }
+}
+
+/**
+ * Atomic create: returns false (and writes nothing) if the key already exists.
+ * Used for ticket numbering and inbound-email de-duplication, where two
+ * concurrent writers must never both win.
+ */
+export async function insertBorgaStateIfAbsent<T>(key: string, value: T): Promise<boolean> {
+  try {
+    const [header] = await db.insert(borgaState).ignore().values({ key, value, updatedAt: new Date() });
+    return (header as { affectedRows?: number }).affectedRows === 1;
+  } catch (error) {
+    console.error(`Failed to insert borga state for key "${key}":`, error);
+    return false;
+  }
+}
+
+/** Keys only (no JSON payloads) matching a SQL LIKE pattern — cheap enumeration for cron sweeps. */
+export async function listBorgaKeys(likePattern: string): Promise<string[]> {
+  try {
+    const rows = await db.select({ key: borgaState.key }).from(borgaState).where(sql`${borgaState.key} LIKE ${likePattern}`);
+    return rows.map((r) => r.key);
+  } catch (error) {
+    console.error('Failed to list borga keys:', error);
+    return [];
   }
 }

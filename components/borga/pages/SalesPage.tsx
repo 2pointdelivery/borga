@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { SalesPipelineTab } from '../panels/SalesPipelineTab';
 import { CustomerTab } from '../panels/CustomerTab';
 import { InvoiceTab } from '../panels/InvoiceTab';
+import { RecurringInvoicesTab } from '../panels/RecurringInvoicesTab';
 
 export function SalesPage({ initialTab }: { initialTab?: string }) {
   const [tab, setTab] = useState(initialTab ?? 'pipeline');
@@ -14,10 +15,12 @@ export function SalesPage({ initialTab }: { initialTab?: string }) {
         <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
         <TabsTrigger value="customers">Customers</TabsTrigger>
         <TabsTrigger value="invoices">Invoicing</TabsTrigger>
+        <TabsTrigger value="recurring">Recurring</TabsTrigger>
       </TabsList>
       <TabsContent value="pipeline"><SalesPipelineTab /></TabsContent>
       <TabsContent value="customers"><CustomerTab /></TabsContent>
       <TabsContent value="invoices"><InvoiceTab /></TabsContent>
+      <TabsContent value="recurring"><RecurringInvoicesTab /></TabsContent>
     </Tabs>
   );
 }

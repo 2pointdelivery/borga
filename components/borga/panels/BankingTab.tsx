@@ -37,7 +37,7 @@ import {
   fmtNum, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, normalizeReconciliationPattern,
   type BankAccount, type BankTxn, type BankSource, type PaymentMethod, type ReconciliationRule,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
+import { CURRENCY_SYMBOL, BANK_ACCOUNT_KINDS, BANK_ACCOUNT_KIND_LABEL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { DateInput, Field } from '../form-widgets';
@@ -384,7 +384,7 @@ export function BankingTab() {
                 </span>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{b.name}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{b.institution} — ——{b.last4} — {b.kind}</p>
+                  <p className="truncate text-[11px] text-muted-foreground">{b.institution} — ——{b.last4} — {BANK_ACCOUNT_KIND_LABEL[b.kind] ?? b.kind}</p>
                 </div>
               </div>
               <Badge className={cn('shrink-0 text-[9px]', b.status === 'connected' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground')}>
@@ -631,7 +631,7 @@ export function BankingTab() {
                 const account = coa.find((a) => a.id === r.accountId);
                 return (
                   <tr key={r.id} className="border-b last:border-0 hover:bg-muted/20">
-                    <td className="px-4 py-2 font-mono text-xs">"{r.pattern}"</td>
+                    <td className="px-4 py-2 font-mono text-xs">&ldquo;{r.pattern}&rdquo;</td>
                     <td className="px-4 py-2 text-xs">{account ? `${account.code} — ${account.name}` : 'Unknown account'}</td>
                     <td className="px-4 py-2 text-right text-xs">{r.matchCount}</td>
                     <td className="hidden px-4 py-2 text-[11px] text-muted-foreground sm:table-cell">{new Date(r.lastMatchedAt).toLocaleDateString()}</td>
@@ -679,9 +679,9 @@ export function BankingTab() {
                 <Select value={newForm.kind} onValueChange={(v) => setNewForm({ ...newForm, kind: v as BankAccount['kind'] })}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="checking">Checking</SelectItem>
-                    <SelectItem value="savings">Savings</SelectItem>
-                    <SelectItem value="credit-card">Credit card</SelectItem>
+                    {BANK_ACCOUNT_KINDS.map((k) => (
+                      <SelectItem key={k} value={k}>{BANK_ACCOUNT_KIND_LABEL[k]}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

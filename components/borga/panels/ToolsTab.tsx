@@ -32,6 +32,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { useBorga } from '@/lib/borga/store';
 import { LLM_PROVIDERS, VOICE_PROVIDERS, EMAIL_APPS, COMPOSIO_TOOLKITS, type AppConnection, type EmailApp, type Toolkit } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
+import { ModelCatalogEditor } from './ModelCatalogEditor';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast-bus';
 
@@ -244,7 +245,7 @@ export type ToolsSection = 'ai-providers' | 'email' | 'composio' | 'apps';
  * switching sections never loses OAuth/key state; only the JSX output changes.
  */
 export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection }) {
-  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, removeComposioConnection, updateComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId } = useBorga();
+  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, removeComposioConnection, updateComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, elevenlabs, setElevenlabs } = useBorga();
   // Dynamic, per-workspace catalog (DB-backed); falls back to the seed list.
   const catalog = llmCatalog && llmCatalog.length ? llmCatalog : LLM_PROVIDERS;
   const [query, setQuery] = useState('');
@@ -370,6 +371,26 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   const [keys, setKeys] = useState<Record<string, KeyStatus>>({});
   const [keysLoading, setKeysLoading] = useState(true);
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
+  // Per-provider live test result and the model picked before a provider becomes the default.
+  const [llmTests, setLlmTests] = useState<Record<string, { busy: boolean; ok?: boolean; msg?: string }>>({});
+  const [modelChoice, setModelChoice] = useState<Record<string, string>>({});
+
+  const testLlm = async (providerId: string, model: string) => {
+    setLlmTests((t) => ({ ...t, [providerId]: { busy: true } }));
+    try {
+      const res = await fetch('/api/borga/llm-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ ws: activeWorkspaceId, providerId, model }),
+      });
+      const d = (await res.json()) as { ok: boolean; latencyMs?: number; error?: string; note?: string };
+      setLlmTests((t) => ({ ...t, [providerId]: { busy: false, ok: d.ok, msg: d.ok ? (d.note ?? ('Replied in ' + d.latencyMs + ' ms')) : d.error } }));
+      // Measured, not assumed: record real latency/online state on the default provider.
+      if (providerId === llm.providerId) setDefaultLlm({ online: d.ok, latency: d.ok ? (d.latencyMs ?? 0) : 0 });
+    } catch (e) {
+      setLlmTests((t) => ({ ...t, [providerId]: { busy: false, ok: false, msg: (e as Error).message } }));
+    }
+  };
 
   // Track which provider cards show key input
   const toggleExpand = (id: string) =>
@@ -523,7 +544,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           clearInterval(timer);
           const status = await mcpApi({ action: 'oauth_status', serverId: id });
           if (status.connected) {
-            log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'sync', message: `Connected MCP server via OAuth.` });
+            log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'sync', message: 'Connected MCP server via OAuth.' });
             await refreshServer(id);
           } else {
             updateMcpServer(id, { status: 'error', lastError: 'Authorization window closed before completing sign-in.' });
@@ -802,16 +823,19 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     }
   };
 
-  // After saving a key, auto-mark the LLM connection as connected
+  // After saving a key, refresh key status. (Choosing the default model is explicit: "Use as default".)
   const handleLlmKeySaved = (providerId: string) => {
     fetchKeys();
-    const p = catalog.find((p) => p.id === providerId);
-    if (p) {
-      const { id: connId } = statusOf('llm', p.id.replace('llm-', ''), p.label);
-      connectApp(connId, { status: 'connected', account: '(API key saved)', lastSync: 'Just now', scopes: 'chat completions' });
-      log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: `${p.label} API key saved and connection activated.` });
-    }
+    const p = catalog.find((x) => x.id === providerId);
+    if (p) log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' API key saved.' });
   };
+
+  // Derive ElevenLabs "connected" from the real key instead of a manual switch.
+  useEffect(() => {
+    if (keysLoading) return;
+    const has = !!keys['ELEVENLABS_API_KEY']?.configured;
+    if (has !== elevenlabs.connected) setElevenlabs({ connected: has, lastSync: has ? 'Key saved' : '…' });
+  }, [keys, keysLoading, elevenlabs.connected, setElevenlabs]);
 
   const handleVoiceKeySaved = (providerId: string) => {
     fetchKeys();
@@ -853,9 +877,8 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {catalog.map((p) => {
-            const { id: connId, conn } = statusOf('llm', p.id.replace('llm-', ''), p.label);
-            const connected = conn?.status === 'connected';
             const keyConfig = LLM_KEY_MAP[p.id];
+            const isDefault = llm.providerId === p.id;
             const isDemo = p.id === 'llm-demo';
             const expanded = expandedProviders.has(p.id);
             const mainKeyStatus = keyConfig ? keys[keyConfig.envVar] : undefined;
@@ -868,11 +891,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                     <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: p.accent }} />
                     <p className="truncate text-sm font-semibold">{p.label}</p>
                   </div>
-                  {isConfigured && (
-                    <Badge className="shrink-0 bg-emerald-500/10 text-emerald-600 text-[10px]">
-                      <Check className="mr-0.5 h-2.5 w-2.5" /> ready
-                    </Badge>
-                  )}
+                  {isDefault ? (
+                    <Badge className="shrink-0 bg-primary/10 text-primary text-[10px]"><Check className="mr-0.5 h-2.5 w-2.5" /> default</Badge>
+                  ) : isConfigured ? (
+                    <Badge className="shrink-0 bg-emerald-500/10 text-emerald-600 text-[10px]"><Check className="mr-0.5 h-2.5 w-2.5" /> ready</Badge>
+                  ) : null}
                 </div>
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   {p.models.slice(0, 2).map((m) => (
@@ -924,29 +947,55 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                   </div>
                 ) : null}
 
-                <div className="mt-3">
-                  <Button
-                    size="sm"
-                    variant={connected ? 'outline' : 'default'}
-                    className="w-full gap-1"
-                    disabled={!connected && !isConfigured}
-                    title={!connected && !isConfigured ? 'Add an API key above first' : undefined}
-                    onClick={() => {
-                      if (connected) {
-                        conn && disconnect(conn);
-                      } else if (isConfigured) {
-                        connectApp(connId, { status: 'connected', account: isDemo ? 'built-in' : '(API key)', lastSync: 'Just now', scopes: 'chat completions' });
-                        log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: `${p.label} activated as chat provider.` });
-                      }
-                    }}
+                <div className="mt-3 space-y-2">
+                  <select
+                    value={isDefault ? llm.model : (modelChoice[p.id] ?? p.models[0]?.id ?? '')}
+                    onChange={(e) => (isDefault ? setDefaultLlm({ model: e.target.value, online: false, latency: 0 }) : setModelChoice((m) => ({ ...m, [p.id]: e.target.value })))}
+                    disabled={!isConfigured}
+                    className="h-8 w-full rounded-lg border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                   >
-                    {connected ? <><Unplug className="h-3.5 w-3.5" /> Disconnect</> : <><ShieldCheck className="h-3.5 w-3.5" /> Activate</>}
-                  </Button>
+                    {p.models.map((m) => (
+                      <option key={m.id} value={m.id}>{m.tier === 'free' ? '🟢 ' : m.tier === 'credits' ? '🟡 ' : '💳 '}{m.label}{m.contextK ? ' — ' + m.contextK + 'k' : ''}</option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={isDefault ? 'outline' : 'default'}
+                      className="flex-1 gap-1"
+                      disabled={isDefault || !isConfigured}
+                      title={!isConfigured ? 'Add an API key above first' : undefined}
+                      onClick={() => {
+                        setDefaultLlm({ providerId: p.id, model: modelChoice[p.id] ?? p.models[0]?.id ?? '', online: isDemo, latency: 0 });
+                        log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' set as the default AI provider.' });
+                      }}
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5" /> {isDefault ? 'In use' : 'Use as default'}
+                    </Button>
+                    {!isDemo && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!isConfigured || llmTests[p.id]?.busy}
+                        onClick={() => testLlm(p.id, isDefault ? llm.model : (modelChoice[p.id] ?? p.models[0]?.id ?? ''))}
+                      >
+                        {llmTests[p.id]?.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : 'Test'}
+                      </Button>
+                    )}
+                  </div>
+                  {llmTests[p.id]?.msg && (
+                    <p className={cn('text-[11px]', llmTests[p.id]?.ok ? 'text-emerald-600' : 'text-rose-600')}>{llmTests[p.id]?.msg}</p>
+                  )}
                 </div>
               </Card>
             );
           })}
         </div>
+
+        <details className="mt-3 rounded-lg border p-3">
+          <summary className="cursor-pointer text-xs font-medium">Advanced: edit the model catalog (providers, base URLs, models)</summary>
+          <div className="mt-3"><ModelCatalogEditor /></div>
+        </details>
 
         <div className="mt-3 rounded-lg border border-dashed bg-muted/20 p-3 text-[11px] text-muted-foreground">
           <p className="font-medium text-foreground/70">Get free API keys</p>
@@ -1266,7 +1315,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           )}
           {mcpAuthType === 'oauth' && (
             <p className="mt-2 rounded-lg border border-dashed bg-muted/20 p-2 text-[11px] text-muted-foreground">
-              Requires the server to publish OAuth discovery metadata (RFC 8414) and support dynamic client registration (RFC 7591) — most hosted MCP servers do. Add the server first, then click "Connect via OAuth" on it.
+              Requires the server to publish OAuth discovery metadata (RFC 8414) and support dynamic client registration (RFC 7591) — most hosted MCP servers do. Add the server first, then click &ldquo;Connect via OAuth&rdquo; on it.
             </p>
           )}
           {mcpAddError && <p className="mt-2 text-xs text-destructive">{mcpAddError}</p>}

@@ -5,19 +5,22 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { InboxTab } from '../panels/InboxTab';
 import { SecureChatTab } from '../panels/SecureChatTab';
 import { CallsTab } from '../panels/CallsTab';
+import { useFeature } from '@/lib/borga/features-client';
 
 export function CommunicationsPage({ initialTab }: { initialTab?: string }) {
   const [tab, setTab] = useState(initialTab ?? 'inbox');
+  const calls = useFeature('calls');
+  const secure = useFeature('secureChat');
   return (
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>
         <TabsTrigger value="inbox">Unified Inbox</TabsTrigger>
-        <TabsTrigger value="securechat">Encrypted Chat</TabsTrigger>
-        <TabsTrigger value="calls">Calls</TabsTrigger>
+        {secure && <TabsTrigger value="securechat">Encrypted Chat</TabsTrigger>}
+        {calls && <TabsTrigger value="calls">Calls</TabsTrigger>}
       </TabsList>
       <TabsContent value="inbox"><InboxTab /></TabsContent>
-      <TabsContent value="securechat"><SecureChatTab /></TabsContent>
-      <TabsContent value="calls"><CallsTab /></TabsContent>
+      {secure && <TabsContent value="securechat"><SecureChatTab /></TabsContent>}
+      {calls && <TabsContent value="calls"><CallsTab /></TabsContent>}
     </Tabs>
   );
 }

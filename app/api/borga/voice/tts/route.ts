@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getApiKey } from '@/lib/borga/secrets';
+import { featureGate } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -7,6 +8,8 @@ const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL';
 
 export async function POST(req: Request) {
+  const off = await featureGate('voice', null, null);
+  if (off) return off;
   let text = '';
   let voiceId = DEFAULT_VOICE_ID;
   try {
@@ -68,6 +71,8 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
+  const off = await featureGate('voice', null, null);
+  if (off) return off;
   const url = new URL(req.url);
   const text = (url.searchParams.get('text') ?? '').trim();
   const voiceId = (url.searchParams.get('voiceId') ?? '').trim() || DEFAULT_VOICE_ID;

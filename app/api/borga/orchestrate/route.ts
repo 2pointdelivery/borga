@@ -1,4 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
+import { getConnection } from '@/lib/borga/connections-server';
+import { guardEngineUrl } from '@/lib/borga/engine-http';
+import { sessionUserId } from '@/lib/borga/features-server';
+import { userWsKey } from '@/lib/borga/keys';
 import { getApiKey } from '@/lib/borga/secrets';
 import { getBorgaState } from '@/lib/borga/persistence';
 import type { SettingsState } from '@/lib/borga/data';
@@ -13,15 +17,32 @@ function isValidWsId(ws: unknown): ws is string {
   return typeof ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(ws);
 }
 
-async function resolveEngine(wsId: string | null): Promise<{ engineUrl: string; token: string | null }> {
+/**
+ * Per-company engine resolution: the company's saved Company Engine connection first, then its legacy
+ * workspace settings, then deployment-wide env. (This used to read an un-prefixed settings key that the
+ * dashboard never writes, so a company's own endpoint was never actually used.)
+ */
+async function resolveEngine(wsId: string | null, userId: string | null): Promise<{ engineUrl: string; token: string | null }> {
   let engineUrl = DEFAULT_ENGINE_URL;
-  let token = process.env.BORGA_ADMIN_TOKEN || (await getApiKey('BORGA_ADMIN_TOKEN')) || '';
-  if (wsId) {
-    const settings = await getBorgaState<SettingsState>('ws::' + wsId + '::settings');
-    if (settings?.crmUrl && /^https?:\/\//i.test(settings.crmUrl)) {
-      engineUrl = settings.crmUrl.replace(/\/$/, '');
+  let token = (await getApiKey('COMPANY_ENGINE_API_KEY')) || process.env.BORGA_ADMIN_TOKEN || (await getApiKey('BORGA_ADMIN_TOKEN')) || '';
+  if (wsId && userId) {
+    const conn = await getConnection(userId, wsId, 'company_engine');
+    if (conn?.baseUrl) {
+      engineUrl = conn.baseUrl.replace(/\/$/, '');
+      if (conn.apiKey) token = conn.apiKey;
+    } else {
+      const settings = await getBorgaState<SettingsState>(userWsKey(userId, wsId, 'settings'));
+      if (settings?.crmUrl && /^https?:\/\//i.test(settings.crmUrl)) engineUrl = settings.crmUrl.replace(/\/$/, '');
+      if (settings?.engineApiKey) token = settings.engineApiKey;
     }
-    if (settings?.engineApiKey) token = settings.engineApiKey;
+  }
+  // The URL is user-supplied and fetched from this server: refuse internal targets.
+  if (engineUrl) {
+    try {
+      await guardEngineUrl(engineUrl);
+    } catch {
+      engineUrl = '';
+    }
   }
   return { engineUrl, token };
 }
@@ -272,11 +293,11 @@ function runLocalEngine(workflowName: string, agent: string): LocalResult {
 }
 
 /**
- * Drives the 2point engine orchestration. Proxies workflow operations to the
+ * Drives the Company Engine orchestration. Proxies workflow operations to the
  * configured company API with proper authentication, retry logic, and error handling.
  * Falls back to local execution only when the remote engine is unavailable.
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   let body: { action?: string; workflowName?: string; agent?: string; workflowId?: string; forceLocal?: boolean; ws?: string } = {};
   try {
     body = await req.json();
@@ -292,12 +313,12 @@ export async function POST(req: Request) {
 
   // Resolve the active company's engine (workspace settings → env fallback).
   const wsId = isValidWsId(body.ws) ? body.ws : null;
-  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId);
+  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId, await sessionUserId(req));
 
   // Validate engine URL
   if (!isValidEngineUrl(ENGINE_URL)) {
     return NextResponse.json(
-      { ok: false, engine: ENGINE_URL, mode: 'unconfigured', error: 'No engine endpoint configured for this workspace. Set it under AI Platform → 2point Engine.' },
+      { ok: false, engine: ENGINE_URL, mode: 'unconfigured', error: 'No engine endpoint configured for this workspace. Set it under AI Platform → Company Engine.' },
       { status: 400 },
     );
   }
@@ -375,11 +396,11 @@ export async function POST(req: Request) {
   );
 }
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const wsParam = url.searchParams.get('ws');
   const wsId = isValidWsId(wsParam) ? wsParam : null;
-  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId);
+  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId, await sessionUserId(req));
 
   const configured = isValidEngineUrl(ENGINE_URL);
   const validation = configured ? await validateEngineAuth(ENGINE_URL, adminToken) : { valid: false, error: 'No engine endpoint configured for this workspace' };

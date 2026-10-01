@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import {
-  ServerCog,
   Radio,
   RefreshCw,
   Users,
@@ -17,11 +16,6 @@ import {
   Webhook as WebhookIcon,
   Plus,
   Trash2,
-  KeyRound,
-  Eye,
-  EyeOff,
-  Save,
-  Check,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -44,6 +38,8 @@ import {
 } from 'recharts';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { EngineCrmCard } from './EngineCrmCard';
+import { InboundEndpoint } from '../InboundEndpoint';
 import { cn } from '@/lib/utils';
 import { BOOKING_STATUS_ORDER, BOOKING_STATUS_STYLE, WEBHOOK_EVENTS, type BookingStatus, type Driver, type Webhook } from '@/lib/borga/data';
 
@@ -68,7 +64,7 @@ export function OrchestrationTab() {
   const {
     ops, setBookingStatus, addDriver, log, workflows, runWorkflow, setWorkflow, addWorkflow, deleteWorkflow,
     webhooks, addWebhook, toggleWebhook, deleteWebhook,
-    settings, setSettings, activeWorkspace, activeWorkspaceId, userName,
+    activeWorkspace, activeWorkspaceId, userName,
   } = useBorga();
   const [engine, setEngine] = useState<EngineInfo | null>(null);
   const [checking, setChecking] = useState(true);
@@ -79,55 +75,21 @@ export function OrchestrationTab() {
   const [whForm, setWhForm] = useState({ name: '', event: 'booking.created' as string, url: '', secret: '' });
   const [wfOpen, setWfOpen] = useState(false);
   const [wfForm, setWfForm] = useState({ name: '', engine: 'local' });
-  const [endpointDraft, setEndpointDraft] = useState(settings.crmUrl);
-  const [endpointSaved, setEndpointSaved] = useState(false);
-  const [keyValue, setKeyValue] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [keySaved, setKeySaved] = useState(false);
-
   const company = activeWorkspace();
-  const engineEndpoint = settings.crmUrl;
-
-  // Keep the endpoint draft in sync when the tenant (or hydration) changes.
-  useEffect(() => {
-    setEndpointDraft(settings.crmUrl);
-  }, [settings.crmUrl, activeWorkspaceId]);
-
-  const saveEndpoint = () => {
-    setSettings({ crmUrl: endpointDraft.trim() });
-    setEndpointSaved(true);
-    setTimeout(() => setEndpointSaved(false), 2000);
-    log({
-      agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync',
-      message: `Engine endpoint for ${company?.name ?? 'workspace'} set to ${endpointDraft.trim() || '(empty)'}.`,
-    });
-  };
-
-  const saveTenantKey = () => {
-    if (!keyValue.trim()) return;
-    setSettings({ engineApiKey: keyValue.trim() });
-    setKeySaved(true);
-    setKeyValue('');
-    setTimeout(() => setKeySaved(false), 2000);
-    log({
-      agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync',
-      message: `Engine API key saved for ${company?.name ?? 'workspace'} — scoped to this company only.`,
-    });
-  };
 
   const probeEngine = () => {
     setChecking(true);
     fetch(`/api/borga/orchestrate?ws=${encodeURIComponent(activeWorkspaceId)}`)
       .then((r) => r.json())
       .then((d) => setEngine(d))
-      .catch(() => setEngine({ engine: engineEndpoint, mode: 'unreachable', ok: false }))
+      .catch(() => setEngine({ engine: '', mode: 'unreachable', ok: false }))
       .finally(() => setChecking(false));
   };
 
   useEffect(() => {
     probeEngine();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeWorkspaceId, settings.crmUrl, settings.engineApiKey]);
+  }, [activeWorkspaceId]);
 
   const addNewWorkflow = () => {
     if (!wfForm.name.trim()) return;
@@ -192,8 +154,9 @@ export function OrchestrationTab() {
     // Test the webhook by dispatching a test event
     fetch('/api/borga/webhooks/dispatch', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
       body: JSON.stringify({
+        ws: activeWorkspaceId,
         action: 'dispatch',
         webhookId: w.id,
         eventId: 'webhook.test',
@@ -210,7 +173,7 @@ export function OrchestrationTab() {
     fetch('/api/borga/orchestrate')
       .then((r) => r.json())
       .then((d) => setEngine(d))
-      .catch(() => setEngine({ engine: 'https://2pointlogistics.com/api/v1', mode: 'unreachable', ok: false }))
+      .catch(() => setEngine({ engine: '', mode: 'unreachable', ok: false }))
       .finally(() => setChecking(false));
   }, []);
 
@@ -218,9 +181,9 @@ export function OrchestrationTab() {
     fetch('/api/borga/config')
       .then((r) => r.json())
       .then((d: { keys: { envVar: string; source: string; masked: string | null }[] }) => {
-        const entry = d.keys.find((k) => k.envVar === 'TWOPOINT_API_KEY');
+        const entry = d.keys.find((k) => k.envVar === 'COMPANY_ENGINE_API_KEY');
         if (entry && entry.source === 'env') {
-          setLogMsg((p) => ['[engine] Global TWOPOINT_API_KEY present in .env (fallback for workspaces without their own key).', ...p].slice(0, 8));
+          setLogMsg((p) => ['[engine] Global COMPANY_ENGINE_API_KEY present in .env (fallback for workspaces without their own key).', ...p].slice(0, 8));
         }
       })
       .catch(() => null);
@@ -242,8 +205,9 @@ export function OrchestrationTab() {
     webhooks.filter(w => w.active && w.event === 'booking.updated').forEach(w => {
       fetch('/api/borga/webhooks/dispatch', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
         body: JSON.stringify({
+          ws: activeWorkspaceId,
           action: 'dispatch',
           webhookId: w.id,
           eventId: `booking.updated.${id}`,
@@ -287,8 +251,8 @@ export function OrchestrationTab() {
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle
-          title={`${company?.name ?? 'Company'} engine`}
-          sub="This company's private integration endpoint, webhooks, workflows and ops feed — isolated per workspace"
+          title="Company Engine"
+          sub="This company's API portal: connect your CRM, pull customers and deals, run workflows and webhooks. Isolated per company."
         />
         <div className="flex items-center gap-2">
           <Badge variant="outline" className="gap-1.5">
@@ -314,7 +278,7 @@ export function OrchestrationTab() {
             <div>
               <p className="font-semibold">{company?.name ?? 'Company'} engine</p>
               <p className="font-mono text-xs text-muted-foreground">
-                {engineEndpoint || 'no endpoint configured — set it below'}
+                {engine?.engine || 'no connection saved yet — set it up below'}
                 {engine?.mode === 'local-fallback' && ' — local fallback'}
               </p>
             </div>
@@ -326,61 +290,9 @@ export function OrchestrationTab() {
           </div>
         </div>
 
-        {/* Per-company engine connection */}
-        <div className="mt-4 space-y-3 border-t pt-4">
-          <div>
-            <div className="mb-1.5 flex items-center gap-2">
-              <ServerCog className="h-3.5 w-3.5 text-primary" />
-              <p className="text-xs font-semibold">Engine endpoint (this company only)</p>
-              {endpointSaved && <span className="flex items-center gap-0.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600"><Check className="h-2.5 w-2.5" /> saved</span>}
-            </div>
-            <div className="flex gap-1.5">
-              <Input
-                value={endpointDraft}
-                onChange={(e) => setEndpointDraft(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && saveEndpoint()}
-                placeholder="https://your-company-api.example.com/v1"
-                className="h-8 font-mono text-xs"
-              />
-              <Button size="sm" className="h-8 shrink-0 gap-1 px-2.5" onClick={saveEndpoint}>
-                <Save className="h-3 w-3" /> <span>Save</span>
-              </Button>
-            </div>
-          </div>
-          <div>
-            <div className="mb-1.5 flex items-center gap-2">
-              <KeyRound className="h-3.5 w-3.5 text-primary" />
-              <p className="text-xs font-semibold">Engine API key (tenant-scoped)</p>
-              {settings.engineApiKey && (
-                <span className="flex items-center gap-0.5 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600">
-                  <Check className="h-2.5 w-2.5" /> set — {settings.engineApiKey.slice(0, 4)}****{settings.engineApiKey.slice(-4)}
-                </span>
-              )}
-              {!settings.engineApiKey && <span className="rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">not set — falls back to global env key</span>}
-            </div>
-            <div className="flex gap-1.5">
-              <div className="relative flex-1">
-                <Input
-                  type={showKey ? 'text' : 'password'}
-                  value={keyValue}
-                  onChange={(e) => setKeyValue(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && saveTenantKey()}
-                  placeholder={settings.engineApiKey ? 'New key to replace…' : 'Paste this company—s engine API key…'}
-                  autoComplete="new-password"
-                  className="h-8 pr-8 font-mono text-xs"
-                />
-                <button type="button" onClick={() => setShowKey((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                  {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                </button>
-              </div>
-              <Button size="sm" className="h-8 shrink-0 gap-1 px-2.5" disabled={!keyValue.trim()} onClick={saveTenantKey}>
-                {keySaved ? <Check className="h-3 w-3" /> : <Save className="h-3 w-3" />}
-                <span>{keySaved ? 'Saved' : 'Save'}</span>
-              </Button>
-            </div>
-          </div>
-        </div>
       </Card>
+
+      <EngineCrmCard onConnectionChange={probeEngine} />
 
       {/* Webhooks & API configuration */}
       <Card className="p-5">
@@ -393,9 +305,7 @@ export function OrchestrationTab() {
             <Plus className="h-3.5 w-3.5" /> Add webhook
           </Button>
         </div>
-        <div className="mt-3 rounded-lg bg-muted/40 p-2.5 font-mono text-[10px] text-muted-foreground">
-          Inbound events for this company: <span className="text-primary">{'{origin}'}/api/borga/webhooks/inbound?ws={activeWorkspaceId}</span> — signing: HMAC-SHA256
-        </div>
+        <div className="mt-3"><InboundEndpoint /></div>
         <div className="mt-3 space-y-2">
           {webhooks.length === 0 && <p className="text-sm text-muted-foreground">No webhooks configured yet. Add one to start receiving events.</p>}
           {webhooks.map((w) => (
@@ -417,6 +327,9 @@ export function OrchestrationTab() {
         </div>
       </Card>
 
+      <details className="rounded-xl border p-4">
+        <summary className="cursor-pointer text-sm font-semibold">Operations dashboard <span className="font-normal text-muted-foreground">— sample logistics data for illustration; it is not pulled from your CRM</span></summary>
+        <div className="mt-4 space-y-5">
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
         {kpis.map((k) => (
@@ -578,6 +491,9 @@ export function OrchestrationTab() {
           </div>
         </Card>
       </div>
+
+        </div>
+      </details>
 
       {/* New drivers + workflows */}
       <div className="grid gap-5 lg:grid-cols-3">

@@ -12,11 +12,16 @@ import {
   Plus,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast-bus';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useBorga } from '@/lib/borga/store';
 import { deriveBusinessInsights, insightsToMemories, syncInsightsToKnowledgeBase } from '@/lib/borga/insights';
-import { NAV_PAGES, isPageId, type PageId, type NavTarget } from './nav';
+import { isPageId, type PageId, type NavTarget } from './nav';
+import { useVisibleNav } from './use-visible-nav';
+import { useCrmPull } from './use-crm-pull';
+import { notifyEmail } from '@/lib/borga/email-client';
+import { useFeatures } from '@/lib/borga/features-client';
 import { ThemeProvider, useTheme } from './theme-provider';
 import { CommandPalette } from './CommandPalette';
 import { VoiceAssistant } from './VoiceAssistant';
@@ -29,6 +34,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { SalesPage } from './pages/SalesPage';
 import { MarketingPage } from './pages/MarketingPage';
 import { CommunicationsPage } from './pages/CommunicationsPage';
+import { SupportPage } from './pages/SupportPage';
 import { FinancePage } from './pages/FinancePage';
 import { ProjectsTab } from './panels/ProjectsTab';
 import { HRPage } from './pages/HRPage';
@@ -54,7 +60,51 @@ function ShellInner() {
   const [route, setRoute] = useState<ActiveRoute>({ page: 'overview' });
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const runRecurringInvoices = useBorga((s) => s.runRecurringInvoices);
+  const runRecurringBills = useBorga((s) => s.runRecurringBills);
+  const crmAutoPull = settings.crmAutoPull === true;
+  const pullCrm = useCrmPull();
+  const navPages = useVisibleNav();
+
+  // Company Engine: keep customers and deals in step with the company CRM while the dashboard is open.
+  useEffect(() => {
+    if (!synced || !crmAutoPull) return;
+    const t0 = setTimeout(() => void pullCrm(), 4000);
+    const t = setInterval(() => void pullCrm(), 30 * 60_000);
+    return () => { clearTimeout(t0); clearInterval(t); };
+  }, [synced, crmAutoPull, activeWorkspaceId, pullCrm]);
+
+  // Recurring billing: create any invoices that came due. It runs when the dashboard opens, every
+  // 30 minutes while it stays open, and when the tab regains focus. The schedule is advanced and the
+  // draft invoices are written in the same store update, so a repeat run never duplicates one.
+  useEffect(() => {
+    if (!synced) return;
+    const tick = () => {
+      const bills = runRecurringBills();
+      if (bills.created) notifyEmail(activeWorkspaceId, 'recurring_bills', { numbers: bills.bills });
+      if (bills.created) toast({ title: bills.created + ' recurring bill' + (bills.created === 1 ? '' : 's') + ' recorded', description: bills.bills.join(', ') + ' — unpaid; review under Finance → Vendors & AP.', variant: 'success' });
+      const r = runRecurringInvoices();
+      if (r.created) notifyEmail(activeWorkspaceId, 'recurring_invoices', { numbers: r.invoices });
+      if (r.created) toast({ title: r.created + ' recurring invoice' + (r.created === 1 ? '' : 's') + ' drafted', description: r.invoices.join(', ') + ' — review and send under Sales → Invoicing.', variant: 'success' });
+    };
+    tick();
+    const t = setInterval(tick, 30 * 60_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+  }, [synced, activeWorkspaceId, runRecurringInvoices, runRecurringBills]);
+  const voiceEnabled = useFeatures((s) => s.flags.voice);
+  const loadFeatures = useFeatures((s) => s.load);
   const greeted = useRef(false);
+
+  useEffect(() => {
+    if (synced && activeWorkspaceId) void loadFeatures(activeWorkspaceId);
+  }, [synced, activeWorkspaceId, loadFeatures]);
+
+  // A page switched off while open falls back to the overview instead of rendering a dead route.
+  useEffect(() => {
+    if (!navPages.some((p) => p.id === route.page)) setRoute({ page: 'overview' });
+  }, [navPages, route.page]);
   const autoTrainRef = useRef(false);
 
   // Persistent learning: once a day (per company), turn live business
@@ -145,7 +195,7 @@ function ShellInner() {
   // whenever the tab regains focus (mobile browsers routinely kill an open
   // recognition session when backgrounded).
   useEffect(() => {
-    if (!synced || !settings.notifications.voice) return;
+    if (!synced || !voiceEnabled || !settings.notifications.voice) return;
     // Give the wake greeting a moment to finish so the mic doesn't transcribe it.
     const startDelay = setTimeout(() => startListening(), 2500);
     const onVisible = () => {
@@ -157,7 +207,7 @@ function ShellInner() {
       document.removeEventListener('visibilitychange', onVisible);
       stopListening();
     };
-  }, [synced, settings.notifications.voice, startListening, stopListening]);
+  }, [synced, voiceEnabled, settings.notifications.voice, startListening, stopListening]);
 
   const isDark = resolvedDark;
 
@@ -204,7 +254,7 @@ function ShellInner() {
           </div>
         </div>
         <nav className="flex-1 space-y-1 px-3 pb-3">
-          {NAV_PAGES.map((n) => {
+          {navPages.map((n) => {
             const Icon = n.icon;
             return (
               <button
@@ -240,7 +290,7 @@ function ShellInner() {
             </span>
             <WorkspaceSwitcher />
             <h1 className="hidden text-sm font-semibold md:block">
-              {NAV_PAGES.find((p) => p.id === route.page)?.label}
+              {navPages.find((p) => p.id === route.page)?.label}
             </h1>
             <span
               title={dbAvailable ? 'Changes synced to the cloud database' : 'Running in local mode — cloud database unreachable'}
@@ -254,16 +304,18 @@ function ShellInner() {
             </span>
           </div>
           <div className="flex items-center gap-1.5">
+            {voiceEnabled && (
             <button
-              onClick={() => setVoiceOpen((v) => !v)}
-              className={cn(
-                'flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors hover:bg-accent',
-                voice.listening && 'bg-primary/10 text-primary',
-              )}
-            >
-              <Mic className="h-4 w-4" />
-              <span className="hidden sm:inline">{voice.listening ? 'Listening…' : 'Borga'}</span>
-            </button>
+                onClick={() => setVoiceOpen((v) => !v)}
+                className={cn(
+                  'flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors hover:bg-accent',
+                  voice.listening && 'bg-primary/10 text-primary',
+                )}
+              >
+                <Mic className="h-4 w-4" />
+                <span className="hidden sm:inline">{voice.listening ? 'Listening…' : 'Borga'}</span>
+              </button>
+            )}
             <button
               onClick={() => setMode(isDark ? 'light' : 'dark')}
               className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-accent"
@@ -276,7 +328,7 @@ function ShellInner() {
 
         {/* Mobile nav bar */}
         <div className="sticky top-14 z-20 flex gap-1 overflow-x-auto border-b bg-background/80 px-2 py-2 backdrop-blur lg:hidden">
-          {NAV_PAGES.map((n) => {
+          {navPages.map((n) => {
             const Icon = n.icon;
             return (
               <button
@@ -297,11 +349,12 @@ function ShellInner() {
 
         <main className="flex-1 px-4 py-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
-            <PageErrorBoundary key={route.page} pageName={NAV_PAGES.find((p) => p.id === route.page)?.label ?? route.page}>
+            <PageErrorBoundary key={route.page} pageName={navPages.find((p) => p.id === route.page)?.label ?? route.page}>
               {route.page === 'overview' && <OverviewPage key={`ov-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'sales' && <SalesPage key={`sa-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'marketing' && <MarketingPage key={`mk-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'communications' && <CommunicationsPage key={`co-${route.tab ?? ''}`} initialTab={route.tab} />}
+              {route.page === 'support' && <SupportPage key={`su-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'finance' && <FinancePage key={`fi-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'projects' && <ProjectsTab key={`pr-${route.tab ?? ''}`} initialProjectId={route.tab} />}
               {route.page === 'hr' && <HRPage key={`hr-${route.tab ?? ''}`} initialTab={route.tab} />}
@@ -314,6 +367,8 @@ function ShellInner() {
         </main>
       </div>
 
+      {voiceEnabled && (
+        <>
       {/* Voice panel */}
       <div
         className={cn(
@@ -342,6 +397,8 @@ function ShellInner() {
       >
         <BorgaOrb size={64} active={voice.listening} thinking={voice.thinking ?? false} />
       </button>
+        </>
+      )}
 
       <CommandPalette onOpenVoice={() => setVoiceOpen(true)} />
     </div>

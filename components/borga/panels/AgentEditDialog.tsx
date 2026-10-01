@@ -1,21 +1,39 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useBorga } from '@/lib/borga/store';
 import type { Agent } from '@/lib/borga/data';
 
 const DEPARTMENTS = ['Command', 'Sales', 'Design', 'Engineering', 'Operations', 'Marketing', 'Customer Success', 'Fundraising', 'Custom'];
 
 export function AgentEditDialog({ agent, open, onOpenChange }: { agent: Agent | null; open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { updateAgent, deleteAgent, log, llmCatalog } = useBorga();
-  // Model list is derived from the dynamic, per-workspace catalog (DB-backed).
-  const MODELS = (llmCatalog ?? []).flatMap((p) => p.models.map((m) => m.id));
+  const { updateAgent, deleteAgent, log, llmCatalog, llm, activeWorkspaceId } = useBorga();
+  // Models come from the per-workspace catalog, grouped by provider. Providers that cannot be called
+  // (no key / Ollama down) are flagged: an agent set to one of their models falls back to the default.
+  const providers = (llmCatalog ?? []).filter((p) => p.models.length > 0);
+  const [usable, setUsable] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    fetch('/api/borga/probe?ws=' + encodeURIComponent(activeWorkspaceId))
+      .then((r) => r.json())
+      .then((d: { providers?: { id: string; configured: boolean }[] }) => setUsable(new Set((d.providers ?? []).filter((x) => x.configured).map((x) => x.id))))
+      .catch(() => setUsable(null));
+  }, [open, activeWorkspaceId]);
+  const DEFAULT_VALUE = '__default__';
+  const ownerOf = (model: string) => providers.find((p) => p.models.some((m) => m.id === model));
+  const modelWarning = (model: string) => {
+    if (!model || model === DEFAULT_VALUE) return null;
+    const owner = ownerOf(model);
+    if (!owner) return 'This model is not in the catalog, so the agent will use the default model.';
+    if (usable && !usable.has(owner.id)) return owner.label + ' has no usable key right now, so this agent will use the default model.';
+    return null;
+  };
   const [form, setForm] = useState<Agent | null>(null);
   const editing = form ?? agent;
 
@@ -83,12 +101,19 @@ export function AgentEditDialog({ agent, open, onOpenChange }: { agent: Agent | 
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Model</label>
-                <Select value={editing.model} onValueChange={(v) => patch({ model: v })}>
+                <Select value={editing.model && ownerOf(editing.model) ? editing.model : DEFAULT_VALUE} onValueChange={(v) => patch({ model: v === DEFAULT_VALUE ? '' : v })}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {MODELS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    <SelectItem value={DEFAULT_VALUE}>Workspace default ({llm.model || 'demo'})</SelectItem>
+                    {providers.map((p) => (
+                      <SelectGroup key={p.id}>
+                        <SelectLabel>{p.label}{usable && !usable.has(p.id) ? ' (no key)' : ''}</SelectLabel>
+                        {p.models.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+                      </SelectGroup>
+                    ))}
                   </SelectContent>
                 </Select>
+                {modelWarning(editing.model) && <p className="mt-1 text-[11px] text-amber-600">{modelWarning(editing.model)}</p>}
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Skills</label>

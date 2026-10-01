@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { useBorga } from '@/lib/borga/store';
 import { KNOWLEDGE_CATEGORIES, type AgentMemory, type KnowledgeCategoryId, type KnowledgeEntry, type MemoryKind } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
+import { SupermemoryCard } from './SupermemoryCard';
 import { cn } from '@/lib/utils';
 
 const MEMORY_KIND_STYLE: Record<MemoryKind, string> = {
@@ -139,6 +140,7 @@ export function KnowledgeBaseTab() {
 
   return (
     <div className="borga-fade-up space-y-5">
+      <SupermemoryCard />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="Knowledge Base" sub={`What Borga agents know — and what they still need to learn about ${wsName}`} />
         <div className="flex gap-2">

@@ -54,6 +54,75 @@ function greeting() {
   return 'Good evening';
 }
 
+/**
+ * The face: one glanceable "needs you" strip. Pending approvals (with
+ * inline approve/reject), held heartbeat notices (dismissible), heartbeat
+ * status + kill switch, and today's model-cost tally from the audit trail.
+ * Everything actionable without leaving this panel.
+ */
+function NeedsYouFace({
+  pendingApprovals,
+  notices,
+  heartbeat,
+  cost,
+  onApprove,
+  onReject,
+  onDismissNotice,
+  onToggleHeartbeat,
+}: {
+  pendingApprovals: { id: string; title: string; description: string }[];
+  notices: { id: string; title: string; body: string }[];
+  heartbeat: { paused: boolean | null; quiet: string };
+  cost: { todayUsd: string; runs: number };
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+  onDismissNotice: (id: string) => void;
+  onToggleHeartbeat: () => void;
+}) {
+  const total = pendingApprovals.length + notices.length;
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-primary" />
+          <span className="text-sm font-semibold">Needs you</span>
+          <Badge variant="secondary">{total}</Badge>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className={cn('flex items-center gap-1.5', heartbeat.paused ? 'text-rose-600' : 'text-emerald-600')}>
+            <span className={cn('h-1.5 w-1.5 rounded-full', heartbeat.paused ? 'bg-rose-500' : 'animate-pulse bg-emerald-500')} />
+            {heartbeat.paused === null ? 'Heartbeat …' : heartbeat.paused ? `Paused ${heartbeat.quiet}` : `Beating ${heartbeat.quiet}`}
+          </span>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onToggleHeartbeat}>
+            {heartbeat.paused ? 'Resume' : 'Pause all'}
+          </Button>
+          <Badge variant="outline" className="font-mono text-[10px]" title="Estimated model spend from the run audit trail">
+            ≈${cost.todayUsd} today · {cost.runs} runs
+          </Badge>
+        </div>
+      </div>
+      {total === 0 && (
+        <p className="mt-3 text-sm text-muted-foreground">All clear — nothing waiting on you. Borga is working quietly.</p>
+      )}
+      <div className="mt-3 space-y-2">
+        {pendingApprovals.slice(0, 3).map((a) => (
+          <div key={a.id} className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 px-3 py-2">
+            <p className="min-w-0 flex-1 truncate text-xs font-medium">{a.title}</p>
+            <Button size="sm" className="h-6 px-2 text-[11px]" onClick={() => onApprove(a.id)}>Approve</Button>
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => onReject(a.id)}>Reject</Button>
+          </div>
+        ))}
+        {notices.slice(0, 3).map((n) => (
+          <div key={n.id} className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 px-3 py-2">
+            <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{n.title}</p>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => onDismissNotice(n.id)}>Dismiss</Button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export function CommandCenter() {
   const {
     userName,
@@ -68,26 +137,51 @@ export function CommandCenter() {
     finance,
     connections,
     llm,
-    setLlm,
     llmCatalog,
     log,
-    updateAgent,
     payBill,
     composio,
-    activeWorkspace,
+    activeWorkspaceId,
+    notices,
+    dismissNotice,
   } = useBorga();
-  // Helper to set LLM and sync to all agents automatically
-  const setLlmAndSyncToAgents = (patch: Partial<{ providerId: string; model: string; online: boolean; latency: number }>) => {
-    const newLlm = { ...llm, ...patch };
-    setLlm(newLlm);
-    // Sync to all agents that don't have a custom model override
-    agents.forEach((agent) => {
-      // If agent.model is empty or matches the old llm.model, update it
-      if (!agent.model || agent.model === llm.model) {
-        updateAgent(agent.id, { model: newLlm.model });
-      }
-    });
+  const [hbPaused, setHbPaused] = useState<boolean | null>(null);
+  const [hbQuiet, setHbQuiet] = useState('22:00–07:00');
+
+  useEffect(() => {
+    fetch('/api/borga/scheduler', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+      body: JSON.stringify({ action: 'heartbeat', ws: activeWorkspaceId }),
+    }).then((r) => r.json()).then((d: { paused?: boolean; quietHours?: { start: string; end: string } }) => {
+      setHbPaused(d.paused ?? false);
+      if (d.quietHours) setHbQuiet(`${d.quietHours.start}–${d.quietHours.end}`);
+    }).catch(() => setHbPaused(false));
+  }, [activeWorkspaceId]);
+
+  const toggleHeartbeat = () => {
+    const next = !(hbPaused ?? false);
+    setHbPaused(next);
+    fetch('/api/borga/scheduler', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+      body: JSON.stringify({ action: 'setHeartbeat', paused: next, ws: activeWorkspaceId }),
+    }).catch(() => setHbPaused(!next));
   };
+
+  // Today's cost tally from the Tier 6 run-audit trail (≈$ per entry).
+  const cost = (() => {
+    let sum = 0;
+    let runs = 0;
+    for (const e of activity) {
+      const m = /≈\$(\d+\.\d+)/.exec(e.message);
+      if (m) {
+        sum += Number(m[1]);
+        runs += 1;
+      }
+    }
+    return { todayUsd: sum.toFixed(4), runs };
+  })();
   const catalog = llmCatalog && llmCatalog.length ? llmCatalog : LLM_PROVIDERS;
   const [now, setNow] = useState<Date | null>(null);
   const [goalOpen, setGoalOpen] = useState(false);
@@ -100,23 +194,16 @@ export function CommandCenter() {
     return () => clearInterval(t);
   }, []);
 
-  // Probe which LLM providers have server-side API keys.
+  // Which LLM providers can actually be called (keys saved in Integrations, local Ollama, ...).
   useEffect(() => {
-    fetch('/api/borga/probe')
+    fetch('/api/borga/probe?ws=' + encodeURIComponent(activeWorkspaceId))
       .then((r) => r.json())
       .then((d: { providers?: { id: string; configured: boolean }[] }) => {
         const ids = new Set((d.providers ?? []).filter((p) => p.configured).map((p) => p.id));
         setConfiguredProviders(ids);
-        // Auto-select the first configured provider if the current one is unconfigured.
-        if (ids.size > 0 && !ids.has(llm.providerId)) {
-          const first = [...ids][0];
-          const p = catalog.find((x) => x.id === first);
-          if (p) setLlmAndSyncToAgents({ providerId: p.id, model: p.models[0].id, online: true, latency: 120 });
-        }
       })
       .catch(() => {/* probe is best-effort */});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeWorkspaceId]);
 
   const done = tasks.filter((t) => t.status === 'done').length;
   const activeAgents = agents.filter((a) => a.status === 'active').length;
@@ -211,13 +298,35 @@ export function CommandCenter() {
         log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Approved action "${action}" on ${app} could not be executed — retry manually.` });
       }
     }
+    // Tier 6: held MCP tool call runs exactly once on approval (per-action, never blanket).
+    if (a.pendingMcp) {
+      const { server, tool, params } = a.pendingMcp;
+      try {
+        const res = await fetch('/api/borga/mcp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+          body: JSON.stringify({ action: 'call', ws: activeWorkspaceId, server, tool, params }),
+        });
+        const d = (await res.json()) as { ok?: boolean; error?: string };
+        log({
+          agentId: 'a1', agentName: 'Borga', actor: 'agent', kind: 'sync',
+          message: d.ok ? `Approved MCP tool executed: ${tool} on ${server}.` : `Approved MCP tool "${tool}" on ${server} failed: ${d.error ?? 'unknown error'} — retry manually.`,
+        });
+      } catch {
+        log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Approved MCP tool "${tool}" on ${server} could not be executed — retry manually.` });
+      }
+    }
+    // Tier 6: held workflow triggers on approval; rejecting ran nothing.
+    if (a.pendingWorkflow) {
+      log({ agentId: 'a1', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Approved workflow triggered on engine: ${a.pendingWorkflow.workflowName}.` });
+    }
   };
 
   const actOnApproval = (id: string, status: 'approved' | 'rejected') => {
     const a = approvals.find((x) => x.id === id);
     setApproval(id, status);
     log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'system', message: `Approval ${status === 'approved' ? 'approved' : 'rejected'}: ${a?.title ?? ''}.` });
-    if (a && status === 'approved' && (a.pendingPayment || a.pendingSend || a.pendingComposio)) void executeApprovedAction(a);
+    if (a && status === 'approved' && (a.pendingPayment || a.pendingSend || a.pendingComposio || a.pendingMcp || a.pendingWorkflow)) void executeApprovedAction(a);
   };
 
   return (
@@ -246,6 +355,18 @@ export function CommandCenter() {
           </div>
         </div>
       </Card>
+
+      {/* The face — glanceable needs-you strip */}
+      <NeedsYouFace
+        pendingApprovals={pendingApprovals}
+        notices={notices}
+        heartbeat={{ paused: hbPaused, quiet: hbQuiet }}
+        cost={cost}
+        onApprove={(id) => actOnApproval(id, 'approved')}
+        onReject={(id) => actOnApproval(id, 'rejected')}
+        onDismissNotice={(id) => dismissNotice(id)}
+        onToggleHeartbeat={toggleHeartbeat}
+      />
 
       {/* KPI stat row */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -313,7 +434,7 @@ export function CommandCenter() {
             {configuredProviders.size > 0 ? (() => {
               const active = llm.providerId;
               const ok = configuredProviders.has(active);
-              let label = ok ? 'API key configured' : 'No key — add in .env';
+              let label = ok ? 'API key configured' : 'No key — add in Integrations → AI & Voice';
               let color = ok ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30' : 'bg-amber-500/10 text-amber-600 ring-amber-500/30';
               let dot = ok ? 'bg-emerald-500' : 'bg-amber-500';
               if (active === 'llm-demo') { label = 'Demo mode — no key needed'; color = 'bg-sky-500/10 text-sky-600 ring-sky-500/30'; dot = 'bg-sky-500'; }
@@ -334,37 +455,19 @@ export function CommandCenter() {
             {llm.latency > 0 && <Badge variant="secondary">{llm.latency}ms</Badge>}
           </div>
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Provider</label>
-            <select
-              value={llm.providerId}
-              onChange={(e) => {
-                const p = catalog.find((x) => x.id === e.target.value) ?? catalog[0];
-                const online = configuredProviders.has(p.id);
-                setLlmAndSyncToAgents({ providerId: p.id, model: p.models[0].id, online, latency: online ? 120 : 0 });
-              }}
-              className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {catalog.map((p) => (
-                <option key={p.id} value={p.id}>{configuredProviders.has(p.id) ? `✓ ${p.label}` : p.label}</option>
-              ))}
-            </select>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2.5 text-sm">
+          <div className="min-w-0">
+            <p className="font-medium">{catalog.find((x) => x.id === llm.providerId)?.label ?? llm.providerId} <span className="text-muted-foreground">·</span> {catalog.find((x) => x.id === llm.providerId)?.models.find((m) => m.id === llm.model)?.label ?? llm.model}</p>
+            <p className="text-[11px] text-muted-foreground">
+              {llm.providerId === 'llm-demo' ? 'Built-in demo answers. Add an API key to use a real model.' : configuredProviders.size > 0 && !configuredProviders.has(llm.providerId) ? 'This provider cannot be reached (no key or offline), so chat falls back to the built-in demo until you fix it.' : llm.latency > 0 ? 'Last test replied in ' + llm.latency + ' ms.' : 'Not tested yet. Press Test on the provider card.'}
+            </p>
           </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">Model</label>
-            <select
-              value={llm.model}
-              onChange={(e) => setLlmAndSyncToAgents({ model: e.target.value })}
-              className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {catalog.find((x) => x.id === llm.providerId)?.models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.tier === 'free' ? '🟢 ' : m.tier === 'credits' ? '🟡 ' : '💳 '}{m.label}{m.contextK ? ` — ${m.contextK}k` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: 'integrations', tab: 'ai-providers' } }))}
+            className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            Change in Integrations <ChevronRight className="h-3.5 w-3.5" />
+          </button>
         </div>
       </Card>
 

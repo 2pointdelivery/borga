@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getApiKey, setApiKey, isAllowedKey } from '@/lib/borga/secrets';
 import { getBorgaState, setBorgaState, scopedKey } from '@/lib/borga/persistence';
 import { type WhatsAppConfig } from '@/lib/borga/data';
+import { featureGate } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -153,6 +154,8 @@ async function verifyWhatsAppNumber(): Promise<{ verified: boolean; phone?: stri
 }
 
 export async function POST(req: Request) {
+  const off = await featureGate('whatsapp', null, null);
+  if (off) return off;
   let body: {
     action?: string;
     to?: string;
@@ -333,6 +336,8 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
+  const off = await featureGate('whatsapp', null, null);
+  if (off) return off;
   const url = new URL(req.url);
   const wsParam = url.searchParams.get('ws');
   const ws = wsParam && /^[a-zA-Z0-9_-]{1,64}$/.test(wsParam) ? wsParam : null;

@@ -14,23 +14,59 @@ export async function isEmailConfigured(): Promise<boolean> {
   return !!host && !!from;
 }
 
-let cached: nodemailer.Transporter | null = null;
+let cached: { sig: string; transport: nodemailer.Transporter } | null = null;
 
 async function getTransport(): Promise<nodemailer.Transporter> {
-  if (!cached) {
-    const host = await getApiKey('SMTP_HOST');
-    const port = Number(await getApiKey('SMTP_PORT')) || 587;
-    const secure = (await getApiKey('SMTP_SECURE')) === 'true' || port === 465;
-    const user = await getApiKey('SMTP_USER');
-    const pass = await getApiKey('SMTP_PASS');
-    cached = nodemailer.createTransport({
-      host,
-      port,
-      secure,
-      auth: user ? { user, pass } : undefined,
-    });
+  const host = await getApiKey('SMTP_HOST');
+  const port = Number(await getApiKey('SMTP_PORT')) || 587;
+  const secure = (await getApiKey('SMTP_SECURE')) === 'true' || port === 465;
+  const user = await getApiKey('SMTP_USER');
+  const pass = await getApiKey('SMTP_PASS');
+  // Rebuild when settings change in the dashboard; a process-lifetime cache would keep stale credentials.
+  const sig = [host, port, secure, user, pass].join('|');
+  if (!cached || cached.sig !== sig) {
+    cached = {
+      sig,
+      transport: nodemailer.createTransport({ host, port, secure, auth: user ? { user, pass } : undefined }),
+    };
   }
-  return cached;
+  return cached.transport;
+}
+
+export interface ThreadedMail {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+  /** Overrides EMAIL_FROM, e.g. "Support <help@acme.com>". */
+  from?: string;
+  replyTo?: string;
+  inReplyTo?: string;
+  references?: string[];
+  headers?: Record<string, string>;
+}
+
+/** Sends with threading headers and returns the generated Message-ID so replies can be matched back. */
+export async function sendThreadedEmail(opts: ThreadedMail): Promise<{ ok: boolean; messageId?: string }> {
+  if (!(await isEmailConfigured())) return { ok: false };
+  try {
+    const from = opts.from || (await getApiKey('EMAIL_FROM'));
+    const info = await (await getTransport()).sendMail({
+      from,
+      to: opts.to,
+      replyTo: opts.replyTo,
+      subject: opts.subject,
+      text: opts.text,
+      html: opts.html,
+      inReplyTo: opts.inReplyTo,
+      references: opts.references,
+      headers: opts.headers,
+    });
+    return { ok: true, messageId: info.messageId };
+  } catch (e) {
+    console.error('[mailer] threaded send failed:', e);
+    return { ok: false };
+  }
 }
 
 export async function sendEmail(opts: {
@@ -39,21 +75,13 @@ export async function sendEmail(opts: {
   html: string;
   text?: string;
 }): Promise<boolean> {
-  if (!(await isEmailConfigured())) return false;
-  try {
-    const from = await getApiKey('EMAIL_FROM');
-    await (await getTransport()).sendMail({
-      from,
-      to: opts.to,
-      subject: opts.subject,
-      text: opts.text ?? opts.html.replace(/<[^>]+>/g, ''),
-      html: opts.html,
-    });
-    return true;
-  } catch (e) {
-    console.error('[mailer] send failed:', e);
-    return false;
-  }
+  const r = await sendThreadedEmail({
+    to: opts.to,
+    subject: opts.subject,
+    html: opts.html,
+    text: opts.text ?? opts.html.replace(/<[^>]+>/g, ''),
+  });
+  return r.ok;
 }
 
 export function buildResetEmailHtml(opts: { name: string; resetUrl: string }): string {

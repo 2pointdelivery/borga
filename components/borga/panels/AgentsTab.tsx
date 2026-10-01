@@ -229,7 +229,7 @@ export function AgentsTab() {
             {activeAgentId === a.id && a.vibe && (
               <div className="mt-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-primary">Selected — {a.type ?? a.department} agent</p>
-                <p className="mt-1 text-xs italic leading-snug text-foreground/80">"{a.vibe}"</p>
+                <p className="mt-1 text-xs italic leading-snug text-foreground/80">&ldquo;{a.vibe}&rdquo;</p>
                 {a.persona && <p className="mt-1 truncate text-[10px] text-muted-foreground">persona: {a.persona}</p>}
               </div>
             )}
@@ -245,7 +245,7 @@ export function AgentsTab() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Model</span>
-                <span className="max-w-[55%] truncate font-mono text-[10px]">{a.model}</span>
+                <span className="max-w-[55%] truncate font-mono text-[10px]">{a.model || llm.model}</span>
               </div>
             </div>
 
@@ -316,7 +316,7 @@ export function AgentsTab() {
           <DialogHeader>
             <DialogTitle>Place an outbound call</DialogTitle>
             <DialogDescription>
-              {callAgent?.name} dials out through ElevenLabs using the <span className="font-medium text-foreground">{voice.label}</span> voice ({voice.tag}). Number shown: {elevenlabs.outboundNumber || 'not set'}.
+              {callAgent?.name} dials out through ElevenLabs using the <span className="font-medium text-foreground">{voice.label}</span> voice ({voice.tag}).
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">

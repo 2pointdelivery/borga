@@ -86,7 +86,7 @@ export function LeadEditDialog({
             <div className="space-y-3">
               {linkedCustomer ? (
                 <div className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-[11px] font-medium text-emerald-600">
-                  <Building2 className="h-3.5 w-3.5" /> Linked to customer account "{linkedCustomer.name}"
+                  <Building2 className="h-3.5 w-3.5" /> Linked to customer account &ldquo;{linkedCustomer.name}&rdquo;
                 </div>
               ) : (
                 <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={convertToCustomer}>

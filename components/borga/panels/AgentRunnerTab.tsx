@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { InboundEndpoint } from '../InboundEndpoint';
 import type { AgentRun, AgentRunStep, ScheduledTask, ScheduleInterval } from '@/lib/borga/data';
 
 const INTERVAL_LABEL: Record<ScheduleInterval, string> = {
@@ -118,10 +119,114 @@ function StreamingRun({ events, goal, agentName }: { events: string[]; goal: str
   );
 }
 
+/**
+ * Tier 5 heartbeat controls: kill switch + quiet hours, both durable in
+ * settings (config, not code). Pausing stops all proactive firing instantly;
+ * chat, voice, and manual runs keep working.
+ */
+function HeartbeatCard() {
+  const { activeWorkspaceId } = useBorga();
+  const [paused, setPaused] = useState<boolean | null>(null);
+  const [quiet, setQuiet] = useState({ start: '22:00', end: '07:00' });
+  const [draft, setDraft] = useState({ start: '22:00', end: '07:00' });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/borga/scheduler', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+      body: JSON.stringify({ action: 'heartbeat', ws: activeWorkspaceId }),
+    }).then((r) => r.json()).then((d: { paused?: boolean; quietHours?: { start: string; end: string } }) => {
+      setPaused(d.paused ?? false);
+      if (d.quietHours) {
+        setQuiet(d.quietHours);
+        setDraft(d.quietHours);
+      }
+    }).catch(() => setPaused(false));
+  }, [activeWorkspaceId]);
+
+  const togglePause = async () => {
+    const next = !(paused ?? false);
+    setPaused(next);
+    await fetch('/api/borga/scheduler', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+      body: JSON.stringify({ action: 'setHeartbeat', paused: next, ws: activeWorkspaceId }),
+    }).catch(() => setPaused(!next));
+  };
+
+  const saveQuiet = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch('/api/borga/scheduler', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ action: 'setQuietHours', start: draft.start, end: draft.end, ws: activeWorkspaceId }),
+      });
+      const d = await r.json() as { ok?: boolean; quietHours?: { start: string; end: string } };
+      if (d.ok && d.quietHours) setQuiet(d.quietHours);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Clock className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-semibold">Heartbeat</h3>
+          <Badge variant="outline" className={cn('text-[10px]', paused ? 'border-rose-500/30 text-rose-600' : 'border-emerald-500/30 text-emerald-600')}>
+            {paused === null ? '…' : paused ? 'Paused — kill switch on' : 'Beating — quiet by default'}
+          </Badge>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Quiet {quiet.start}–{quiet.end}</span>
+          <Input value={draft.start} onChange={(e) => setDraft((s) => ({ ...s, start: e.target.value }))} className="h-7 w-16 font-mono text-xs" placeholder="22:00" />
+          <Input value={draft.end} onChange={(e) => setDraft((s) => ({ ...s, end: e.target.value }))} className="h-7 w-16 font-mono text-xs" placeholder="07:00" />
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={saveQuiet} disabled={saving}>Save</Button>
+          <Button size="sm" variant={paused ? 'default' : 'outline'} className="h-7 gap-1 text-xs" onClick={togglePause}>
+            {paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+            {paused ? 'Resume' : 'Pause all'}
+          </Button>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Non-urgent checks wait out quiet hours and land here as held notices. Only urgent ones surface at night. Overlaps never stack.
+      </p>
+    </Card>
+  );
+}
+
+/** Tier 5 held inbox: catch-up-on-return, every item dismissible. */
+function NoticesInbox({ notices, onDismiss, onClear }: { notices: { id: string; title: string; body: string; severity: string; createdAt: string }[]; onDismiss: (id: string) => void; onClear: () => void }) {
+  if (!notices.length) return null;
+  return (
+    <Card className="p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-sm font-semibold">While you were away <Badge variant="secondary" className="ml-1">{notices.length}</Badge></h3>
+        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={onClear}>Dismiss all</Button>
+      </div>
+      <div className="max-h-56 space-y-2 overflow-y-auto">
+        {notices.slice(0, 20).map((n) => (
+          <div key={n.id} className="flex items-start gap-2 rounded-lg border bg-muted/20 p-2.5">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium">{n.title}</p>
+              <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{n.body}</p>
+            </div>
+            <Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-[11px]" onClick={() => onDismiss(n.id)}>Dismiss</Button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export function AgentRunnerTab() {
   const {
     agents, scheduledTasks, addScheduledTask, updateScheduledTask, deleteScheduledTask,
     toggleScheduledTask, agentRuns, addAgentRun, log, activeWorkspaceId, activeWorkspace, llm, llmCatalog,
+    notices, dismissNotice, clearNotices,
   } = useBorga();
 
   // Run form
@@ -163,7 +268,7 @@ export function AgentRunnerTab() {
     tick();
     const interval = setInterval(tick, 60000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [log, activeWorkspaceId]);
 
   async function runAgent() {
@@ -308,6 +413,9 @@ export function AgentRunnerTab() {
         title="Autonomous Agent Runner"
         sub="Run agents with real goals against live data — they plan, use tools, and take actual actions."
       />
+
+      <HeartbeatCard />
+      <NoticesInbox notices={notices} onDismiss={dismissNotice} onClear={clearNotices} />
 
       {/* Manual Run */}
       <Card className="p-5">
@@ -514,9 +622,7 @@ export function AgentRunnerTab() {
         <p className="mb-2 text-xs text-muted-foreground">
           External services can trigger agents by POSTing to this endpoint. The agent is selected automatically based on the event type.
         </p>
-        <code className="block rounded bg-muted px-3 py-2 font-mono text-xs">
-          POST /api/borga/webhooks/inbound?source=github&event=push
-        </code>
+        <InboundEndpoint />
         <p className="mt-2 text-xs text-muted-foreground">
           Supported sources: github, stripe, hubspot, booking events. Add a secret for HMAC-SHA256 signature verification.
         </p>

@@ -3,7 +3,7 @@
 A standalone copy of the marketing landing page (`components/landing/Landing.tsx` in the main
 app), built as a static export for GitHub Pages. It is intentionally separate from the main
 Borga app: that app is a dynamic, session-authenticated, database-backed Next.js server (API
-routes, `proxy.ts` auth middleware, Postgres) and cannot run on GitHub Pages, which only serves
+routes, `proxy.ts` auth middleware, MySQL) and cannot run on GitHub Pages, which only serves
 static files. This project has no dependency on any of that — it's pure marketing copy.
 
 ## Local dev

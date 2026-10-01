@@ -579,7 +579,7 @@ export function ReportsCenter() {
     const byType = (type: GlAccount['type']) => rows.filter((r) => r.account.type === type);
     const sum = (list: typeof rows, key: 'budgeted' | 'actual' | 'variance') => list.reduce((s, r) => s + r[key], 0);
     return { rows, byType, sum };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [activeBudget, journals, coa, accountById]);
 
   const preset = (kind: 'month' | 'quarter' | 'year' | 'lastyear' | 'all') => {

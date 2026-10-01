@@ -8,7 +8,7 @@ import {
   Mic,
   CornerDownRight,
 } from 'lucide-react';
-import { NAV_PAGES } from './nav';
+import { useVisibleNav } from './use-visible-nav';
 import { useBorga } from '@/lib/borga/store';
 import { useTheme } from './theme-provider';
 import { cn } from '@/lib/utils';
@@ -18,6 +18,7 @@ export function CommandPalette({
 }: {
   onOpenVoice: () => void;
 }) {
+  const navPages = useVisibleNav();
   const { paletteOpen, setPaletteOpen, setActiveAgentId } = useBorga();
   const { mode, setMode } = useTheme();
 
@@ -71,7 +72,7 @@ export function CommandPalette({
         </Command.Empty>
 
         <Command.Group heading="Go to">
-          {NAV_PAGES.map((p) => (
+          {navPages.map((p) => (
             <Command.Item
               key={p.id}
               value={p.label}
@@ -85,7 +86,7 @@ export function CommandPalette({
         </Command.Group>
 
         <Command.Group heading="Pages">
-          {NAV_PAGES.filter((p) => p.tabs).flatMap((p) =>
+          {navPages.filter((p) => p.tabs).flatMap((p) =>
             (p.tabs ?? []).map((t) => (
               <Command.Item
                 key={`${p.id}-${t.id}`}

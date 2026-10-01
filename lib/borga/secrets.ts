@@ -12,6 +12,7 @@ export const CONFIGURABLE_KEYS = [
   { envVar: 'OPENAI_API_KEY', label: 'OpenAI', hint: 'platform.openai.com/api-keys', kind: 'key' as const },
   { envVar: 'OPENROUTER_API_KEY', label: 'OpenRouter', hint: 'openrouter.ai/keys', kind: 'key' as const },
   { envVar: 'ELEVENLABS_API_KEY', label: 'ElevenLabs', hint: 'elevenlabs.io/app/api-key', kind: 'key' as const },
+  { envVar: 'DEEPGRAM_API_KEY', label: 'Deepgram', hint: 'console.deepgram.com — speech-to-text for push-to-talk', kind: 'key' as const },
   { envVar: 'COMPOSIO_API_KEY', label: 'Composio', hint: 'composio.dev — API key for toolkits', kind: 'key' as const },
   { envVar: 'WIGOLO_BASE_URL', label: 'Wigolo web research', hint: 'default: http://127.0.0.1:3333 — run "npx wigolo serve"', kind: 'url' as const },
   { envVar: 'WIGOLO_API_TOKEN', label: 'Wigolo API token', hint: 'only needed if wigolo is bound past loopback', kind: 'key' as const },
@@ -20,10 +21,11 @@ export const CONFIGURABLE_KEYS = [
   { envVar: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', hint: 'console.twilio.com — required for real outbound calls', kind: 'key' as const },
   { envVar: 'TWILIO_FROM_PHONE', label: 'Twilio From Number', hint: 'E.164 format, e.g. +14155550100 — your Twilio caller ID', kind: 'url' as const },
   { envVar: 'BORGA_ADMIN_TOKEN', label: 'Borga Engine', hint: 'Authentication token for orchestration engine', kind: 'key' as const },
-  { envVar: 'TWOPOINT_API_KEY', label: '2Point Engine', hint: '2pointlogistics.com — API key for live engine data', kind: 'key' as const },
+  { envVar: 'COMPANY_ENGINE_API_KEY', label: 'Company Engine (deployment key)', hint: 'Optional fallback key for the company API; each company can save its own under AI Platform → Company Engine', kind: 'key' as const },
   { envVar: 'LLM_BASE_URL', label: 'Custom LLM base URL', hint: 'e.g. http://localhost:8000/v1', kind: 'url' as const },
   { envVar: 'LLM_API_KEY', label: 'Custom LLM API key', hint: 'Bearer token for custom endpoint', kind: 'key' as const },
   { envVar: 'OLLAMA_BASE_URL', label: 'Ollama base URL', hint: 'default: http://127.0.0.1:11434/v1', kind: 'url' as const },
+  { envVar: 'SUPERMEMORY_API_KEY', label: 'Supermemory (deployment key)', hint: 'console.supermemory.ai/keys. Optional; a workspace can also save its own under Connections', kind: 'key' as const },
   { envVar: 'SMTP_HOST', label: 'SMTP Host', hint: 'e.g. smtp.gmail.com or smtp.sendgrid.net', kind: 'url' as const },
   { envVar: 'SMTP_PORT', label: 'SMTP Port', hint: '587 (STARTTLS) or 465 (SSL)', kind: 'key' as const },
   { envVar: 'SMTP_USER', label: 'SMTP Username', hint: 'Account / API user', kind: 'key' as const },
@@ -111,9 +113,16 @@ async function saveStore(store: SecretStore): Promise<boolean> {
   return setBorgaState('api_secrets', store);
 }
 
-/** Resolve an API key: process.env takes precedence over DB. */
+/** Template values from .env.example ("example", "xxx", "your-...") must not shadow a value saved in the dashboard. */
+const PLACEHOLDERS = new Set(['example', 'xxx', 'placeholder', 'changeme', 'change-me', 'none', 'null']);
+export function realEnv(envVar: string): string {
+  const v = (process.env[envVar] ?? '').trim();
+  return !v || PLACEHOLDERS.has(v.toLowerCase()) || /^your[-_ ]/i.test(v) ? '' : v;
+}
+
+/** Resolve an API key: a real process.env value takes precedence over the DB. */
 export async function getApiKey(envVar: string): Promise<string> {
-  const fromEnv = process.env[envVar] ?? '';
+  const fromEnv = realEnv(envVar);
   if (fromEnv) return fromEnv;
   try {
     const store = await loadStore();
@@ -138,7 +147,7 @@ export type KeyStatus = {
 export async function listKeyStatuses(): Promise<KeyStatus[]> {
   const store = await loadStore();
   return CONFIGURABLE_KEYS.map((cfg) => {
-    const fromEnv = process.env[cfg.envVar] ?? '';
+    const fromEnv = realEnv(cfg.envVar);
     if (fromEnv) {
       return { ...cfg, configured: true, source: 'env' as const, masked: maskValue(fromEnv, cfg.kind) };
     }

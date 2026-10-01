@@ -10,6 +10,7 @@ import {
   PlugZap,
   Settings,
   FolderKanban,
+  LifeBuoy,
 } from 'lucide-react';
 
 export type PageId =
@@ -17,6 +18,7 @@ export type PageId =
   | 'sales'
   | 'marketing'
   | 'communications'
+  | 'support'
   | 'finance'
   | 'projects'
   | 'hr'
@@ -54,6 +56,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'pipeline', label: 'Pipeline' },
       { id: 'customers', label: 'Customers' },
       { id: 'invoices', label: 'Invoicing' },
+      { id: 'recurring', label: 'Recurring Invoices' },
     ],
   },
   {
@@ -72,13 +75,22 @@ export const NAV_PAGES: NavPage[] = [
     ],
   },
   {
+    id: 'support', label: 'Support Desk', icon: LifeBuoy,
+    tabs: [
+      { id: 'tickets', label: 'Tickets' },
+      { id: 'settings', label: 'SLA & Mailbox' },
+    ],
+  },
+  {
     id: 'finance', label: 'Finance', icon: Wallet,
     tabs: [
       { id: 'ledger', label: 'Ledger' },
       { id: 'accounting', label: 'Accounting' },
       { id: 'banking', label: 'Banking' },
       { id: 'vendors', label: 'Vendors & AP' },
+      { id: 'recurring-bills', label: 'Recurring Bills' },
       { id: 'budgeting', label: 'Budgeting' },
+      { id: 'revenue', label: 'Revenue Tracker' },
       { id: 'reports', label: 'Reports' },
       { id: 'closures', label: 'Book Closure' },
     ],
@@ -110,7 +122,7 @@ export const NAV_PAGES: NavPage[] = [
     tabs: [
       { id: 'agents', label: 'Agents' },
       { id: 'runner', label: 'Agent Runner' },
-      { id: 'engine', label: '2point Engine' },
+      { id: 'engine', label: 'Company Engine' },
       { id: 'planner', label: 'Planner' },
       { id: 'activity', label: 'Activity Log' },
     ],
@@ -121,6 +133,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'toolkits', label: 'Composio Toolkits' },
       { id: 'ai-providers', label: 'AI & Voice' },
       { id: 'connected', label: 'Connected Apps' },
+      { id: 'connections', label: 'Connections (Twilio, Meta, Ads)' },
     ],
   },
   {

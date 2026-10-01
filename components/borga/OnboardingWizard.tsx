@@ -15,6 +15,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useBorga } from '@/lib/borga/store';
+import { parseServices } from '@/lib/borga/services';
 import {
   makeOnboarding, industryProfile, INDUSTRY_VALUATION, deriveValuation,
   CURRENCY_SYMBOL, type OnboardingStepId, type Workspace,
@@ -119,7 +120,7 @@ export function OnboardingWizard() {
   function saveIndustry() {
     const industry = ind.industry || 'General business';
     const profileData = industryProfile(industry);
-    updateWorkspace(ws!.id, { industry });
+    updateWorkspace(ws!.id, { industry, services: parseServices(ind.services) });
     addKnowledge({
       id: `kb-company-${Date.now().toString(36)}`,
       category: 'company',
@@ -294,7 +295,7 @@ export function OnboardingWizard() {
               <div><Label className="text-xs text-muted-foreground">What does your company do?</Label>
                 <Textarea value={ind.description} onChange={(e) => setInd({ ...ind, description: e.target.value })} placeholder="We help logistics teams route deliveries with AI…" className="mt-1" />
               </div>
-              <div><Label className="text-xs text-muted-foreground">Key services / products (comma separated)</Label>
+              <div><Label className="text-xs text-muted-foreground">Key services / products (comma separated; each becomes a line in your Revenue Tracker)</Label>
                 <Input value={ind.services} onChange={(e) => setInd({ ...ind, services: e.target.value })} className="mt-1" />
               </div>
               <div><Label className="text-xs text-muted-foreground">Key differentiators</Label>

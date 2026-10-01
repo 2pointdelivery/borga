@@ -31,6 +31,7 @@ import {
   INITIAL_BANK_TXNS,
   INITIAL_TAX_PROFILES,
   INITIAL_BUDGETS,
+  INITIAL_REVENUE_TRACKS,
   INITIAL_PROJECTS,
   INITIAL_RECONCILIATION_RULES,
   INITIAL_MCP_SERVERS,
@@ -45,6 +46,7 @@ import {
   INITIAL_WEBHOOKS,
   INITIAL_KPI_GROUPS,
   INITIAL_SCHEDULED_TASKS,
+  INITIAL_NOTICES,
   DEFAULT_LLM,
   LLM_PROVIDERS,
   VALUATION_CONFIG_SEED,
@@ -79,6 +81,7 @@ import {
   type ActivityEvent,
   type ScheduledTask,
   type AgentRun,
+  type ProactiveNotice,
   type Workspace,
   type Employee,
   type LeaveRequest,
@@ -99,11 +102,13 @@ import {
   type TeamInvite,
   type TaxProfile,
   type Budget,
+  type RevenueTrack,
   type Project,
   type ReconciliationRule,
   type McpServer,
 } from '@/lib/borga/data';
 import { getBorgaStatesByPrefix, setBorgaState } from '@/lib/borga/persistence';
+import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
 
@@ -114,11 +119,11 @@ export const WORKSPACE_ENTITIES = [
   'agents', 'goals', 'approvals', 'finance', 'toolkits', 'connections', 'ops', 'composio',
   'messages', 'ads', 'webhooks', 'kpis', 'llm', 'llmCatalog', 'valuation', 'fundraising', 'browses', 'whatsapp', 'chats',
   'elevenlabs', 'calls', 'knowledge', 'kbquestions', 'settings', 'tasks', 'posts', 'leads',
-  'activity', 'memories', 'scheduledTasks', 'agentRuns',
+  'activity', 'memories', 'scheduledTasks', 'agentRuns', 'notices',
   'employees', 'leave', 'invoices', 'messagingChannels', 'secureChats',
   'customers', 'contacts', 'vendors', 'bills', 'coa', 'journals', 'bankAccounts', 'bankTxns',
-  'workflows', 'closures', 'timeEntries', 'invites', 'taxProfiles', 'budgets', 'projects', 'reconciliationRules',
-  'mcpServers',
+  'workflows', 'closures', 'timeEntries', 'invites', 'taxProfiles', 'budgets', 'revenueTracks', 'projects', 'reconciliationRules',
+  'mcpServers', 'recurringInvoices', 'recurringBills',
 ] as const;
 
 const GLOBAL_ENTITIES = ['workspaces'] as const;
@@ -176,9 +181,13 @@ const DEFAULT_STATE = {
   invites: [],
   taxProfiles: INITIAL_TAX_PROFILES,
   budgets: INITIAL_BUDGETS,
+  revenueTracks: INITIAL_REVENUE_TRACKS,
   projects: INITIAL_PROJECTS,
   reconciliationRules: INITIAL_RECONCILIATION_RULES,
   mcpServers: INITIAL_MCP_SERVERS,
+  recurringInvoices: [] as RecurringInvoice[],
+  recurringBills: [] as RecurringBill[],
+  notices: INITIAL_NOTICES,
 };
 
 /** Resolve the authenticated user id from the session cookie. */
@@ -260,6 +269,7 @@ export async function GET(req: NextRequest) {
     memories: get<AgentMemory[]>('memories') ?? DEFAULT_STATE.memories,
     scheduledTasks: get<ScheduledTask[]>('scheduledTasks') ?? DEFAULT_STATE.scheduledTasks,
     agentRuns: get<AgentRun[]>('agentRuns') ?? DEFAULT_STATE.agentRuns,
+    notices: get<ProactiveNotice[]>('notices') ?? DEFAULT_STATE.notices,
     employees: get<Employee[]>('employees') ?? DEFAULT_STATE.employees,
     leave: get<LeaveRequest[]>('leave') ?? DEFAULT_STATE.leave,
     invoices: get<Invoice[]>('invoices') ?? DEFAULT_STATE.invoices,
@@ -279,9 +289,12 @@ export async function GET(req: NextRequest) {
     invites: get<TeamInvite[]>('invites') ?? DEFAULT_STATE.invites,
     taxProfiles: get<TaxProfile[]>('taxProfiles') ?? DEFAULT_STATE.taxProfiles,
     budgets: get<Budget[]>('budgets') ?? DEFAULT_STATE.budgets,
+    revenueTracks: get<RevenueTrack[]>('revenueTracks') ?? DEFAULT_STATE.revenueTracks,
     projects: get<Project[]>('projects') ?? DEFAULT_STATE.projects,
     reconciliationRules: get<ReconciliationRule[]>('reconciliationRules') ?? DEFAULT_STATE.reconciliationRules,
     mcpServers: get<McpServer[]>('mcpServers') ?? DEFAULT_STATE.mcpServers,
+    recurringInvoices: get<RecurringInvoice[]>('recurringInvoices') ?? DEFAULT_STATE.recurringInvoices,
+    recurringBills: get<RecurringBill[]>('recurringBills') ?? DEFAULT_STATE.recurringBills,
   });
 }
 

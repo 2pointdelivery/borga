@@ -230,7 +230,7 @@ export function BudgetTab() {
         <Card className="p-4">
           <p className="text-sm font-semibold">Forecast assumptions</p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Default month-over-month growth applied when generating the forecast — override any single account in the "Growth %" column of the grid below.
+            Default month-over-month growth applied when generating the forecast — override any single account in the &ldquo;Growth %&rdquo; column of the grid below.
           </p>
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <div>

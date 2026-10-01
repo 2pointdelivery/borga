@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Plus, Trash2, ArrowLeft, CheckSquare, Receipt, LayoutGrid, GripVertical, CalendarClock, Users, X, Check } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -76,7 +76,7 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
   const [addMemberId, setAddMemberId] = useState('');
   const expenseAccounts = coa.filter((a) => a.type === 'expense' || a.type === 'cost');
 
-  const createProject = () => {
+  const createProject = useCallback(() => {
     if (!form.name.trim()) return;
     const p: Project = {
       id: `proj-${Date.now()}`,
@@ -93,7 +93,7 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
     setCreateOpen(false);
     setForm({ name: '', description: '', ownerId: '', customerId: '', budgetAmount: '' });
     log({ agentId: 'a-pm', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Project "${p.name}" created.` });
-  };
+  }, [form, addProject, log]);
 
   const removeProject = (p: Project) => {
     deleteProject(p.id);
@@ -101,7 +101,7 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
     log({ agentId: 'a-pm', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Project "${p.name}" deleted (linked tasks and expenses were unlinked, not removed).` });
   };
 
-  const addProjectTask = () => {
+  const addProjectTask = useCallback(() => {
     if (!selected || !taskDraft.trim()) return;
     addTask({
       id: `t-${Date.now()}`,
@@ -117,9 +117,9 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
       projectId: selected.id,
     });
     setTaskDraft('');
-  };
+  }, [selected, taskDraft, addTask, agents]);
 
-  const addProjectExpense = () => {
+  const addProjectExpense = useCallback(() => {
     if (!selected || !expenseDraft.label.trim() || !Number(expenseDraft.amount)) return;
     const account = expenseAccounts.find((a) => a.id === expenseDraft.accountId);
     addFinanceEntry({
@@ -135,14 +135,14 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
       accountId: account?.id,
     });
     setExpenseDraft({ label: '', amount: '', accountId: '' });
-  };
+  }, [selected, expenseDraft, expenseAccounts, addFinanceEntry]);
 
-  const addMilestone = () => {
+  const addMilestone = useCallback(() => {
     if (!selected || !milestoneDraft.title.trim()) return;
     const m: Milestone = { id: `ms-${Date.now()}`, title: milestoneDraft.title.trim(), dueDateIso: milestoneDraft.dueDateIso || undefined, done: false };
     updateProject(selected.id, { milestones: [...(selected.milestones ?? []), m] });
     setMilestoneDraft({ title: '', dueDateIso: '' });
-  };
+  }, [selected, milestoneDraft, updateProject]);
 
   const toggleMilestone = (m: Milestone) => {
     if (!selected) return;

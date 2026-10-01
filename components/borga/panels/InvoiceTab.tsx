@@ -402,7 +402,7 @@ export function InvoiceTab() {
               <tr key={i.id} className="border-b last:border-0 hover:bg-muted/20">
                 <td className="px-4 py-2.5 font-medium">
                   {i.number}
-                  {i.externalRef && <span className="block text-[10px] font-normal text-muted-foreground">ext {i.externalRef}</span>}
+                  {i.externalRef && <span className="block text-[10px] font-normal text-muted-foreground">{i.externalRef.startsWith('rec:') ? 'recurring' : 'ext ' + i.externalRef}</span>}
                 </td>
                 <td className="hidden px-4 py-2.5 text-muted-foreground sm:table-cell">{i.client}</td>
                 <td className="hidden px-4 py-2.5 text-muted-foreground md:table-cell">{i.issued} → {i.due}</td>
