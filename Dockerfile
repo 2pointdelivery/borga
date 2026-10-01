@@ -14,6 +14,9 @@ RUN corepack enable && corepack prepare pnpm@10.33.4 --activate
 COPY --from=builder /app/package.json /app/pnpm-lock.yaml ./
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
+# Database migrations and the script that applies them (run by the "migrate" service in deploy/docker-compose.yml).
+COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder /app/scripts/migrate.mjs /app/scripts/migrate-core.mjs ./scripts/
 RUN pnpm install --frozen-lockfile --prod && chown -R node:node /app
 # Secrets (DATABASE_URL, SMTP_*, CRON_SECRET, ...) come from the host's environment, never from the image.
 USER node

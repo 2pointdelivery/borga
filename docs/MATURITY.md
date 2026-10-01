@@ -12,7 +12,7 @@ Legend: **P0** fix before exposing to real users, **P1** fix before relying on i
 - Added CI (`.github/workflows/ci.yml`: typecheck, lint, test, build), feature flags, and the Support Desk.
 
 ## P0: needs attention
-1. **Apply migration `drizzle/0001_*.sql` with care.** It makes `borga_users.email` unique (the old index allowed duplicate accounts under a signup race). It also adds `reset_token` / `reset_token_expires`, which your live DB probably already has, so edit those two lines out if `db:migrate` reports duplicate columns. Check for duplicate emails first.
+1. **Migration `0001` (unique email) is now safe to apply. DONE 2026-10-01 (T22).** See the update at the end of this file. Still to do: run it on the development database (`pnpm db:migrate`; `--dry-run` shows it as the one pending migration) and on production (automatic).
 2. **Secrets are partly global.** Integration credentials (Twilio, Meta, Google Ads, LinkedIn, ChatGPT Ads) are now per user + workspace and encrypted (`Connections` tab). SMTP, LLM and the older Twilio keys in `/api/borga/config` are still one shared row that any signed-in user can overwrite; fine single-tenant, scope them before multi-tenant use. Phase 4 migrates calls to the per-workspace Twilio connection.
 3. ~~Inbound/outbound business-event webhooks were unreachable and cross-tenant~~ **Fixed 2026-10-01.** Inbound now authenticates with a per-workspace bearer token or webhook HMAC and uses user-scoped keys; dispatch is user-scoped, signs headers correctly (it previously sent `sha256=[object Promise]`), blocks private/internal targets by resolving DNS, and retries from cron. Neither could ever have worked before: the UI omitted the required CSRF header.
 4. **Uncommitted work.** ~130 changed/untracked files (Electron shell, agent core, heartbeat, cron, revenue tracker, this work) are not in git. Review and commit; one disk failure loses them.
@@ -89,3 +89,16 @@ Still open: backups live on the same VM disk (copy them off the VM); there is no
 ## Update 2026-10-01: cross-tenant test suite (T12)
 
 `pnpm test:tenancy` (9 tests, live server and database) proves one user cannot read or change another's data through any workspace-scoped route, and found three real defects (WhatsApp keyspace and operator bypass, un-prefixed fallbacks in memory and scheduler), now fixed. See docs/ROUTE_AUDIT.md. Not in CI yet. Isolation relies on the user id coming from the signed cookie; the `u` and `ws` query parameters on the public webhook and inbound-mail endpoints are authenticated by a per-workspace token or provider signature (tested).
+
+## Update 2026-10-01: database migrations (T22)
+
+**What was wrong.** `drizzle/0001` re-added the `reset_token` columns that the development database already had, so it would have run `DROP INDEX`, then failed on "Duplicate column name", leaving `borga_users` with no email index at all (MySQL DDL cannot be rolled back). It would also have failed halfway on duplicate emails. A second, separate schema in `deploy/init.sql` could have drifted from the migrations.
+
+**What changed.**
+- `0001` is idempotent: each change checks `information_schema` first, and the index swap is a single atomic `ALTER`, so a failure leaves the old index in place.
+- `scripts/migrate.mjs` (`pnpm db:migrate`, `--dry-run`) applies pending migrations using drizzle's own history table. It takes a MySQL named lock (two runs at once are safe), refuses to start if duplicate emails exist (listing them; nothing is changed), refuses to replay migrations over tables it did not create, names the exact statement on failure, and verifies the final schema.
+- Docker: a one-shot `migrate` service runs before the app and the app starts only if it succeeded. `init.sql` is gone, so the files in `drizzle/` are the single source of truth. `deploy/migrate.sh` runs it by hand.
+
+**Verified** against local MySQL 8.4 (the production image's version) with `pnpm test:migrate` (8 scenarios, each in a throwaway database): fresh database and an immediate second run; a database with only `0000`; the exact state of the real development database (0000 recorded, reset columns added by hand, plain index, 21 users: no rows lost, index becomes unique); duplicate emails refused with nothing changed, then fixed and re-run; the database rejects `WHO@Example.TEST` after `who@example.test`; `--dry-run`; two simultaneous runs; and tables not created by the migrations. With the original `0001` restored, the development-database scenario fails with "Duplicate column name 'reset_token'". The script also ran from a directory laid out like the image (`scripts/` and `drizzle/` only). The compose file parses as YAML with the intended dependency order. 5 unit tests for the pure helpers run in `pnpm test`.
+
+**Not verified:** the Docker image and the `migrate` service have not run (no Docker here); the migration was not applied to the real development database (dry run only: one pending); `pnpm test:migrate` is not in CI (it needs a MySQL service).

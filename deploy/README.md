@@ -57,10 +57,16 @@ Do these in order on the VM and stop at the first failure. Each line says what a
 
 1. `docker compose build` finishes. (It builds Next.js on the VM; expect several minutes.)
 2. `docker compose up -d`, then `docker compose ps`: `db` is healthy, `app` is up, `caddy` is up.
-3. `docker compose logs app` shows "Ready" and no "Refusing to start" (that message lists exactly which secret is missing).
+3. `docker compose logs migrate` ends with "schema verified" (the tables are created by this one-shot service before the app starts). `docker compose logs app` shows "Ready" and no "Refusing to start" (that message lists exactly which secret is missing).
 4. `curl -s http://127.0.0.1:13000/api/health` shows `"db":"connected"`.
 5. `https://YOUR_DOMAIN/login` loads over HTTPS with a valid certificate (DNS must already point at the VM and ports 80 and 443 must be open in the Oracle security list and the VM firewall).
 6. Sign up with an address from `BORGA_OPERATOR_EMAILS`, then create an invite under Settings and sign up a second address with it.
 7. Install the systemd timers, then `sudo systemctl start borga-cron.service` and `journalctl -u borga-cron.service -n 20`: it must print JSON with `"ok":true`, not a 401.
 8. Run `./backup.sh`, then restore that file into a scratch database to prove the backup is usable (command in the header of `backup.sh`).
 9. Copy a backup off the VM. A backup on the same disk does not survive losing the VM.
+
+## Database migrations
+
+The schema lives only in the files in `drizzle/`. A one-shot `migrate` service applies pending migrations on every `docker compose up`, before the app starts, and the app does not start if it fails (`docker compose logs migrate` says why). `./update.sh` takes a backup first, so a failed migration can be undone by restoring it. To preview or run by hand: `./migrate.sh --dry-run`, `./migrate.sh`.
+
+The migration that makes `borga_users.email` unique refuses to run while two accounts share an email in any letter case, and lists them. Merge or delete the extras, then run it again; nothing is changed until then.
