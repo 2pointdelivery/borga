@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowRight, ArrowLeft, Check, Loader2, Building2, Wallet,
   Users, LineChart, Sparkles,
@@ -40,13 +40,14 @@ export function OnboardingWizard() {
   const { activeWorkspace, updateWorkspace, addFinanceEntry, addEmployee, addKnowledge, setOnboarding, setActiveWorkspace, hydrate, synced, finance, knowledge } = useBorga();
   const ws = activeWorkspace();
 
-  const [step, setStep] = useState<StepId>(() => {
-    if (typeof window !== 'undefined') {
-      const p = new URLSearchParams(window.location.search).get('step');
-      if (p && ORDER.includes(p as StepId)) return p as StepId;
-    }
-    return 'profile';
-  });
+  // Follow the address, not a one-time read of it: after "router.push('/app/onboarding?step=industry')" the component mounts
+  // before the address has changed, so reading window.location at mount fell back to the first step.
+  const wanted = useSearchParams().get('step');
+  const wantedStep = wanted && ORDER.includes(wanted as StepId) ? (wanted as StepId) : null;
+  const [step, setStep] = useState<StepId>(wantedStep ?? 'profile');
+  useEffect(() => {
+    if (wantedStep) setStep(wantedStep);
+  }, [wantedStep]);
 
   const [profile, setProfile] = useState({ name: '', legalName: '', country: '', currency: 'USD', website: '', email: '' });
   const [ind, setInd] = useState({ industry: '', description: '', services: '', differentiators: '', facts: '' });
@@ -59,7 +60,25 @@ export function OnboardingWizard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Start from what the company already has (from the New company dialog or an earlier visit) instead of a blank form,
+  // so this step never asks again for details it already holds and saving it cannot blank them out.
+  useEffect(() => {
+    if (!ws) return;
+    setProfile((p) => (p.name ? p : { name: ws.name ?? '', legalName: ws.legalName ?? '', country: ws.country ?? '', currency: ws.currency ?? 'USD', website: ws.website ?? '', email: ws.email ?? '' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws?.id]);
+
   const onboarding = ws?.onboarding ?? makeOnboarding();
+
+  // Opened with no ?step= (for example "Resume onboarding"): start at the first step that is not done yet, so a company whose
+  // profile is already filled in is never shown the profile page a second time.
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (!ws || resumed.current || wantedStep) return;
+    resumed.current = true;
+    const first = ORDER.find((id) => !ws.onboarding?.steps.find((s) => s.id === id)?.completed);
+    if (first) setStep(first);
+  }, [ws, wantedStep]);
 
   function markComplete(ids: StepId[]) {
     if (!ws) return;

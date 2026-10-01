@@ -284,7 +284,9 @@ export function NewWorkspaceDialog({
       email: form.email.trim() || undefined,
       phone: form.phone.trim() || undefined,
       website: form.website.trim() || undefined,
-      onboarding: makeOnboarding(),
+      // This dialog already collected the company profile, so the wizard must not ask for it again on a second, simpler page:
+      // the profile step starts completed and the wizard opens at the next step.
+      onboarding: ((ob) => ({ ...ob, started: true, currentStep: 'industry' as const, steps: ob.steps.map((s) => (s.id === 'profile' ? { ...s, completed: true } : s)) }))(makeOnboarding()),
     };
     addWorkspace(ws);
     setActiveWorkspace(ws.id);
@@ -296,7 +298,7 @@ export function NewWorkspaceDialog({
       message: `Company "${ws.name}" registered${ws.country ? ` in ${ws.country}` : ''} and activated. All modules now scope to this tenant.`,
     });
     onOpenChange(false);
-    router.push('/app/onboarding?step=profile');
+    router.push('/app/onboarding?step=industry');
   };
 
   return (
