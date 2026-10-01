@@ -3,8 +3,8 @@ name: Deploy landing page to GitHub Pages
 # Publishes only landing-site/ — the static marketing page — to GitHub
 # Pages. The main Borga app (app/, components/borga/, api/*) is a dynamic,
 # database-backed, session-authenticated Next.js app and cannot run on GitHub
-# Pages (no server, no API routes, no Postgres). It keeps deploying wherever
-# it already does (Docker / Cloudflare via wrangler.toml). This workflow
+# Pages (no server, no API routes, no MySQL). It keeps deploying wherever
+# it already does (Docker / any Node host). This workflow
 # builds the standalone static export in landing-site/ and deploys it
 # separately, with its "Sign in" / "Get started" buttons pointed at the real
 # app's URL via the APP_URL repository variable.

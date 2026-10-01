@@ -7,28 +7,30 @@ composio.dev-powered OAuth integrations.
 
 ## Modules
 
-Ten top-level themes, each with a tabbed sub-menu:
+Eleven top-level themes, each with a tabbed sub-menu:
 
 - **Overview** — Command Center — Analytics (health score, funnel, engagement) — KPIs & Reports
 - **Sales** — Pipeline (kanban) — Customers (accounts + contacts CRM with account intelligence) — Invoicing (full CRUD)
 - **Marketing** — Social Media scheduling — Advertising campaigns (spend / ROAS)
 - **Communications** — Unified Inbox (email / SMS / WhatsApp / Telegram with composio.dev OAuth) — E2E encrypted live chat — Calls
+- **Support Desk** — Tickets (list / board, Jira-style workflow, SLA timers) — SLA & Mailbox (policies, business hours, linked email inbox). See [docs/TICKETING.md](docs/TICKETING.md)
+- **Support Desk** — Tickets (list / board, Jira-style workflow, SLA timers) — SLA & Mailbox (policies, business hours, linked email inbox). See [docs/TICKETING.md](docs/TICKETING.md)
 - **Finance** — Ledger — Accounting (chart of accounts, double-entry journal, trial balance) — Banking (CSV import, reconciliation engine, composio.dev/Plaid linking) — Vendors & AP (vendors + bills) — Reports (P&L, balance-sheet snapshot, CSV export)
 - **HR** — Directory — Time Off (leave approvals) — Teams
 - **Company** — Companies (multi-workspace management) — Valuation model — Fundraising — Knowledge Base
-- **AI Platform** — Agents — Agent Runner — 2point Engine — Planner — Activity Log
+- **AI Platform** — Agents — Agent Runner — Company Engine — Planner — Activity Log
 - **Integrations** — Composio Toolkits — AI & Voice keys — Connected Apps
 - **Settings**
 
 Every module is scoped to the active company workspace. Workspaces are created/switched from the
 topbar switcher or managed under **Company → Companies**. Data is persisted per-workspace as JSON
-documents in Postgres (`ws::<id>::<entity>` keys in `borga_state`).
+documents in MySQL (`u::<user>::ws::<id>::<entity>` keys in `borga_state`; tickets use one row each under `t::`).
 
 ## Tech Stack
 
 - Next.js 16 (App Router) — React 19 — TypeScript 5
 - Tailwind CSS 4 + shadcn-style primitives (`components/ui/`) + lucide icons + recharts
-- Drizzle ORM + PostgreSQL (`postgres` driver)
+- Drizzle ORM + MySQL-compatible database (`mysql2` driver: MySQL 8, MariaDB, TiDB)
 - Zustand state management with fire-and-forget persistence (`/api/borga/data`)
 - WebCrypto (ECDH + AES-GCM) for end-to-end encrypted chat
 - composio.dev REST v3 proxy for OAuth toolkit connections (`/api/borga/composio`)
@@ -49,17 +51,40 @@ documents in Postgres (`ws::<id>::<entity>` keys in `borga_state`).
   webhooks, scheduler)
 - `components/borga/` — dashboard shell, grouped navigation (`nav.ts`), workspace switcher &
   dialogs, voice assistant, command palette, and one panel per module in `panels/`
-- `lib/borga/` — domain types & seeds (`data.ts`), Zustand store (`store.ts`), Postgres
+- `lib/borga/` — domain types & seeds (`data.ts`), Zustand store (`store.ts`), MySQL
   persistence, E2E crypto helpers (`crypto.ts`), agent context/tools/secrets
 - `components/ui/` — shadcn-style primitives; `hooks/`, `utils/`, `scripts/`
 
 ## Deployment
 
 The app itself (this directory) is a dynamic, database-backed Next.js server — it needs a Node
-host (see `Dockerfile`, `wrangler.toml` / `open-next.config.ts` for Cloudflare) and cannot run on
+host (see `Dockerfile`; Cloudflare Workers is not supported — the app needs raw TCP for MySQL and IMAP) and cannot run on
 static hosts like GitHub Pages. The marketing landing page has been split out into
 [`landing-site/`](landing-site/README.md) as a standalone static export specifically so it *can*
 be hosted on GitHub Pages, deployed automatically by `.github/workflows/deploy-landing.yml`.
+
+## Feature toggles
+
+Settings → Features switches modules on/off per workspace (registry in `lib/borga/features.ts`). Off =
+hidden from navigation and its API answers 404; data is kept. `BORGA_FEATURES_OFF=voice,calls` forces
+features off for a whole deployment.
+
+## More docs
+
+- [docs/TICKETING.md](docs/TICKETING.md) — support desk design, email setup, wiring plan
+- [docs/HOSTING.md](docs/HOSTING.md) — free hosting options and setup
+- [docs/EMAIL_UPDATES.md](docs/EMAIL_UPDATES.md): per-company email updates and digest
+- [docs/MATURITY.md](docs/MATURITY.md) — what needs attention before this is production-ready
+
+## Feature toggles
+
+Settings → Features switches modules on/off per workspace (registry: `lib/borga/features.ts`). Off = hidden from navigation and its API answers 404; data is kept. `BORGA_FEATURES_OFF=voice,calls` forces features off for a whole deployment.
+
+## More docs
+
+- [docs/TICKETING.md](docs/TICKETING.md): support desk design, email setup, wiring plan
+- [docs/HOSTING.md](docs/HOSTING.md): free hosting options
+- [docs/MATURITY.md](docs/MATURITY.md): what needs attention
 
 ## Security notes
 

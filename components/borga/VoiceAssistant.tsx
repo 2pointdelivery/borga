@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Mic, MicOff, Phone, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,8 +21,42 @@ const SUGGESTIONS = [
 
 export function VoiceAssistant({ expanded }: { expanded: boolean }) {
   const { voice, setVoice, userName, settings, setSettings, agents, placeCall: storePlaceCall } = useBorga();
-  const { startListening, stopListening, askBorga } = useVoice();
+  const { startListening, stopListening, askBorga, startPushTalk, stopPushTalk } = useVoice();
   const wakeWordEnabled = !!settings.notifications.voice;
+  const [pttActive, setPttActive] = useState(false);
+
+  // Tier 3 push-to-talk triggers: hold the talk button, or hold Space outside
+  // a text field. Release sends. Any new turn interrupts Borga mid-reply.
+  const pttDown = useCallback(() => {
+    setPttActive(true);
+    void startPushTalk();
+  }, [startPushTalk]);
+  const pttUp = useCallback(() => {
+    setPttActive(false);
+    stopPushTalk();
+  }, [stopPushTalk]);
+
+  useEffect(() => {
+    const isTyping = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    };
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.repeat || isTyping(e) || pttActive) return;
+      e.preventDefault();
+      pttDown();
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || isTyping(e)) return;
+      pttUp();
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
+  }, [pttDown, pttUp, pttActive]);
 
   const [callTo, setCallTo] = useState('');
   const [callMsg, setCallMsg] = useState('');
@@ -167,16 +201,35 @@ export function VoiceAssistant({ expanded }: { expanded: boolean }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-center gap-3 pb-6 pt-2">
-          <Button
-            size="lg"
-            variant={voice.listening ? 'destructive' : 'default'}
-            className={cn('relative h-14 w-14 rounded-full p-0', voice.listening && 'borga-glow')}
-            onClick={toggle}
-            aria-label={voice.listening ? 'Stop listening' : 'Start listening'}
-          >
-            {voice.listening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-          </Button>
+        <div className="flex flex-col items-center gap-2 pb-6 pt-2">
+          <div className="flex items-center justify-center gap-3">
+            <Button
+              size="lg"
+              variant={voice.listening ? 'destructive' : 'default'}
+              className={cn('relative h-14 w-14 rounded-full p-0', voice.listening && 'borga-glow')}
+              onClick={toggle}
+              aria-label={voice.listening ? 'Stop listening' : 'Start listening'}
+              title="Toggle open-mic listening"
+            >
+              {voice.listening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+            </Button>
+            <Button
+              size="lg"
+              variant={pttActive ? 'destructive' : 'outline'}
+              className={cn('relative h-14 w-14 rounded-full p-0 select-none', pttActive && 'borga-glow')}
+              onPointerDown={(e) => { e.preventDefault(); pttDown(); }}
+              onPointerUp={pttUp}
+              onPointerLeave={() => { if (pttActive) pttUp(); }}
+              onContextMenu={(e) => e.preventDefault()}
+              aria-label="Hold to talk"
+              title="Hold to talk (or hold Space)"
+            >
+              <Mic className="h-5 w-5" />
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {pttActive ? 'Release to send…' : 'Hold the mic (or Space) to talk'}
+          </p>
         </div>
       </div>
     </div>

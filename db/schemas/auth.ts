@@ -1,4 +1,4 @@
-import { varchar, datetime, mysqlTable, index } from 'drizzle-orm/mysql-core';
+import { varchar, datetime, mysqlTable, uniqueIndex } from 'drizzle-orm/mysql-core';
 
 // Application users. Passwords are stored hashed with scrypt (see lib/auth/password).
 export const users = mysqlTable(
@@ -13,7 +13,7 @@ export const users = mysqlTable(
     createdAt: datetime('created_at').notNull(),
   },
   (t) => ({
-    emailIdx: index('idx_users_email').on(t.email),
+    emailIdx: uniqueIndex('idx_users_email').on(t.email),
   }),
 );
 

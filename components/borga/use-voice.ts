@@ -200,16 +200,34 @@ export function useVoice() {
     if (engine.shouldListen) scheduleRestart(setVoice, delay);
   }, [setVoice]);
 
+  // Tier 3: the single Audio element Borga is speaking through (if any), so a
+  // new turn can interrupt it instead of talking over it.
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Tier 3: stop speaking immediately and listen. A new turn (typed,
+  // push-to-talk, or open-mic) calls this first — Borga never talks over you.
+  const interrupt = useCallback(() => {
+    try { activeAudioRef.current?.pause(); } catch { /* ignore */ }
+    activeAudioRef.current = null;
+    try { speech?.cancel(); } catch { /* ignore */ }
+    engine.busy = false;
+  }, [speech]);
+
   const speak = useCallback(
     async (text: string, onend?: () => void) => {
       engine.busy = true;
       try { engine.rec?.stop(); } catch { /* ignore */ }
+      // Don't listen to itself: mic stays down until finish()/interrupt().
+      try { speech?.cancel(); } catch { /* ignore */ }
 
       const finish = () => {
+        activeAudioRef.current = null;
         onend?.();
         resumeSoon();
       };
 
+      // "thinking…" is cleared by the caller when the reply arrives; speaking
+      // starts as early as possible (streamed TTS upstream, Tier 1 SSE ready).
       if (elevenlabs?.connected) {
         try {
           const res = await fetch('/api/borga/voice/tts', {
@@ -221,6 +239,7 @@ export function useVoice() {
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
+            activeAudioRef.current = audio;
             audio.onended = () => { URL.revokeObjectURL(url); finish(); };
             audio.onerror = () => { URL.revokeObjectURL(url); finish(); };
             audio.play().catch(() => finish());
@@ -250,6 +269,7 @@ export function useVoice() {
 
   const askBorga = useCallback(
     async (prompt: string) => {
+      interrupt();
       engine.busy = true;
       try { engine.rec?.stop(); } catch { /* ignore */ }
       setVoice({ thinking: true });
@@ -280,7 +300,7 @@ export function useVoice() {
         return reply;
       }
     },
-    [llm, log, setVoice, speak, activeWorkspaceId, activeWorkspace],
+    [llm, log, setVoice, speak, interrupt, activeWorkspaceId, activeWorkspace],
   );
 
   const parseCommand = useCallback(
@@ -319,6 +339,7 @@ export function useVoice() {
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      interrupt();
       goToSleep();
       setVoice({ transcript: trimmed, thinking: false });
       const local = parseCommand(trimmed);
@@ -335,7 +356,7 @@ export function useVoice() {
       }
       void askBorga(trimmed);
     },
-    [askBorga, goToSleep, log, parseCommand, setVoice, speak],
+    [askBorga, goToSleep, interrupt, log, parseCommand, setVoice, speak],
   );
 
   const handleTranscriptEvent = useCallback(
@@ -401,10 +422,90 @@ export function useVoice() {
     setVoice({ listening: false, awake: false });
   }, [setVoice]);
 
+  // Tier 3 push-to-talk: hold key -> MediaRecorder captures -> release ->
+  // POST to the server STT seam (/api/borga/voice/stt, Deepgram) -> transcript
+  // feeds the SAME handleFinalCommand/askBorga entrypoint as a typed turn.
+  // The brain is untouched; only how the turn arrives changes.
+  const pttRef = useRef<{ recorder: MediaRecorder | null; chunks: Blob[]; stream: MediaStream | null }>({
+    recorder: null,
+    chunks: [],
+    stream: null,
+  });
+
+  const startPushTalk = useCallback(async () => {
+    interrupt();
+    try { engine.rec?.stop(); } catch { /* ignore */ }
+    engine.busy = true;
+    setVoice({ thinking: true, transcript: 'Listening… (release to send)' });
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      pttRef.current = { recorder, chunks: [], stream };
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) pttRef.current.chunks.push(e.data);
+      };
+      recorder.start();
+    } catch {
+      engine.busy = false;
+      setVoice({ thinking: false, lastReply: 'Microphone access was denied. Allow microphone access to use push-to-talk.' });
+      onPermissionDenied();
+    }
+  }, [interrupt, setVoice, onPermissionDenied]);
+
+  const stopPushTalk = useCallback(() => {
+    const { recorder, chunks, stream } = pttRef.current;
+    if (!recorder || recorder.state === 'inactive') {
+      engine.busy = false;
+      setVoice({ thinking: false });
+      resumeSoon();
+      return;
+    }
+    setVoice({ transcript: 'Thinking…', thinking: true });
+    recorder.onstop = async () => {
+      try { stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      pttRef.current = { recorder: null, chunks: [], stream: null };
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      if (!blob.size) {
+        engine.busy = false;
+        setVoice({ thinking: false, transcript: '' });
+        resumeSoon();
+        return;
+      }
+      try {
+        const res = await fetch('/api/borga/voice/stt', {
+          method: 'POST',
+          headers: { 'Content-Type': blob.type || 'audio/webm' },
+          body: blob,
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { transcript?: string };
+          const text = (data.transcript ?? '').trim();
+          if (text) {
+            handleFinalCommand(text);
+            return;
+          }
+          setVoice({ thinking: false, transcript: '', lastReply: 'I didn\u2019t catch that — try again.' });
+        } else {
+          // 501 = Deepgram not configured: user keeps open-mic/browser path.
+          setVoice({ thinking: false, transcript: '', lastReply: 'Push-to-talk transcription isn\u2019t configured (add DEEPGRAM_API_KEY) — use open-mic or type instead.' });
+        }
+      } catch {
+        setVoice({ thinking: false, transcript: '', lastReply: 'Transcription failed — use open-mic or type instead.' });
+      } finally {
+        engine.busy = false;
+        resumeSoon();
+      }
+    };
+    recorder.stop();
+  }, [handleFinalCommand, setVoice, resumeSoon]);
+
   return {
     startListening,
     stopListening,
     speak,
     askBorga,
+    interrupt,
+    startPushTalk,
+    stopPushTalk,
   };
 }

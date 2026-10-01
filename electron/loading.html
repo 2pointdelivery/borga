@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Borga — AI Company OS</title>
+  <style>
+    body {
+      background-color: #09090b; /* Zinc 950 */
+      color: #f4f4f5; /* Zinc 100 */
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    .container {
+      text-align: center;
+      max-width: 400px;
+      padding: 20px;
+    }
+
+    .logo-container {
+      margin-bottom: 24px;
+      position: relative;
+    }
+
+    .logo {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #ffffff 0%, #a1a1aa 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin: 0;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      color: #71717a; /* Zinc 500 */
+      margin-top: 4px;
+      margin-bottom: 32px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    /* CSS Modern Spinner */
+    .spinner {
+      position: relative;
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 24px;
+    }
+
+    .spinner-ring {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      border-top-color: #ffffff;
+      animation: spin 1s cubic-bezier(0.55, 0.15, 0.45, 0.85) infinite;
+    }
+
+    .spinner-ring-inner {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      right: 6px;
+      bottom: 6px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      border-bottom-color: #a1a1aa;
+      animation: spin-reverse 1.5s linear infinite;
+    }
+
+    .status-text {
+      font-size: 13px;
+      color: #a1a1aa; /* Zinc 400 */
+      font-weight: 400;
+      margin: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    @keyframes spin-reverse {
+      0% { transform: rotate(360deg); }
+      100% { transform: rotate(0deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo-container">
+      <h1 class="logo">Borga</h1>
+      <div class="subtitle">AI Company OS</div>
+    </div>
+    
+    <div class="spinner">
+      <div class="spinner-ring"></div>
+      <div class="spinner-ring-inner"></div>
+    </div>
+
+    <p class="status-text" id="status">Initializing desktop app environment...</p>
+  </div>
+
+  <script>
+    // Cycle through nice status messages if startup takes a moment
+    const statuses = [
+      "Starting secure database connections...",
+      "Booting AI core engines...",
+      "Preparing CRM and unified messaging suite...",
+      "Optimizing workspace dashboards...",
+      "Securing E2E cryptographic channels...",
+      "Almost ready..."
+    ];
+    
+    let index = 0;
+    const statusEl = document.getElementById("status");
+    
+    setInterval(() => {
+      if (index < statuses.length) {
+        statusEl.style.opacity = 0;
+        setTimeout(() => {
+          statusEl.innerText = statuses[index++];
+          statusEl.style.opacity = 1;
+        }, 300);
+      }
+    }, 3000);
+  </script>
+</body>
+</html>

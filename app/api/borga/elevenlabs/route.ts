@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getApiKey } from '@/lib/borga/secrets';
+import { featureGate } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -71,6 +72,8 @@ async function fetchAvailableVoices(apiKey: string): Promise<Record<string, stri
 }
 
 export async function POST(req: Request) {
+  const off = await featureGate('voice', null, null);
+  if (off) return off;
   let body: {
     text?: string;
     voice?: string;

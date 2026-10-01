@@ -4,17 +4,20 @@ import { useState } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { SocialMediaTab } from '../panels/SocialMediaTab';
 import { AdvertisingTab } from '../panels/AdvertisingTab';
+import { useFeature } from '@/lib/borga/features-client';
 
 export function MarketingPage({ initialTab }: { initialTab?: string }) {
-  const [tab, setTab] = useState(initialTab ?? 'social');
+  const social = useFeature('social');
+  const ads = useFeature('advertising');
+  const [tab, setTab] = useState(initialTab ?? (social ? 'social' : 'advertising'));
   return (
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>
-        <TabsTrigger value="social">Social Media</TabsTrigger>
-        <TabsTrigger value="advertising">Advertising</TabsTrigger>
+        {social && <TabsTrigger value="social">Social Media</TabsTrigger>}
+        {ads && <TabsTrigger value="advertising">Advertising</TabsTrigger>}
       </TabsList>
-      <TabsContent value="social"><SocialMediaTab /></TabsContent>
-      <TabsContent value="advertising"><AdvertisingTab /></TabsContent>
+      {social && <TabsContent value="social"><SocialMediaTab /></TabsContent>}
+      {ads && <TabsContent value="advertising"><AdvertisingTab /></TabsContent>}
     </Tabs>
   );
 }

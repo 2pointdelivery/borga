@@ -6,6 +6,7 @@ import { mcpListTools, discoverMcpOAuth, registerMcpOAuthClient } from '@/lib/bo
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
 import type { McpServer } from '@/lib/borga/data';
+import { featureGate } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -72,6 +73,8 @@ export async function POST(req: NextRequest) {
   if (!isValidWsId(ws)) {
     return NextResponse.json({ ok: false, error: 'A valid workspace id is required.' }, { status: 400 });
   }
+  const off = await featureGate('mcp', userId, ws);
+  if (off) return off;
 
   try {
     // Test an MCP server before saving it — no persistence, just a live check.
@@ -172,6 +175,27 @@ export async function POST(req: NextRequest) {
       const serverId = body.serverId ?? '';
       const hasToken = !!(await getBorgaState<string>(tokenKey(userId, ws, serverId)));
       return NextResponse.json({ ok: true, connected: hasToken });
+    }
+
+    // Tier 6: execute a held MCP tool call after its approval was granted.
+    // Only reachable with a session + CSRF header (the approve button); the
+    // agent itself can only create the held approval, never execute it.
+    if (action === 'call') {
+      const { mcpCallTool } = await import('@/lib/borga/mcp-client');
+      const name = String((body as { server?: unknown }).server ?? '').toLowerCase();
+      const tool = String(body.tool ?? '');
+      const params = ((body as { params?: unknown }).params ?? {}) as Record<string, unknown>;
+      if (!name || !tool) return NextResponse.json({ ok: false, error: 'server and tool are required.' }, { status: 400 });
+      const servers = await loadServers(userId, ws);
+      const server = servers.find((s) => s.name.toLowerCase() === name);
+      if (!server) return NextResponse.json({ ok: false, error: `No MCP server named "${name}".` }, { status: 404 });
+      const token = server.authType === 'none' ? undefined : decryptSecret((await getBorgaState<string>(tokenKey(userId, ws, server.id))) ?? '') || undefined;
+      if (server.authType !== 'none' && !token) {
+        return NextResponse.json({ ok: false, error: `"${server.name}" has no token saved.` }, { status: 400 });
+      }
+      const result = await mcpCallTool(server.url, token, tool, params);
+      if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 502 });
+      return NextResponse.json({ ok: true, result: result.result });
     }
 
     return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });

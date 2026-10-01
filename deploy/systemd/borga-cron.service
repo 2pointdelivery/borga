@@ -1,0 +1,9 @@
+[Unit]
+Description=Borga heartbeat, mailbox poll, SLA sweep and integration syncs
+After=docker.service
+
+[Service]
+Type=oneshot
+# Reads CRON_SECRET from the deploy .env (installed to /opt/borga/deploy/.env by deploy/README.md).
+EnvironmentFile=/opt/borga/deploy/.env
+ExecStart=/usr/bin/curl -fsS -m 120 -X POST -H "Authorization: Bearer ${CRON_SECRET}" http://127.0.0.1:13000/api/borga/cron

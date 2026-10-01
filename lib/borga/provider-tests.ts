@@ -1,0 +1,135 @@
+import type { ProviderId } from './providers';
+import { smBase } from './supermemory-core';
+
+/**
+ * Live credential checks. Pure (fetch is injected) so they are unit-tested with
+ * a mocked fetch; each calls the provider's real API in production.
+ * Version constants are the one thing that drifts: bump them when a provider sunsets one.
+ */
+
+export const META_GRAPH_VERSION = 'v21.0';
+export const GOOGLE_ADS_API_VERSION = 'v20';
+export const LINKEDIN_API_VERSION = '202509';
+
+export interface TestResult {
+  ok: boolean;
+  message: string;
+  details?: string[];
+}
+
+type Fetch = typeof fetch;
+const TIMEOUT_MS = 10_000;
+
+async function getJson(f: Fetch, url: string, init: RequestInit = {}): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await f(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return { status: res.status, json };
+}
+
+const errText = (j: Record<string, unknown>): string => {
+  const e = j.error;
+  if (typeof e === 'string') return (j.error_description as string) || e;
+  if (e && typeof e === 'object') return String((e as { message?: unknown }).message ?? JSON.stringify(e)).slice(0, 200);
+  return String(j.message ?? '').slice(0, 200);
+};
+
+async function testTwilio(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const auth = `Basic ${Buffer.from(`${v.accountSid}:${v.authToken}`).toString('base64')}`;
+  const acct = await getJson(f, `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(v.accountSid)}.json`, { headers: { Authorization: auth } });
+  if (acct.status === 401) return { ok: false, message: 'Twilio rejected the Account SID / Auth token.' };
+  if (acct.status !== 200) return { ok: false, message: `Twilio returned HTTP ${acct.status}.` };
+  if (acct.json.status !== 'active') return { ok: false, message: `Twilio account status is "${String(acct.json.status)}", not active.` };
+  const details = [`Account active (${String(acct.json.type ?? 'unknown')} type).`];
+  if (acct.json.type === 'Trial') details.push('Trial accounts can only call verified numbers.');
+  const nums = await getJson(f, `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(v.accountSid)}/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(v.phoneNumber)}`, { headers: { Authorization: auth } });
+  const owned = Array.isArray(nums.json.incoming_phone_numbers) && nums.json.incoming_phone_numbers.length > 0;
+  if (nums.status === 200 && !owned) {
+    return { ok: false, message: `Credentials work, but ${v.phoneNumber} is not a number on this Twilio account.`, details };
+  }
+  if (owned) details.push(`${v.phoneNumber} belongs to this account.`);
+  return { ok: true, message: 'Connected to Twilio.', details };
+}
+
+async function testMeta(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+  const q = `access_token=${encodeURIComponent(v.accessToken)}`;
+  const me = await getJson(f, `${base}/me?${q}`);
+  if (me.status !== 200) return { ok: false, message: `Meta rejected the access token: ${errText(me.json) || `HTTP ${me.status}`}` };
+  const details = [`Token valid for "${String(me.json.name ?? me.json.id)}".`];
+  let ok = true;
+  if (v.adAccountId) {
+    const id = v.adAccountId.startsWith('act_') ? v.adAccountId : `act_${v.adAccountId}`;
+    const ad = await getJson(f, `${base}/${id}?fields=name,account_status&${q}`);
+    if (ad.status === 200) details.push(`Ad account: ${String(ad.json.name)}.`);
+    else {
+      ok = false;
+      details.push(`Ad account not accessible: ${errText(ad.json) || `HTTP ${ad.status}`}`);
+    }
+  }
+  if (v.whatsappPhoneNumberId) {
+    const wa = await getJson(f, `${base}/${v.whatsappPhoneNumberId}?fields=display_phone_number,verified_name&${q}`);
+    if (wa.status === 200) details.push(`WhatsApp number: ${String(wa.json.display_phone_number)} (${String(wa.json.verified_name ?? 'unverified')}).`);
+    else {
+      ok = false;
+      details.push(`WhatsApp number not accessible: ${errText(wa.json) || `HTTP ${wa.status}`}`);
+    }
+  }
+  return { ok, message: ok ? 'Connected to Meta.' : 'Token is valid but some assets are not accessible.', details };
+}
+
+async function testGoogleAds(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const tok = await getJson(f, 'https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: v.clientId, client_secret: v.clientSecret, refresh_token: v.refreshToken, grant_type: 'refresh_token' }),
+  });
+  const access = tok.json.access_token;
+  if (tok.status !== 200 || typeof access !== 'string') return { ok: false, message: `Google rejected the OAuth credentials: ${errText(tok.json) || `HTTP ${tok.status}`}` };
+  const headers: Record<string, string> = { Authorization: `Bearer ${access}`, 'developer-token': v.developerToken };
+  if (v.loginCustomerId) headers['login-customer-id'] = v.loginCustomerId.replace(/-/g, '');
+  const list = await getJson(f, `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers:listAccessibleCustomers`, { headers });
+  if (list.status !== 200) return { ok: false, message: `OAuth works, but the Ads API refused the request: ${errText(list.json) || `HTTP ${list.status}`} (check the developer token and its approval level).` };
+  const names = Array.isArray(list.json.resourceNames) ? (list.json.resourceNames as string[]) : [];
+  const wanted = `customers/${v.customerId.replace(/-/g, '')}`;
+  if (!names.includes(wanted)) return { ok: false, message: `Credentials work but customer ${v.customerId} is not accessible to this login.`, details: [`${names.length} accessible customer(s).`] };
+  return { ok: true, message: 'Connected to Google Ads.', details: [`Customer ${v.customerId} is accessible.`] };
+}
+
+async function testLinkedIn(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, `https://api.linkedin.com/rest/adAccounts/${encodeURIComponent(v.adAccountId)}`, {
+    headers: { Authorization: `Bearer ${v.accessToken}`, 'LinkedIn-Version': LINKEDIN_API_VERSION, 'X-Restli-Protocol-Version': '2.0.0' },
+  });
+  if (r.status === 401) return { ok: false, message: 'LinkedIn rejected the access token (expired or missing scopes).' };
+  if (r.status === 403 || r.status === 404) return { ok: false, message: `LinkedIn cannot access ad account ${v.adAccountId} with this token (HTTP ${r.status}).` };
+  if (r.status !== 200) return { ok: false, message: `LinkedIn returned HTTP ${r.status}: ${errText(r.json)}` };
+  return { ok: true, message: 'Connected to LinkedIn.', details: [`Ad account: ${String(r.json.name ?? v.adAccountId)}.`] };
+}
+
+async function testSupermemory(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, smBase() + '/v3/documents/list', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + v.apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ containerTags: ['borga_connection_test'], limit: 1 }),
+  });
+  if (r.status === 401 || r.status === 403) return { ok: false, message: 'Supermemory rejected the API key.' };
+  if (r.status === 429) return { ok: false, message: 'Key is valid but rate limited right now. Try again shortly.' };
+  if (r.status !== 200) return { ok: false, message: 'Supermemory returned HTTP ' + r.status + ': ' + errText(r.json) };
+  return { ok: true, message: 'Connected to Supermemory.' };
+}
+
+export async function runProviderTest(id: ProviderId, values: Record<string, string>, f: Fetch = fetch): Promise<TestResult> {
+  try {
+    switch (id) {
+      case 'twilio': return await testTwilio(values, f);
+      case 'meta': return await testMeta(values, f);
+      case 'google_ads': return await testGoogleAds(values, f);
+      case 'linkedin': return await testLinkedIn(values, f);
+      case 'supermemory': return await testSupermemory(values, f);
+      case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
+      case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
+    }
+  } catch (e) {
+    const name = (e as Error).name;
+    return { ok: false, message: name === 'TimeoutError' ? 'The provider did not respond within 10 seconds.' : `Could not reach the provider: ${(e as Error).message}` };
+  }
+}

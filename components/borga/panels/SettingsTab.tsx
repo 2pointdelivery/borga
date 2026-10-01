@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Bell, Palette, User, Link2, Mic, Server, Globe, ShieldCheck, Phone, Download, BrainCircuit } from 'lucide-react';
+import { Save, Bell, Palette, User, Mic, Server, Globe, ShieldCheck, Phone, BrainCircuit } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,8 +12,9 @@ import { useTheme } from '../theme-provider';
 import type { ThemeMode } from '@/lib/borga/store';
 import { ELEVENLABS_VOICES, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
-import { ModelCatalogEditor } from './ModelCatalogEditor';
 import { ValuationConfigEditor } from './ValuationConfigEditor';
+import { FeaturesCard } from './FeaturesCard';
+import { EmailUpdatesCard } from './EmailUpdatesCard';
 import { cn } from '@/lib/utils';
 
 const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
@@ -27,7 +28,7 @@ const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
 
 
 export function SettingsTab() {
-  const { userName, setUserName, log, elevenlabs, setElevenlabs, calls, settings, setSettings, dbAvailable } = useBorga();
+  const { userName, setUserName, log, elevenlabs, setElevenlabs, settings, setSettings, dbAvailable } = useBorga();
   const { mode, setMode } = useTheme();
   const [name, setName] = useState(userName);
 
@@ -159,79 +160,25 @@ export function SettingsTab() {
           </div>
         </Card>
 
-        <Card className="p-5">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Link2 className="h-4 w-4 text-primary" /> Connections
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">Configure how Borga reaches your stack. Saved automatically as you type — secrets stay server-side.</p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground">Company CRM base URL</label>
-              <Input value={settings.crmUrl} onChange={(e) => setSettings({ crmUrl: e.target.value })} className="mt-1 font-mono text-xs" placeholder="https://crm.yourcompany.com" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground">LLM provider</label>
-              <Input value={settings.llmProvider} onChange={(e) => setSettings({ llmProvider: e.target.value })} className="mt-1 text-xs" placeholder="e.g. Groq / Claude / OpenAI" />
-            </div>
-          </div>
-        </Card>
-
         <Card className="p-5 lg:col-span-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-sm font-semibold min-w-0">
-              <Phone className="h-4 w-4 shrink-0 text-primary" />
-              <span className="truncate">ElevenLabs — voice &amp; outbound calls</span>
-            </div>
-            <Switch
-              checked={elevenlabs.connected}
-              onCheckedChange={(v) => setElevenlabs({ connected: v, lastSync: v ? 'Just now' : '…' })}
-            />
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Phone className="h-4 w-4 shrink-0 text-primary" /> Agent voice
+            <Badge variant={elevenlabs.connected ? 'secondary' : 'outline'} className="text-[10px]">{elevenlabs.connected ? 'ElevenLabs key saved' : 'Browser voice'}</Badge>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Agents place outbound calls with ElevenLabs voices. Save your ElevenLabs API key in the <strong>Tools &amp; Integrations</strong> tab → Voice agents — keys are encrypted server-side.
+            The voice agents speak with. The ElevenLabs API key lives in <strong>Integrations → AI &amp; Voice</strong>; without it the browser&apos;s built-in voice is used. Phone calls are configured under Integrations → Connections (Twilio).
           </p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Agent voice</label>
-              <select
-                value={elevenlabs.voice}
-                onChange={(e) => setElevenlabs({ voice: e.target.value })}
-                className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {ELEVENLABS_VOICES.map((v) => (
-                  <option key={v.id} value={v.id}>{v.label} — {v.tag}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Outbound caller ID</label>
-              <Input
-                value={elevenlabs.outboundNumber}
-                onChange={(e) => setElevenlabs({ outboundNumber: e.target.value })}
-                placeholder="+1 555 0100"
-                className="mt-1 font-mono text-xs"
-              />
-            </div>
-          </div>
-          <label className="mt-3 flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2 text-xs">
-            <span>Agents may auto-call a lead when it&apos;s approved</span>
-            <Switch checked={elevenlabs.autoCallOnApprove} onCheckedChange={(v) => setElevenlabs({ autoCallOnApprove: v })} />
-          </label>
-          <div className="mt-3">
-            <p className="text-xs font-medium text-muted-foreground">Recent calls</p>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {calls.slice(0, 4).map((c) => (
-                <div key={c.id} className="flex items-start justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
-                  <div className="min-w-0">
-                    <p className="font-medium">{c.agentName} → {c.leadName} <span className="text-muted-foreground">({c.contact})</span></p>
-                    <p className="truncate text-muted-foreground">{c.note}</p>
-                  </div>
-                  <Badge variant="outline" className={cn('shrink-0 text-[10px]', c.status === 'completed' && 'bg-emerald-500/10 text-emerald-600')}>
-                    {c.status}
-                  </Badge>
-                </div>
+          <div className="mt-3 max-w-sm">
+            <label className="text-xs font-medium text-muted-foreground">Agent voice</label>
+            <select
+              value={elevenlabs.voice}
+              onChange={(e) => setElevenlabs({ voice: e.target.value })}
+              className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {ELEVENLABS_VOICES.map((v) => (
+                <option key={v.id} value={v.id}>{v.label} — {v.tag}</option>
               ))}
-            </div>
+            </select>
           </div>
         </Card>
 
@@ -243,11 +190,10 @@ export function SettingsTab() {
           <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-lg border bg-muted/20 px-3 py-2.5">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span className="flex items-center gap-1.5"><Globe className="h-3.5 w-3.5" /> Deploy target</span>
-                <Badge variant="outline" className="text-[10px]">Configured</Badge>
+                <span className="flex items-center gap-1.5"><Globe className="h-3.5 w-3.5" /> Served from</span>
               </div>
-              <p className="mt-1 text-sm font-semibold">Cloudflare Workers</p>
-              <p className="text-[11px] text-muted-foreground">Edge-runtime isolates, per wrangler.toml — auto-scaled when deployed</p>
+              <p className="mt-1 break-all text-sm font-semibold">{typeof window !== 'undefined' ? window.location.host : ''}</p>
+              <p className="text-[11px] text-muted-foreground">Node server (see docs/HOSTING.md)</p>
             </div>
             <div className="rounded-lg border bg-muted/20 px-3 py-2.5">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -261,10 +207,9 @@ export function SettingsTab() {
             </div>
             <div className="rounded-lg border bg-muted/20 px-3 py-2.5">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5" /> Security</span>
-                <span className="text-[10px]">Enabled</span>
+                <span className="flex items-center gap-1.5"><ShieldCheck className="h-3.5 w-3.5" /> Secrets</span>
               </div>
-              <p className="mt-1 text-sm font-semibold">HSTS — TLS 1.3</p>
+              <p className="mt-1 text-sm font-semibold">Encrypted at rest</p>
               <p className="text-[11px] text-muted-foreground">Secrets server-side only — AES-256-GCM encrypted</p>
             </div>
             <div className="rounded-lg border bg-muted/20 px-3 py-2.5">
@@ -277,25 +222,11 @@ export function SettingsTab() {
             </div>
           </div>
         </Card>
-
-        <Card className="p-5 lg:col-span-2">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Download className="h-4 w-4 text-primary" /> Product files
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Download the full Borga product source as a zip (source, components, panels, API routes). Build artifacts and secrets are excluded.
-          </p>
-          <a href="/borga-product.zip" download className="mt-3 inline-block">
-            <Button className="gap-2">
-              <Download className="h-4 w-4" /> Download product.zip
-            </Button>
-          </a>
-        </Card>
       </div>
 
-      <Card className="p-5">
-        <ModelCatalogEditor />
-      </Card>
+      <EmailUpdatesCard />
+
+      <FeaturesCard />
 
       <Card className="p-5">
         <ValuationConfigEditor />

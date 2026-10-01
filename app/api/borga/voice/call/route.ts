@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { getApiKey, signPayloadId } from '@/lib/borga/secrets';
 import { setBorgaState } from '@/lib/borga/persistence';
+import { featureGate } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -41,6 +42,8 @@ function twilioAuth(sid: string, token: string): string {
 }
 
 export async function POST(req: Request) {
+  const off = await featureGate('calls', null, null);
+  if (off) return off;
   let body: { action?: string; to?: string; message?: string; voiceId?: string; callSid?: string } = {};
   try {
     body = await req.json();

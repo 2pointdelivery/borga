@@ -101,6 +101,7 @@ export interface Lead {
   ownerId: string;
   priority: Priority;
   customerId?: string; // links this deal to a Customer account once converted/matched
+  crmId?: string; // id of this deal in the company CRM (Company Engine pull)
 }
 
 export interface Workflow {
@@ -231,7 +232,7 @@ export const AGENTS: Agent[] = [
     status: 'active', avatarColor: '#10b981',
     skills: ['Grant scouting', 'Proposal writing', 'Compliance', 'Deadline tracking', 'Auto-apply', 'Calls'],
     model: 'nvidia/llama-3.1-nemotron-70b', tasksCompleted: 156, accuracy: 93, brainLinked: true,
-    description: 'Scouts grants and funding programs for 2Point, evaluates fit, and automatically drafts and submits applications on the company\u2019s behalf.',
+    description: 'Scouts grants and funding programs for the company, evaluates fit, and automatically drafts and submits applications on the company\u2019s behalf.',
     persona: 'fundraising-grants-agent.md',
     instructions: 'Continuously scan grant registries and funding programs relevant to logistics. Rank opportunities by fit score, draft compliant applications, and auto-submit those above an 85% match. Log every finding and submission to the shared brain.',
   },
@@ -640,16 +641,7 @@ export const DEPARTMENTS: Department[] = [
     ] },
 ];
 
-export const INITIAL_TASKS: Task[] = [
-  { id: 't1', title: 'Follow up with Lead #4412', detail: 'Send revised quote before close of business.', priority: 'P0', status: 'in-progress', bucket: 'today', assignee: 'Atlas', tags: ['sales', 'crm'], due: 'Today 5pm', progress: 65 },
-  { id: 't2', title: 'Publish Q3 campaign brief', detail: 'Draft, review and publish the Q3 launch brief.', priority: 'P1', status: 'todo', bucket: 'today', assignee: 'Nova', tags: ['marketing'], due: 'Today 3pm', progress: 20 },
-  { id: 't3', title: 'Reconcile monthly ledger', detail: 'Close the books for last month with Sage.', priority: 'P1', status: 'todo', bucket: 'week', assignee: 'Sage', tags: ['finance'], due: 'Wed', progress: 0 },
-  { id: 't4', title: 'Reduce ticket backlog', detail: 'Triage the 18 aging tickets in the queue.', priority: 'P0', status: 'in-progress', bucket: 'today', assignee: 'Spectra', tags: ['support'], due: 'Today', progress: 45 },
-  { id: 't5', title: 'Wire Stripe + HubSpot toolkit', detail: 'Connect Composio toolkits for payments & CRM.', priority: 'P1', status: 'todo', bucket: 'week', assignee: 'Iris', tags: ['integrations'], due: 'Fri', progress: 10 },
-  { id: 't6', title: 'Voice skill expansion', detail: 'Add multi-language commands for Borga.', priority: 'P2', status: 'todo', bucket: 'month', assignee: 'Borga', tags: ['voice'], due: 'End of month', progress: 10 },
-  { id: 't7', title: 'Forecast next quarter', detail: 'Produce revenue forecast with scenarios.', priority: 'P1', status: 'done', bucket: 'week', assignee: 'Sage', tags: ['finance'], due: 'Mon', progress: 100 },
-  { id: 't8', title: 'Schedule Instagram carousel', detail: 'Line up the product feature carousel for next week.', priority: 'P2', status: 'todo', bucket: 'week', assignee: 'Nova', tags: ['marketing'], due: 'Thu', progress: 30 },
-];
+export const INITIAL_TASKS: Task[] = [];
 
 export const CONNECTORS: Connector[] = [
   { id: 'c-hubspot', name: 'HubSpot', provider: 'Composio — CRM', kind: 'composio', status: 'off', description: 'Sync contacts, deals and activities via HubSpot toolkit.', lastSync: '…' },
@@ -660,32 +652,15 @@ export const CONNECTORS: Connector[] = [
   { id: 'c-drive', name: 'Google Drive', provider: 'Composio — Drive', kind: 'composio', status: 'off', description: 'Search and summarise documents & schemas.', lastSync: '…' },
   { id: 'c-facebook', name: 'Facebook', provider: 'Composio — Social', kind: 'composio', status: 'off', description: 'Schedule and publish to Facebook pages.', lastSync: '…' },
   { id: 'c-linkedin', name: 'LinkedIn', provider: 'Composio — Social', kind: 'composio', status: 'off', description: 'Post updates and monitor engagement.', lastSync: '…' },
-  { id: 'c-crm', name: '2point CRM', provider: '2pointlogistics /api/v1', kind: 'crm', status: 'off', description: 'Two-way contact, deal and activity sync.', lastSync: '…' },
+  { id: 'c-crm', name: 'Company CRM', provider: 'Company Engine API', kind: 'crm', status: 'off', description: 'Pull customers and deals from your CRM (AI Platform → Company Engine).', lastSync: '…' },
   { id: 'c-graphify', name: 'Graphify', provider: 'knowledge graph', kind: 'data', status: 'off', description: 'Queryable knowledge graph over docs & code.', lastSync: '…' },
 ];
 
-export const INITIAL_POSTS: SocialPost[] = [
-  { id: 'p1', channel: 'linkedin', content: 'We just shipped a major update to our logistics platform — AI-powered routing that cuts delivery times by 18%.', status: 'published', scheduledAt: 'Yesterday 10:00', author: 'Nova', engagement: { likes: 214, comments: 32, shares: 47 } },
-  { id: 'p2', channel: 'twitter', content: '🧵 How we automated 60% of our ops with a fleet of AI agents →', status: 'scheduled', scheduledAt: 'Today 14:00', author: 'Nova', engagement: { likes: 0, comments: 0, shares: 0 } },
-  { id: 'p3', channel: 'instagram', content: 'Sneak peek: the new dashboard. Clean, fast, agent-powered. 👀', status: 'scheduled', scheduledAt: 'Tomorrow 09:00', author: 'Maya', engagement: { likes: 0, comments: 0, shares: 0 } },
-  { id: 'p4', channel: 'facebook', content: 'Customer spotlight: how 2Point moved 1.2M shipments last quarter.', status: 'draft', scheduledAt: '…', author: 'Nova', engagement: { likes: 0, comments: 0, shares: 0 } },
-  { id: 'p5', channel: 'tiktok', content: 'Behind the scenes of our autonomous ops center 🎬', status: 'draft', scheduledAt: '…', author: 'Paige', engagement: { likes: 0, comments: 0, shares: 0 } },
-];
+export const INITIAL_POSTS: SocialPost[] = [];
 
-export const INITIAL_LEADS: Lead[] = [
-  { id: 'l1', name: 'Rachel Kim', company: 'Northwind Logistics', email: 'rachel@northwind.io', phone: '+1 555 0101', value: 48000, stage: 'proposal', source: 'HubSpot — Organic', ownerId: 'a-sales', priority: 'P0' },
-  { id: 'l2', name: 'Marcus Webb', company: 'Ferry Freight', email: 'marcus@ferry.co', phone: '+1 555 0142', value: 26000, stage: 'qualified', source: 'LinkedIn — Ad', ownerId: 'a-sales', priority: 'P1' },
-  { id: 'l3', name: 'Aisha Bello', company: 'Cedar Global', email: 'aisha@cedarglobal.com', phone: '+1 555 0163', value: 92000, stage: 'new', source: 'Web — Form', ownerId: 'a-sales', priority: 'P1' },
-  { id: 'l4', name: 'Tom Hendrix', company: 'BrightSky', email: 'tom@brightsky.net', phone: '+1 555 0177', value: 15000, stage: 'won', source: 'Referral', ownerId: 'a-sales', priority: 'P2' },
-  { id: 'l5', name: 'Priya Natarajan', company: 'Oceanic Freight', email: 'priya@oceanic.co', phone: '+1 555 0198', value: 64000, stage: 'new', source: 'Gmail — Outreach', ownerId: 'a-sales', priority: 'P0' },
-];
+export const INITIAL_LEADS: Lead[] = [];
 
-export const INITIAL_WORKFLOWS: Workflow[] = [
-  { id: 'w1', name: 'CRM daily sync', status: 'complete', progress: 100, startedBy: 'Iris', engine: '2point Engine' },
-  { id: 'w2', name: 'Lead qualification batch', status: 'running', progress: 62, startedBy: 'Atlas', engine: '2point Engine' },
-  { id: 'w3', name: 'Q3 content calendar build', status: 'running', progress: 38, startedBy: 'Nova', engine: '2point Engine' },
-  { id: 'w4', name: 'Invoicing run', status: 'idle', progress: 0, startedBy: 'Sage', engine: '2point Engine' },
-];
+export const INITIAL_WORKFLOWS: Workflow[] = [];
 
 export const PRIORITY_LABEL: Record<Priority, string> = { P0: 'Critical', P1: 'High', P2: 'Medium', P3: 'Low' };
 export const PRIORITY_COLOR: Record<Priority, string> = {
@@ -770,6 +745,16 @@ export interface Approval {
     parameters: Record<string, unknown>;
     entityId: string;
   };
+  /** Tier 6 gate: approving executes the deferred MCP tool call. */
+  pendingMcp?: {
+    server: string;
+    tool: string;
+    params: Record<string, unknown>;
+  };
+  /** Tier 6 gate: approving runs the deferred company workflow. */
+  pendingWorkflow?: {
+    workflowName: string;
+  };
 }
 
 /** Journal postings at or above this value require an approval before they hit the GL. */
@@ -822,31 +807,11 @@ export interface Toolkit {
   installedAt?: string;
 }
 
-export const INITIAL_GOALS: Goal[] = [
-  { id: 'g1', title: 'Q3 Revenue', objective: 'Hit $1.0M revenue by quarter end', kpis: 'Monthly recurring revenue — closed-won deals', owner: 'Atlas', due: 'Sep 30', status: 'on-track', progress: 89 },
-  { id: 'g2', title: 'Automate operations', objective: 'Automate 90% of repeatable ops workflows', kpis: 'Automation coverage — manual hours saved', owner: 'Iris', due: 'Dec 15', status: 'at-risk', progress: 71 },
-  { id: 'g3', title: 'Support SLA', objective: 'Hold 98% SLA while scaling tickets', kpis: 'First response — resolution time — CSAT', owner: 'Spectra', due: 'Oct 31', status: 'on-track', progress: 96 },
-  { id: 'g4', title: 'Hire pipeline', objective: 'Fill 3 key roles by end of quarter', kpis: 'Interviews — offers — time-to-hire', owner: 'Rigby', due: 'Nov 15', status: 'behind', progress: 42 },
-];
+export const INITIAL_GOALS: Goal[] = [];
 
-export const INITIAL_APPROVALS: Approval[] = [
-  { id: 'ap1', title: 'Q4 LinkedIn ad budget', description: 'Approve $12,000 for the paid social campaign targeting freight decision-makers.', category: 'spend', amount: 12000, status: 'pending', submittedBy: 'Paige', createdAt: '2h ago' },
-  { id: 'ap2', title: 'Senior engineer offer', description: 'Extend offer to Devon (Eng Lead) at $180k base + equity per comp band.', category: 'hire', amount: 180000, status: 'pending', submittedBy: 'Rigby', createdAt: 'Today 9:40' },
-  { id: 'ap3', title: 'New CRM automation toolkit', description: 'License the Composio HubSpot + Salesforce toolkits for the sales floor.', category: 'budget', amount: 2400, status: 'pending', submittedBy: 'Iris', createdAt: 'Yesterday' },
-  { id: 'ap4', title: 'Vendor onboarding policy v2', description: 'Update the approved-vendors policy for the integrations team.', category: 'policy', amount: 0, status: 'approved', submittedBy: 'Guard', createdAt: 'Mon' },
-  { id: 'ap5', title: 'Expense: client conference', description: 'Reimburse travel for the Chicago logistics summit.', category: 'other', amount: 1850, status: 'rejected', submittedBy: 'Spectra', createdAt: 'Fri' },
-];
+export const INITIAL_APPROVALS: Approval[] = [];
 
-export const INITIAL_FINANCE: FinanceEntry[] = [
-  { id: 'f1', label: 'New logo deals (Sep MTD)', amount: 214000, category: 'Sales', kind: 'revenue' },
-  { id: 'f2', label: 'Expansion renewals', amount: 96000, category: 'Sales', kind: 'revenue' },
-  { id: 'f3', label: 'Payroll + contractor', amount: 148000, category: 'People', kind: 'expense' },
-  { id: 'f4', label: 'Cloud infrastructure', amount: 32000, category: 'Infra', kind: 'expense' },
-  { id: 'f5', label: 'Marketing spend', amount: 27000, category: 'Growth', kind: 'expense' },
-  { id: 'f6', label: 'Invoice #2219 — Northwind', amount: 48000, category: 'AR', kind: 'invoice' },
-  { id: 'f7', label: 'Invoice #2220 — Ferry Freight', amount: 26000, category: 'AR', kind: 'invoice' },
-  { id: 'f8', label: 'Stripe credits + refunds', amount: 6200, category: 'AR', kind: 'credit' },
-];
+export const INITIAL_FINANCE: FinanceEntry[] = [];
 
 // Toolkit catalog — mirrors composio.dev app categories, searchable in-app.
 // When a live Composio API key is configured, the full catalog is fetched dynamically
@@ -1204,7 +1169,7 @@ export const APPROVAL_LABEL: Record<ApprovalCategory, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// 2point operations: clients, bookings, drivers, SLA, tracking, analytics
+// Company operations sample: clients, bookings, drivers, SLA, tracking, analytics
 // ---------------------------------------------------------------------------
 
 export interface Client {
@@ -1388,12 +1353,7 @@ export const COMMS_CHANNEL_COLOR: Record<CommsChannel, string> = {
   telegram: 'text-sky-500 bg-sky-500/10 ring-sky-500/30',
 };
 
-export const INITIAL_MESSAGES: CommsMessage[] = [
-  { id: 'm1', channel: 'email', to: 'Rachel Kim <rachel@northwind.io>', recipients: ['rachel@northwind.io'], subject: 'Proposal follow-up', body: 'Hi Rachel, following up on the proposal we sent — happy to walk through the numbers.', status: 'sent', mode: 'single', count: 1, sentAt: 'Today 10:12' },
-  { id: 'm2', channel: 'whatsapp', to: 'Marcus Webb', recipients: ['+1 555 0142'], subject: '', body: 'Quick heads up that your rate card is ready to review. Want to hop on a call?', status: 'sent', mode: 'single', count: 1, sentAt: 'Today 09:47' },
-  { id: 'm3', channel: 'sms', to: 'Aisha Bello', recipients: ['+44 7700 900123'], subject: '', body: 'Thanks for downloading the platform brief — our team will reach out shortly.', status: 'sent', mode: 'single', count: 1, sentAt: 'Yesterday 16:20' },
-  { id: 'm4', channel: 'email', to: '5 open leads', recipients: ['rachel@northwind.io', 'marcus@ferry.co', 'aisha@cedarglobal.com', 'tom@brightsky.net', 'priya@oceanic.co'], subject: 'Freight savings check-in', body: 'We found up to 18% potential savings on your freight program. Shall we review together?', status: 'scheduled', mode: 'bulk', count: 5, sentAt: 'Tomorrow 09:00' },
-];
+export const INITIAL_MESSAGES: CommsMessage[] = [];
 
 // ---------------------------------------------------------------------------
 // Paid advertising campaigns + social summaries
@@ -1458,16 +1418,10 @@ export function campaignPacing(
   return { spentPct, expectedPct, verdict, dailyRunRate };
 }
 
-export const INITIAL_ADS: AdCampaign[] = [
-  { id: 'ad1', name: 'Q3 Freight ABM', platform: 'linkedin', budget: 12000, spent: 8340, impressions: 482000, clicks: 12840, conversions: 212, roas: 4.8, status: 'active' },
-  { id: 'ad2', name: 'Ops Buyers Search', platform: 'google', budget: 8000, spent: 6100, impressions: 204000, clicks: 9210, conversions: 141, roas: 3.9, status: 'active' },
-  { id: 'ad3', name: 'Retargeting Wave', platform: 'facebook', budget: 5000, spent: 4800, impressions: 310000, clicks: 5210, conversions: 64, roas: 2.6, status: 'active' },
-  { id: 'ad4', name: 'Trade-show Booster', platform: 'instagram', budget: 3000, spent: 1240, impressions: 98000, clicks: 2330, conversions: 29, roas: 1.9, status: 'paused' },
-  { id: 'ad5', name: 'Spring Awareness', platform: 'tiktok', budget: 2500, spent: 2500, impressions: 520000, clicks: 18100, conversions: 21, roas: 1.4, status: 'ended' },
-];
+export const INITIAL_ADS: AdCampaign[] = [];
 
 // ---------------------------------------------------------------------------
-// Webhook configuration for the 2point engine API
+// Webhook configuration for the Company Engine API
 // ---------------------------------------------------------------------------
 
 export interface Webhook {
@@ -1492,11 +1446,7 @@ export const WEBHOOK_EVENTS = [
   'payment.received',
 ] as const;
 
-export const INITIAL_WEBHOOKS: Webhook[] = [
-  { id: 'wh1', name: 'Ops → Slack', event: 'booking.created', url: 'https://hooks.slack.com/services/T00/B00/xxxx', secret: '———————…', active: true, lastDelivery: '14:32', deliveries: 4213 },
-  { id: 'wh2', name: 'Delivery webhook', event: 'booking.delivered', url: 'https://2pointlogistics.com/hooks/delivery', secret: '———————…', active: true, lastDelivery: '13:05', deliveries: 2108 },
-  { id: 'wh3', name: 'SLA alert', event: 'sla.breached', url: 'https://2pointlogistics.com/alerts/sla', secret: '———————…', active: false, lastDelivery: '…', deliveries: 12 },
-];
+export const INITIAL_WEBHOOKS: Webhook[] = [];
 
 // ---------------------------------------------------------------------------
 // KPIs (additive, per department) + LLM selection
@@ -1610,13 +1560,7 @@ export interface FundingOpportunity {
   note: string;
 }
 
-export const INITIAL_FUNDRAISING: FundingOpportunity[] = [
-  { id: 'fu1', source: 'EIC Accelerator', program: 'EU Green Logistics & Energy Storage', amount: 2500000, stage: 'evaluating', deadline: 'Oct 18', matchScore: 91, url: 'https://eic.ec.europa.eu/', note: 'Blended finance for decarbonising freight fleets. Strong fit with our EV routing work.' },
-  { id: 'fu2', source: 'SBIR.gov', program: 'SBIR Phase I — Autonomous Freight Ops', amount: 275000, stage: 'identified', deadline: 'Nov 04', matchScore: 84, url: 'https://www.sbir.gov/', note: 'DOT topic aligns with our dispatch automation. Drafting the technical abstract.' },
-  { id: 'fu3', source: 'Infrastructure Canada', program: 'Zero-Emission Vehicle Freight Grant', amount: 1800000, stage: 'applied', deadline: 'Sep 30', matchScore: 88, url: 'https://infrastructure.gc.ca/', note: 'Application submitted on behalf of 2Point on 12 Sep. Awaiting review.' },
-  { id: 'fu4', source: 'Innovate UK', program: 'Smart Freight + Decarbonisation', amount: 950000, stage: 'identified', deadline: 'Jan 15', matchScore: 78, url: 'https://www.ukri.org/', note: 'Early signal — evaluating eligibility for SME category.' },
-  { id: 'fu5', source: 'CLEPA', program: 'EU Horizon — Logistics R&D', amount: 1200000, stage: 'applied', deadline: 'Aug 22', matchScore: 93, url: 'https://clepa.eu/', note: 'Strongest candidate. Full consortium proposal filed; 85%+ auto-apply threshold met.' },
-];
+export const INITIAL_FUNDRAISING: FundingOpportunity[] = [];
 
 export const FUNDING_STAGE_LABEL: Record<FundingStage, string> = {
   identified: 'Identified', evaluating: 'Evaluating', applying: 'Applying', applied: 'Applied', won: 'Won', rejected: 'Rejected',
@@ -1644,10 +1588,7 @@ export interface BrowseResult {
   at: string;
 }
 
-export const INITIAL_BROWSES: BrowseResult[] = [
-  { id: 'br1', url: 'https://eic.ec.europa.eu/programmes', title: 'EIC Accelerator Programmes', browsedBy: 'Nadia', summary: 'Found open call for Green Logistics & Energy Storage, budget \u20ac2.5M, deadline 18 Oct. Fit score 91/100.', links: ['/apply', '/calls/green-logistics', '/faq'], at: 'Today 08:14' },
-  { id: 'br2', url: 'https://www.sbir.gov/topics', title: 'SBIR Topics Index', browsedBy: 'Nadia', summary: 'DOT topic \u201cAutonomous Freight Ops\u201d open for Phase I applications. Budget $275K, deadline 04 Nov.', links: ['/topic/dot-2026', '/apply'], at: 'Today 08:22' },
-];
+export const INITIAL_BROWSES: BrowseResult[] = [];
 
 // ---------------------------------------------------------------------------
 // WhatsApp connection + agent-to-client chat threads
@@ -1702,9 +1643,6 @@ export interface ElevenLabsConfig {
   connected: boolean;
   voice: string; // active voice id (see ELEVENLABS_VOICES)
   defaultVoice: string;
-  outboundNumber: string; // caller-ID phone shown to the callee
-  autoCallOnApprove: boolean; // agents may dial out when a deal/lead is approved
-  apiMode: string; // key storage mode (always server-side)
   lastSync: string;
 }
 
@@ -1719,11 +1657,8 @@ export const ELEVENLABS_VOICES: { id: string; label: string; tag: string }[] = [
 
 export const DEFAULT_ELEVENLABS: ElevenLabsConfig = {
   connected: false,
-  voice: 'antoni',
-  defaultVoice: 'antoni',
-  outboundNumber: '',
-  autoCallOnApprove: true,
-  apiMode: 'NVIDIA — server-side key',
+  voice: 'george',
+  defaultVoice: 'george',
   lastSync: '…',
 };
 
@@ -1744,19 +1679,10 @@ export interface CallRecord {
   callSid?: string;
 }
 
-export const INITIAL_CALLS: CallRecord[] = [
-  {
-    id: 'call1', agentId: 'a-sales', agentName: 'Atlas', contact: '+1 555 0142', leadName: 'Marcus Webb',
-    voice: 'antoni', status: 'completed', durationSec: 214, note: 'Rate card reviewed; booked a proposal walkthrough for Thursday.', at: 'Today 09:47',
-  },
-  {
-    id: 'call2', agentId: 'a-support', agentName: 'Spectra', contact: '+1 555 0198', leadName: 'Priya Nair',
-    voice: 'rachel', status: 'voicemail', durationSec: 38, note: 'Left voicemail — returned an SLA query and offered a callback window.', at: 'Yesterday 16:02',
-  },
-];
+export const INITIAL_CALLS: CallRecord[] = [];
 
 // ---------------------------------------------------------------------------
-// 2Point Logistics knowledge base — what agents know and what they still need
+// Company knowledge base — what agents know and what they still need
 // ---------------------------------------------------------------------------
 
 export type KnowledgeCategoryId = 'company' | 'services' | 'customers' | 'funding' | 'content' | 'process';
@@ -1778,7 +1704,7 @@ export interface KbQuestion {
 }
 
 export const KNOWLEDGE_CATEGORIES: { id: KnowledgeCategoryId; label: string; hint: string }[] = [
-  { id: 'company', label: 'Company & Brand', hint: 'Who 2Point is, mission and markets' },
+  { id: 'company', label: 'Company & Brand', hint: 'Who the company is, mission and markets' },
   { id: 'services', label: 'Services & Products', hint: 'Offerings, pricing and SLAs' },
   { id: 'customers', label: 'Customers & Case Studies', hint: 'Who we serve and proof points' },
   { id: 'funding', label: 'Funding & Grants', hint: 'Programs, applications and deadlines' },
@@ -1870,22 +1796,7 @@ export interface ChatThread {
   messages: ChatMessage[];
 }
 
-export const INITIAL_CHATS: ChatThread[] = [
-  {
-    id: 'ch1', leadId: 'l2', clientName: 'Marcus Webb', contact: '+1 555 0142', channel: 'whatsapp', agent: 'Atlas',
-    messages: [
-      { id: 'cm1', role: 'agent', sender: 'Atlas', text: 'Hi Marcus — your rate card is ready to review. Want a quick call this week?', at: 'Today 09:47' },
-      { id: 'cm2', role: 'client', sender: 'Marcus Webb', text: 'Perfect timing, I was about to ask. Thursday works.', at: 'Today 10:02' },
-    ],
-  },
-  {
-    id: 'ch2', leadId: 'l1', clientName: 'Rachel Kim', contact: 'rachel@northwind.io', channel: 'email', agent: 'Atlas',
-    messages: [
-      { id: 'cm3', role: 'client', sender: 'Rachel Kim', text: 'Can you share the cost breakdown from the proposal?', at: 'Today 09:31' },
-      { id: 'cm4', role: 'agent', sender: 'Atlas', text: 'Absolutely — sharing a line-item breakdown now, happy to walk through it live.', at: 'Today 09:44' },
-    ],
-  },
-];
+export const INITIAL_CHATS: ChatThread[] = [];
 
 // ---------------------------------------------------------------------------
 // Settings — persisted preferences for the command center
@@ -1902,17 +1813,25 @@ export interface NotificationPrefs {
 export interface SettingsState {
   notifications: NotificationPrefs;
   crmUrl: string; // per-company engine / CRM endpoint
-  llmProvider: string;
-  engineApiKey?: string; // tenant-scoped engine bearer key (server-side DB)
+  engineApiKey?: string; // legacy: replaced by the encrypted Company Engine connection
+  /** Pull customers and deals from the Company Engine automatically while the dashboard is open. */
+  crmAutoPull?: boolean;
+  /** Result of the last CRM pull. */
+  crmLastPull?: { at: string; customers?: { added: number; updated: number; unchanged: number }; leads?: { added: number; updated: number; unchanged: number }; skipped?: number; error?: string };
   lastAutoMatchAt?: string; // ISO timestamp of last banking end-of-day auto-reconciliation
   autonomousMode?: boolean; // when true, agents may act on the company's behalf but must route payments and outbound third-party sends through approval
   lastAutoTrainAt?: string; // ISO timestamp of last automatic agent-memory / knowledge-base sync
+  /** Tier 5 kill switch: when true, the heartbeat never fires — chat/voice still work. */
+  heartbeatPaused?: boolean;
+  /** Tier 5 quiet window (24h "HH:MM"); non-urgent checks wait until after `end`. */
+  quietHours?: { start: string; end: string };
+  /** Tier 6: per-workspace override for the payment approval threshold (USD). Falls back to AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD. */
+  approvalThresholdUsd?: number;
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
   notifications: { tasks: true, handoffs: true, sync: false, voice: true, kpi: false },
   crmUrl: '', // Configure in Company Settings
-  llmProvider: 'out-of-the-box',
   autonomousMode: false,
 };
 
@@ -1984,7 +1903,31 @@ export interface ScheduledTask {
   nextRun: string | null; // ISO timestamp
   runCount: number;
   lastResult?: string;
+  /** Tier 5 overlap guard: ISO timestamp when a run started; cleared on finish. */
+  runningSince?: string | null;
+  /** Tier 5: urgent tasks may surface during quiet hours; others wait. */
+  urgent?: boolean;
 }
+
+/**
+ * Tier 5 held inbox: everything the heartbeat surfaces while you were away
+ * waits here until you dismiss it — never deliver-once-and-lose-it.
+ */
+export type NoticeSeverity = 'info' | 'noteworthy' | 'urgent';
+
+export interface ProactiveNotice {
+  id: string;
+  title: string;
+  body: string;
+  severity: NoticeSeverity;
+  source: 'scheduler' | 'agent';
+  taskId?: string;
+  runId?: string;
+  createdAt: string;
+  readAt: string | null;
+}
+
+export const INITIAL_NOTICES: ProactiveNotice[] = [];
 
 export type AgentRunStatus = 'running' | 'complete' | 'error' | 'stopped';
 
@@ -2028,7 +1971,7 @@ export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = [
   },
   {
     id: 'sched-4', name: 'Content Calendar Build', agentId: 'a-marketing',
-    goal: 'Review engagement on recent social posts, draft 3 new content ideas for LinkedIn and Twitter based on 2Point Logistics expertise, and create social post drafts in the queue.',
+    goal: 'Review engagement on recent social posts, draft 3 new content ideas for LinkedIn and Twitter based on the company expertise, and create social post drafts in the queue.',
     interval: 'weekly', enabled: false, lastRun: null, nextRun: null, runCount: 0,
   },
   {
@@ -2261,37 +2204,14 @@ export interface Workspace {
   phone?: string;
   website?: string;
   logoDataUrl?: string; // branded logo for reports, invoices and PDFs
+  /** Services/products the company sells (captured at onboarding). The Revenue Tracker keeps one line per service. */
+  services?: string[];
 
   // Onboarding state — drives the post-signup knowledge-gathering flow.
   onboarding?: WorkspaceOnboarding;
 }
 
-export const INITIAL_WORKSPACES: Workspace[] = [
-  {
-    id: 'ws-2point', name: '2Point Logistics', industry: 'Last-mile logistics',
-    plan: 'scale', color: '#6366f1', currency: 'CAD', createdAt: '2020',
-    legalName: '2Point Logistics Inc.', tradingName: '2Point', businessNumber: '85472 1666 RC0001',
-    taxNumber: 'RT00012345', incorporationDate: '2020-06-12',
-    addressLine: '410 1st Ave N, Suite 500', city: 'Saskatoon', state: 'Saskatchewan', country: 'Canada',
-    timezone: 'America/Regina', fiscalYearEndMonth: 12, fiscalYearEndDay: 31,
-    email: 'hello@2point.com', phone: '+1 306 555 0100', website: '2pointlogistics.com',
-  },
-  {
-    id: 'ws-northwind', name: 'Northwind Studio', industry: 'Creative agency',
-    plan: 'growth', color: '#0ea5e9', currency: 'USD', createdAt: '2023',
-    legalName: 'Northwind Studio LLC', businessNumber: 'EIN 88-1234567',
-    addressLine: '88 Harbour Rd', city: 'Vancouver', state: 'British Columbia', country: 'Canada',
-    timezone: 'America/Vancouver', fiscalYearEndMonth: 6, fiscalYearEndDay: 30,
-    email: 'studio@northwind.io', website: 'northwind.io',
-  },
-  {
-    id: 'ws-cedar', name: 'Cedar Global Ventures', industry: 'Investments',
-    plan: 'trial', color: '#059669', currency: 'USD', createdAt: '2026',
-    legalName: 'Cedar Global Ventures Ltd.',
-    city: 'London', country: 'United Kingdom', timezone: 'Europe/London',
-    fiscalYearEndMonth: 3, fiscalYearEndDay: 31,
-  },
-];
+export const INITIAL_WORKSPACES: Workspace[] = [];
 
 export const PLAN_LABEL: Record<WorkspacePlan, string> = {
   trial: 'Trial',
@@ -2374,20 +2294,9 @@ export const LEAVE_KIND_LABEL: Record<LeaveKind, string> = {
   unpaid: 'Unpaid',
 };
 
-export const INITIAL_EMPLOYEES: Employee[] = [
-  { id: 'e1', name: 'Lawrence M.', role: 'Founder & CEO', department: 'Executive', email: 'lawrence@2point.com', employmentType: 'full-time', status: 'active', salary: 210000, location: 'Saskatoon, CA', startedAt: 'Jun 2020', performance: 94 },
-  { id: 'e2', name: 'Priya Nair', role: 'Head of Operations', department: 'Operations', email: 'priya@2point.com', employmentType: 'full-time', status: 'active', salary: 148000, manager: 'Lawrence M.', location: 'Regina, CA', startedAt: 'Feb 2021', performance: 91 },
-  { id: 'e3', name: 'Devon Cole', role: 'Senior Engineer', department: 'Engineering', email: 'devon@2point.com', employmentType: 'full-time', status: 'onboarding', salary: 180000, manager: 'Lawrence M.', location: 'Remote', startedAt: 'Aug 2026', performance: 88 },
-  { id: 'e4', name: 'Aisha Bello', role: 'Account Executive', department: 'Sales', email: 'aisha@2point.com', employmentType: 'full-time', status: 'active', salary: 112000, manager: 'Lawrence M.', location: 'Toronto, CA', startedAt: 'Sep 2022', performance: 86 },
-  { id: 'e5', name: 'Tomás Rivera', role: 'Driver Fleet Lead', department: 'Operations', email: 'tomas@2point.com', employmentType: 'contract', status: 'active', salary: 84000, manager: 'Priya Nair', location: 'Calgary, CA', startedAt: 'Mar 2023', performance: 82 },
-  { id: 'e6', name: 'Hana Suzuki', role: 'Marketing Manager', department: 'Marketing', email: 'hana@2point.com', employmentType: 'full-time', status: 'on-leave', salary: 104000, manager: 'Lawrence M.', location: 'Vancouver, CA', startedAt: 'Nov 2021', performance: 89 },
-];
+export const INITIAL_EMPLOYEES: Employee[] = [];
 
-export const INITIAL_LEAVE: LeaveRequest[] = [
-  { id: 'lv1', employeeId: 'e6', employeeName: 'Hana Suzuki', kind: 'vacation', from: 'Sep 01', to: 'Sep 12', days: 9, reason: 'Family trip', status: 'approved' },
-  { id: 'lv2', employeeId: 'e4', employeeName: 'Aisha Bello', kind: 'sick', from: 'Aug 27', to: 'Aug 28', days: 2, reason: 'Flu', status: 'pending' },
-  { id: 'lv3', employeeId: 'e5', employeeName: 'Tomás Rivera', kind: 'unpaid', from: 'Oct 06', to: 'Oct 10', days: 5, reason: 'Personal project', status: 'pending' },
-];
+export const INITIAL_LEAVE: LeaveRequest[] = [];
 
 // ---------------------------------------------------------------------------
 // Finance suite — invoices complement the transaction ledger
@@ -2455,12 +2364,7 @@ export const INVOICE_STATUS_STYLE: Record<InvoiceStatus, string> = {
   overdue: 'bg-rose-500/10 text-rose-600 ring-rose-500/30',
 };
 
-export const INITIAL_INVOICES: Invoice[] = [
-  { id: 'inv1', number: '#2221', client: 'Northwind Studio', amount: 48000, status: 'sent', issued: 'Aug 18', due: 'Sep 17' },
-  { id: 'inv2', number: '#2220', client: 'Ferry Freight Co.', amount: 26000, status: 'overdue', issued: 'Jul 02', due: 'Aug 01' },
-  { id: 'inv3', number: '#2219', client: 'Brightsky Retail', amount: 31500, status: 'paid', issued: 'Jun 28', due: 'Jul 28' },
-  { id: 'inv4', number: '#2222', client: 'Oceanic Imports', amount: 18900, status: 'draft', issued: '…', due: '…' },
-];
+export const INITIAL_INVOICES: Invoice[] = [];
 
 // ---------------------------------------------------------------------------
 // Messaging channels — unified inbox across email / SMS / WhatsApp / Telegram.
@@ -2532,6 +2436,7 @@ export interface Customer {
   owner: string; // internal team member responsible for the account
   createdAt: string;
   notes: string;
+  crmId?: string; // id of this account in the company CRM (Company Engine pull)
 }
 
 export const CUSTOMER_STATUS_STYLE: Record<CustomerStatus, string> = {
@@ -2550,40 +2455,9 @@ export interface Contact {
   primary: boolean;
 }
 
-export const INITIAL_CUSTOMERS: Customer[] = [
-  {
-    id: 'c-northwind', name: 'Northwind Studio', industry: 'Creative agency', website: 'northwind.io',
-    email: 'hello@northwind.io', phone: '+1 555 0101', addressLine: '88 Harbour Rd', city: 'Vancouver, BC',
-    country: 'Canada', status: 'active', owner: 'Aisha Bello', createdAt: 'Feb 2024',
-    notes: 'Retainer client — monthly logistics + fulfillment support for client campaigns.',
-  },
-  {
-    id: 'c-ferry', name: 'Ferry Freight Co.', industry: 'Freight & forwarding', website: 'ferry.co',
-    email: 'ops@ferry.co', phone: '+1 555 0142', addressLine: '12 Dockside Ave', city: 'Halifax, NS',
-    country: 'Canada', status: 'active', owner: 'Aisha Bello', createdAt: 'Nov 2023',
-    notes: 'Invoice #2220 overdue — dunning sequence active. Escalate if unpaid by Sep 15.',
-  },
-  {
-    id: 'c-brightsky', name: 'Brightsky Retail', industry: 'Retail chain', website: 'brightsky.net',
-    email: 'supply@brightsky.net', phone: '+44 7700 900123', addressLine: '5 Market Square', city: 'Manchester',
-    country: 'United Kingdom', status: 'active', owner: 'Priya Nair', createdAt: 'Jun 2022',
-    notes: 'Pilot for same-day urban delivery across 6 stores; expansion decision in Q4.',
-  },
-  {
-    id: 'c-oceanic', name: 'Oceanic Imports', industry: 'Import / export', website: 'oceanic.co',
-    email: 'team@oceanic.co', phone: '+1 555 0177', addressLine: '301 Pier Blvd', city: 'Toronto, ON',
-    country: 'Canada', status: 'prospect', owner: 'Lawrence M.', createdAt: 'Aug 2026',
-    notes: 'Inbound from trade show — evaluating cross-border freight program.',
-  },
-];
+export const INITIAL_CUSTOMERS: Customer[] = [];
 
-export const INITIAL_CONTACTS: Contact[] = [
-  { id: 'ct1', customerId: 'c-northwind', name: 'Rachel Kim', title: 'Head of Operations', email: 'rachel@northwind.io', phone: '+1 555 0111', primary: true },
-  { id: 'ct2', customerId: 'c-ferry', name: 'Marcus Webb', title: 'Logistics Manager', email: 'marcus@ferry.co', phone: '+1 555 0142', primary: true },
-  { id: 'ct3', customerId: 'c-ferry', name: 'Dana Cole', title: 'Finance Lead', email: 'dana@ferry.co', phone: '+1 555 0143', primary: false },
-  { id: 'ct4', customerId: 'c-brightsky', name: 'Aisha Bello', title: 'Supply Chain Director', email: 'aisha.b@brightsky.net', phone: '+44 7700 900124', primary: true },
-  { id: 'ct5', customerId: 'c-oceanic', name: 'Liam Chen', title: 'Managing Director', email: 'liam@oceanic.co', phone: '+1 555 0177', primary: true },
-];
+export const INITIAL_CONTACTS: Contact[] = [];
 
 // ---------------------------------------------------------------------------
 // Vendor management (AP) — vendor directory and bills
@@ -2679,19 +2553,9 @@ export const PAYMENT_TERMS_LABEL: Record<PaymentTerms, string> = {
   net60: 'Net 60',
 };
 
-export const INITIAL_VENDORS: Vendor[] = [
-  { id: 'v1', name: 'Skyline Cloud Hosting', service: 'Cloud infrastructure', email: 'billing@skylinecloud.com', phone: '+1 555 0301', website: 'skylinecloud.com', terms: 'net30', status: 'active', since: 'Jan 2021' },
-  { id: 'v2', name: 'Metro Fleet Fuels', service: 'Fuel & fleet cards', email: 'accounts@metrofleet.ca', phone: '+1 555 0302', website: 'metrofleet.ca', terms: 'net15', status: 'active', since: 'Mar 2021' },
-  { id: 'v3', name: 'Harbour Property Group', service: 'Warehouse lease', email: 'leases@harbourpg.com', phone: '+1 555 0303', website: 'harbourpg.com', terms: 'due-on-receipt', status: 'active', since: 'Jul 2020' },
-  { id: 'v4', name: 'Beacon Creative Agency', service: 'Brand & content', email: 'ap@beaconcreative.co', phone: '+1 555 0304', website: 'beaconcreative.co', terms: 'net60', status: 'paused', since: 'Sep 2024' },
-];
+export const INITIAL_VENDORS: Vendor[] = [];
 
-export const INITIAL_BILLS: Bill[] = [
-  { id: 'b1', vendorId: 'v1', vendorName: 'Skyline Cloud Hosting', number: 'INV-99231', amount: 8420, received: 'Aug 20', due: 'Sep 19', status: 'unpaid' },
-  { id: 'b2', vendorId: 'v2', vendorName: 'Metro Fleet Fuels', number: 'FC-4471', amount: 12750, received: 'Aug 22', due: 'Sep 06', status: 'scheduled' },
-  { id: 'b3', vendorId: 'v3', vendorName: 'Harbour Property Group', number: 'RENT-AUG', amount: 21500, received: 'Aug 01', due: 'Aug 01', status: 'paid' },
-  { id: 'b4', vendorId: 'v4', vendorName: 'Beacon Creative Agency', number: 'BC-118', amount: 6800, received: 'Jul 15', due: 'Sep 13', status: 'unpaid' },
-];
+export const INITIAL_BILLS: Bill[] = [];
 
 // ---------------------------------------------------------------------------
 // Accounting — chart of accounts and double-entry journal
@@ -2798,6 +2662,35 @@ export interface Budget {
 }
 
 export const INITIAL_BUDGETS: Budget[] = [];
+
+// ── Revenue tracker (targets vs actuals) ────────────────────────────────────
+// A revenue tracker compares planned (target) net revenue against booked
+// actuals across service lines and months (one line per company service).
+// Actuals are entered inline in the Finance →
+// Revenue Tracker tab and persist per workspace.
+export interface RevenueLine {
+  id: string; // e.g. 'sameday'
+  name: string; // e.g. 'Same-Day Delivery'
+  color: string; // chart accent hex
+  targets: number[]; // net revenue target per month (same length as months)
+  actuals: number[]; // booked actual per month (0 = not entered)
+  /** Set when the line was created from a company service (kept in step with Workspace.services). */
+  service?: string;
+}
+
+export interface RevenueTrack {
+  id: string;
+  name: string;
+  periodLabel: string; // e.g. "Oct 2026 → Mar 2027"
+  months: string[]; // column labels, e.g. "Oct '26"
+  monthContexts?: string[]; // optional per-month context (e.g. city rollout)
+  takeRates?: number[]; // optional take-rate % per month
+  lines: RevenueLine[];
+  createdAt: string;
+}
+
+// No sample plan: a company's tracker is created from the services it gave at onboarding.
+export const INITIAL_REVENUE_TRACKS: RevenueTrack[] = [];
 
 /**
  * Fill every month after the first with a compounding month-over-month
@@ -3074,29 +2967,7 @@ export const INITIAL_COA: GlAccount[] = [
   { id: 'gl-4600', code: '4600', name: 'Other Income', type: 'revenue' },
 ];
 
-export const INITIAL_JOURNAL: JournalEntry[] = [
-  {
-    id: 'je-1', date: 'Aug 05', dateIso: '2026-08-05', memo: 'Customer invoicing — Northwind Studio', reference: '#2221', status: 'posted',
-    lines: [
-      { accountId: 'gl-1100', debit: 48000, credit: 0 },
-      { accountId: 'gl-4000', debit: 0, credit: 48000 },
-    ],
-  },
-  {
-    id: 'je-2', date: 'Aug 28', dateIso: '2026-08-28', memo: 'August payroll run', status: 'posted',
-    lines: [
-      { accountId: 'gl-5000', debit: 148000, credit: 0 },
-      { accountId: 'gl-1000', debit: 0, credit: 148000 },
-    ],
-  },
-  {
-    id: 'je-3', date: 'Aug 08', dateIso: '2026-08-08', memo: 'Cloud infrastructure — Skyline Cloud', status: 'posted',
-    lines: [
-      { accountId: 'gl-5100', debit: 32000, credit: 0 },
-      { accountId: 'gl-2000', debit: 0, credit: 32000 },
-    ],
-  },
-];
+export const INITIAL_JOURNAL: JournalEntry[] = [];
 
 // ---------------------------------------------------------------------------
 // Tax configuration — named tax profiles applied across invoices, bills,
@@ -3139,13 +3010,24 @@ export const DEFAULT_TAX_PROFILE_ID = 'tax-standard';
 
 export type BankSource = 'manual' | 'csv' | 'composio-plaid';
 
+/** Account kind: the two classic bank account types plus every payment method (cash, mobile wallet, PayPal, Stripe, ...). */
+export type BankAccountKind = 'checking' | 'savings' | PaymentMethod;
+
+export const BANK_ACCOUNT_KIND_LABEL: Record<BankAccountKind, string> = {
+  checking: 'Checking account',
+  savings: 'Savings account',
+  ...PAYMENT_METHOD_LABEL,
+};
+
+export const BANK_ACCOUNT_KINDS = Object.keys(BANK_ACCOUNT_KIND_LABEL) as BankAccountKind[];
+
 export interface BankAccount {
   id: string;
   name: string;
   institution: string;
   currency: string;
   last4: string;
-  kind: 'checking' | 'savings' | 'credit-card';
+  kind: BankAccountKind;
   balance: number;
   source: BankSource;
   status: 'connected' | 'disconnected';
@@ -3191,18 +3073,9 @@ export function normalizeReconciliationPattern(description: string): string {
     .trim();
 }
 
-export const INITIAL_BANK_ACCOUNTS: BankAccount[] = [
-  { id: 'bank-1', name: 'Operating Chequing', institution: 'Prairie Bank', currency: 'CAD', last4: '4417', kind: 'checking', balance: 482300, source: 'csv', status: 'connected' },
-  { id: 'bank-2', name: 'USD Collections', institution: 'Prairie Bank', currency: 'USD', last4: '9082', kind: 'checking', balance: 96400, source: 'manual', status: 'disconnected' },
-];
+export const INITIAL_BANK_ACCOUNTS: BankAccount[] = [];
 
-export const INITIAL_BANK_TXNS: BankTxn[] = [
-  { id: 'bt-1', bankAccountId: 'bank-1', date: 'Aug 03', description: 'WIRE IN — NORTHWIND STUDIO', amount: 31500, status: 'unmatched' },
-  { id: 'bt-2', bankAccountId: 'bank-1', date: 'Aug 18', description: 'SKYLINE CLOUD HOSTING PAYOUT', amount: -8420, status: 'unmatched' },
-  { id: 'bt-3', bankAccountId: 'bank-1', date: 'Aug 21', description: 'PAYROLL RUN AUGUST', amount: -148000, status: 'unmatched' },
-  { id: 'bt-4', bankAccountId: 'bank-1', date: 'Aug 24', description: 'STRIPE PAYOUT — SALES', amount: 214000, status: 'unmatched' },
-  { id: 'bt-5', bankAccountId: 'bank-1', date: 'Aug 26', description: 'METRO FLEET FUELS', amount: -12750, status: 'unmatched' },
-];
+export const INITIAL_BANK_TXNS: BankTxn[] = [];
 
 // ---------------------------------------------------------------------------
 // HR — time clock & team invites

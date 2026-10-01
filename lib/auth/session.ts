@@ -5,7 +5,11 @@ const COOKIE_NAME = 'borga_session';
 const MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 function getSecret(): string {
-  return process.env.SESSION_SECRET || 'dev-insecure-session-secret-change-me';
+  const secret = process.env.SESSION_SECRET;
+  if (secret && secret.length >= 16) return secret;
+  // A public fallback would let anyone forge session cookies, so production refuses to run without a real secret.
+  if (process.env.NODE_ENV === 'production') throw new Error('SESSION_SECRET (16+ chars) must be set in production');
+  return 'dev-insecure-session-secret-change-me';
 }
 
 function b64url(bytes: Uint8Array): string {

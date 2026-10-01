@@ -30,6 +30,8 @@ const eslintConfig = defineConfig([
     'next-env.d.ts',
     // Helper scripts are plain CommonJS node utilities, not app code.
     'scripts/**',
+    // Electron desktop app setup files
+    'electron/**',
     // Standalone static-export project with its own toolchain/tsconfig —
     // see landing-site/README.md.
     'landing-site/**',

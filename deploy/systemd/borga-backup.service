@@ -1,0 +1,8 @@
+[Unit]
+Description=Borga nightly database backup
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/borga/deploy
+ExecStart=/opt/borga/deploy/backup.sh

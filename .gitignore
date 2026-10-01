@@ -39,6 +39,11 @@ yarn-error.log*
 # vercel
 .vercel
 
+# electron / desktop build output (multi-GB installers — never commit)
+/dist-electron/
+/dist-desktop/
+/electron-build.log
+
 # cloudflare / opennext build artifacts
 .open-next/
 .wrangler/

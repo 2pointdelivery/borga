@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getApiKey, setApiKey, isAllowedKey } from '@/lib/borga/secrets';
+import { featureGate } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -71,6 +72,8 @@ function handleUpstreamError(status: number, text: string, defaultMessage: strin
 }
 
 export async function POST(req: Request) {
+  const off = await featureGate('composio', null, null);
+  if (off) return off;
   let body: { action?: string; apiKey?: string; appName?: string; entityId?: string; baseUrl?: string; persistKey?: boolean; callbackUrl?: string; params?: Record<string, unknown> } = {};
   try {
     body = await req.json();

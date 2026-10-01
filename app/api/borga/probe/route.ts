@@ -1,54 +1,55 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { getApiKey } from '@/lib/borga/secrets';
+import { DEFAULT_PROVIDER_CONFIG, resolveProviderConfig } from '@/lib/borga/llm-providers';
+import { sessionUserId } from '@/lib/borga/features-server';
+import { isValidWsId } from '@/lib/borga/keys';
 
 export const runtime = 'nodejs';
 
-const CLOUD_PROVIDERS = [
-  { id: 'llm-nvidia', label: 'NVIDIA NIM', envKey: 'NVIDIA_API_KEY' },
-  { id: 'llm-gemini', label: 'Gemini', envKey: 'GEMINI_API_KEY' },
-  { id: 'llm-claude', label: 'Claude', envKey: 'ANTHROPIC_API_KEY' },
-  { id: 'llm-openai', label: 'OpenAI', envKey: 'OPENAI_API_KEY' },
-  { id: 'llm-openrouter', label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY' },
-  { id: 'llm-groq', label: 'Groq', envKey: 'GROQ_API_KEY' },
-] as const;
+const PLACEHOLDER_URLS = ['example', 'placeholder', ''];
+const PLACEHOLDER_KEYS = ['xxx', 'placeholder', 'your-key', ''];
 
-async function probeOllama(): Promise<boolean> {
-  const base = process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434';
-  // Strip /v1 suffix to get the base Ollama URL for the health check
-  const ollamaRoot = base.replace(/\/v1\/?$/, '');
+async function ollamaUp(baseUrl: string): Promise<boolean> {
   try {
-    const res = await fetch(`${ollamaRoot}/api/tags`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${baseUrl.replace(/\/v1\/?$/, '')}/api/tags`, { signal: AbortSignal.timeout(2000) });
     return res.ok;
   } catch {
     return false;
   }
 }
 
-function isCustomConfigured(): boolean {
-  const url = process.env.LLM_BASE_URL ?? '';
-  const key = process.env.LLM_API_KEY ?? '';
-  const badUrls = ['example', 'placeholder', ''];
-  const badKeys = ['xxx', 'placeholder', 'your-key', ''];
-  try {
-    new URL(url);
-    return !badUrls.includes(url.toLowerCase()) && !badKeys.includes(key.toLowerCase());
-  } catch {
-    return false;
-  }
-}
+/**
+ * Which providers can actually be called right now. Honours keys saved in the dashboard
+ * (not just process.env) and the workspace's own catalog overrides when ?ws= is given.
+ * Custom endpoint: URL and key both come from the secret store, with a base URL override.
+ */
+export async function GET(req: NextRequest) {
+  const userId = await sessionUserId(req);
+  const wsParam = new URL(req.url).searchParams.get('ws');
+  const ws = userId && isValidWsId(wsParam) ? wsParam : null;
 
-export async function GET() {
-  const [cloudKeys, ollamaUp] = await Promise.all([
-    Promise.all(CLOUD_PROVIDERS.map((p) => getApiKey(p.envKey).then((v) => ({ id: p.id, label: p.label, configured: !!v })))),
-    probeOllama(),
-  ]);
-
-  const providers = [
-    { id: 'llm-demo', label: 'Demo (no key)', configured: true },
-    ...cloudKeys,
-    { id: 'llm-ollama', label: 'Ollama (local)', configured: ollamaUp },
-    { id: 'llm-custom', label: 'Custom endpoint', configured: isCustomConfigured() },
-  ];
-
+  const providers = await Promise.all(
+    Object.keys(DEFAULT_PROVIDER_CONFIG).map(async (id) => {
+      if (id === 'llm-demo') return { id, configured: true };
+      const cfg = await resolveProviderConfig(id, ws, userId);
+      if (id === 'llm-ollama') {
+        const base = (await getApiKey('OLLAMA_BASE_URL')) || cfg.baseUrl;
+        return { id, configured: await ollamaUp(base) };
+      }
+      if (id === 'llm-custom') {
+        const url = (await getApiKey('LLM_BASE_URL')) || cfg.baseUrl;
+        const key = cfg.envVar ? await getApiKey(cfg.envVar) : '';
+        let valid = false;
+        try {
+          new URL(url);
+          valid = !PLACEHOLDER_URLS.includes(url.toLowerCase());
+        } catch {
+          valid = false;
+        }
+        return { id, configured: valid && !PLACEHOLDER_KEYS.includes(key.toLowerCase()) };
+      }
+      return { id, configured: !!cfg.baseUrl && (!cfg.envVar || !!(await getApiKey(cfg.envVar))) };
+    }),
+  );
   return NextResponse.json({ providers });
 }

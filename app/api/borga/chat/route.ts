@@ -3,9 +3,11 @@ import { getBorgaState, scopedKey } from '@/lib/borga/persistence';
 import { getApiKey } from '@/lib/borga/secrets';
 import { resolveProviderConfig } from '@/lib/borga/llm-providers';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
+import { kbFactsFor } from '@/lib/borga/supermemory-context';
 import { userWsKey } from '@/lib/borga/keys';
 import { type KnowledgeEntry } from '@/lib/borga/data';
 import { MODEL_PROVIDER_PREFIX } from '@/lib/borga/agent-context';
+import { BORGA_SYSTEM_PROMPT, sendBrainTurn, streamBrainTurn, type BrainMessage } from '@/lib/borga/agent-core';
 
 async function getUserId(req: NextRequest): Promise<string | null> {
   const c = req.cookies.get(sessionCookieName());
@@ -24,11 +26,8 @@ interface ChatMsg {
 // See lib/borga/llm-providers.ts: the per-workspace `llmCatalog` (DB-backed)
 // overrides the server defaults, so providers can be added/renamed without code.
 
-const SYSTEM_PROMPT = `You are Borga, the orchestrator AI of an autonomous business command center. You are calm, concise and a little warm. You assist the user by delegating tasks to specialist agents, summarizing KPIs, and answering questions about their business.
-
-When the user asks you to DO something (create a task, follow up, delegate), reply by echoing an actionable confirmation in plain language. Keep replies under ~90 words unless asked for detail. Respond conversationally in the language the user speaks.
-
-The user is working inside one of their company workspaces; that company's knowledge base is provided when relevant. Use it to answer accurately about the company, its services and operations.`;
+// Tier 1 unified brain: single system prompt lives in lib/borga/agent-core.ts.
+const SYSTEM_PROMPT = BORGA_SYSTEM_PROMPT;
 
 function generateFallbackResponse(messages: ChatMsg[], kb: KnowledgeEntry[], providerId: string): string {
   const lastUser = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
@@ -99,6 +98,8 @@ export async function POST(req: NextRequest) {
     // KB is optional
   }
 
+  const lastUserText = (body.messages ?? []).filter((m) => m.role === 'user').at(-1)?.content ?? '';
+
   // --- Demo mode: zero-config KB-aware fallback, no API key required ---
   // This is the DEFAULT_LLM selection, so chat must work out of the box; it
   // answers from the workspace knowledge base and otherwise says so plainly.
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (kb.length) {
-      const facts = kb.slice(0, 40).map((k) => `- ${k.title}: ${k.answer}`).join('\n');
+      const facts = await kbFactsFor(userId, ws, kb, lastUserText);
       messages.unshift({ role: 'system', content: `Knowledge base (${companyName}):\n${facts}` });
     }
 
@@ -166,7 +167,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (kb.length) {
-      const facts = kb.slice(0, 40).map((k) => `- ${k.title}: ${k.answer}`).join('\n');
+      const facts = await kbFactsFor(userId, ws, kb, lastUserText);
       messages.unshift({ role: 'system', content: `Knowledge base (${companyName}):\n${facts}` });
     }
 
@@ -210,38 +211,42 @@ export async function POST(req: NextRequest) {
 
   // Inject knowledge base into system prompt
   if (kb.length) {
-    const facts = kb.slice(0, 40).map((k) => `- ${k.title}: ${k.answer}`).join('\n');
+    const facts = await kbFactsFor(userId, ws, kb, lastUserText);
       messages.unshift({ role: 'system', content: `Knowledge base (${companyName}):\n${facts}` });
   }
 
-  try {
-    const upstream = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+  // Tier 1: all cloud turns flow through the unified brain seam (never the SDK directly).
+  const brainMessages: BrainMessage[] = messages.map((m) => ({ role: m.role, content: m.content }));
+  const provider = { providerId, model, apiKey, baseUrl };
+
+  const wantsStream = new URL(req.url).searchParams.get('stream') === '1';
+  if (wantsStream) {
+    const readable = new ReadableStream({
+      async start(controller) {
+        const enc = new TextEncoder();
+        const send = (data: object) => controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+        try {
+          let full = '';
+          await streamBrainTurn(brainMessages, provider, (token) => {
+            full += token;
+            send({ type: 'token', token });
+          });
+          // streamBrainTurn emits the fallback as a single token when streaming
+          // is unavailable, so `full` is always the complete reply here.
+          send({ type: 'complete', reply: full });
+        } catch (err) {
+          console.error('Borga chat stream error', err);
+          send({ type: 'error', error: 'Borga had trouble reaching the model. Please try again shortly.' });
+        } finally {
+          controller.close();
+        }
       },
-      body: JSON.stringify({ model, messages, max_tokens: 512, temperature: 0.6 }),
-      signal: AbortSignal.timeout(45000),
     });
-
-    if (!upstream.ok) {
-      const text = await upstream.text().catch(() => '');
-      console.error('LLM upstream error', upstream.status, text.slice(0, 300));
-      return NextResponse.json(
-        { reply: `The ${providerId.replace('llm-', '')} model returned an error (${upstream.status}). Check your API key and quota.` },
-        { status: 200 },
-      );
-    }
-
-    const data = (await upstream.json()) as { choices?: { message?: { content?: string } }[] };
-    const reply = data.choices?.[0]?.message?.content?.trim();
-    return NextResponse.json({ reply: reply ?? 'Borga received no answer.' }, { status: 200 });
-  } catch (err) {
-    console.error('Borga chat error', err);
-    return NextResponse.json(
-      { reply: 'Borga had trouble reaching the model. Please try again shortly.' },
-      { status: 200 },
-    );
+    return new Response(readable, {
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+    });
   }
+
+  const reply = await sendBrainTurn(brainMessages, provider);
+  return NextResponse.json({ reply }, { status: 200 });
 }

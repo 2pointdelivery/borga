@@ -99,6 +99,30 @@ export async function proxy(req: NextRequest) {
     return res;
   }
 
+  // Inbound mail bridges (Postmark / Mailgun / Cloudflare Email Worker) post here
+  // without our session cookie. The route authenticates them with the
+  // per-workspace inbound token (constant-time compare) and stays rate limited above.
+  if (pathname === '/api/borga/tickets/inbound' && req.method === 'POST') {
+    return res;
+  }
+
+  // Provider webhooks (Meta, Twilio): authenticated inside the route by the provider's
+  // HMAC signature against the tenant's stored credentials; rate limited above.
+  if (pathname.startsWith('/api/borga/hooks/') && (req.method === 'POST' || req.method === 'GET')) {
+    return res;
+  }
+
+  // External business events (GitHub, Stripe, bookings): bearer token or webhook HMAC,
+  // checked inside the route. The same path's token-management action checks the session itself.
+  if (pathname === '/api/borga/webhooks/inbound' && req.method === 'POST') {
+    return res;
+  }
+
+  // Email unsubscribe links (footer + RFC 8058 one-click): authenticated by the signed token in the URL.
+  if (pathname === '/api/borga/email/unsubscribe' && (req.method === 'GET' || req.method === 'POST')) {
+    return res;
+  }
+
   // Authentication gate — full HMAC signature verification (Edge runtime).
   const uid = await verifySessionToken(reqToken(req));
   if (!uid || !isValidUserId(uid)) {

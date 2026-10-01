@@ -15,7 +15,7 @@ export function AIPlatformPage({ initialTab }: { initialTab?: string }) {
       <TabsList>
         <TabsTrigger value="agents">Agents</TabsTrigger>
         <TabsTrigger value="runner">Agent Runner</TabsTrigger>
-        <TabsTrigger value="engine">2point Engine</TabsTrigger>
+        <TabsTrigger value="engine">Company Engine</TabsTrigger>
         <TabsTrigger value="planner">Planner</TabsTrigger>
         <TabsTrigger value="activity">Activity Log</TabsTrigger>
       </TabsList>

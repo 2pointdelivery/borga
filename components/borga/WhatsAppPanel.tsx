@@ -31,11 +31,11 @@ export function WhatsAppPanel({ open, onOpenChange }: { open: boolean; onOpenCha
     } else {
       setWhatsapp({
         connected: true,
-        phone: '+1 (800) 2POINT1',
-        waId: 'WABA-2POINT-2026',
+        phone: 'Demo number',
+        waId: 'WABA-DEMO',
         lastSync: `${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
       });
-      connectApp('cn-whatsapp', { status: 'connected', account: '+1 (800) 2POINT1', scopes: 'send, receive, templates', lastSync: 'Just now' });
+      connectApp('cn-whatsapp', { status: 'connected', account: 'Demo number', scopes: 'send, receive, templates', lastSync: 'Just now' });
       log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'task', message: 'WhatsApp Business connected — agent-to-client chat live.' });
     }
   };
@@ -63,7 +63,7 @@ export function WhatsAppPanel({ open, onOpenChange }: { open: boolean; onOpenCha
       contact: lead.email || `+1 555 01${(lead.id.length * 7) % 99}`,
       channel: 'whatsapp',
       agent: 'Atlas',
-      messages: [{ id: `cm-${Date.now()}`, role: 'agent', sender: 'Atlas', text: `Hi ${lead.name} — reaching out from 2Point. How can we help today?`, at: 'Just now' }],
+      messages: [{ id: `cm-${Date.now()}`, role: 'agent', sender: 'Atlas', text: `Hi ${lead.name} — reaching out from our team. How can we help today?`, at: 'Just now' }],
     };
     addChat(thread);
     setActiveId(thread.id);

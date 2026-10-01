@@ -90,6 +90,8 @@ INITIAL_APPROVALS,
   INITIAL_OPS,
   type ScheduledTask,
   type AgentRun,
+  type ProactiveNotice,
+  INITIAL_NOTICES,
   type Workspace,
   type WorkspaceOnboarding,
   type Employee,
@@ -126,6 +128,8 @@ INITIAL_APPROVALS,
   type TaxProfile,
   type Budget,
   INITIAL_BUDGETS,
+  type RevenueTrack,
+  INITIAL_REVENUE_TRACKS,
   generateBudgetForecast,
   resolveLineGrowthPct,
   DEFAULT_BUDGET_ASSUMPTIONS,
@@ -136,6 +140,9 @@ INITIAL_APPROVALS,
   INITIAL_RECONCILIATION_RULES,
   normalizeReconciliationPattern,
 } from './data';
+import { notifyEmail } from './email-client';
+import { mergeCustomers, mergeLeads, type CrmCustomer, type CrmLead, type MergeSummary } from './crm-core';
+import { buildBill, buildInvoice, dueRuns, isFinished, nextBillNumber, nextInvoiceNumber, recurringBillRef, recurringRef, type RecurringBill, type RecurringInvoice } from './recurring';
 
 type PersistEntity =
   | 'agents'
@@ -189,9 +196,13 @@ type PersistEntity =
   | 'taxProfiles'
   | 'valuation'
   | 'budgets'
+  | 'revenueTracks'
+  | 'recurringInvoices'
+  | 'recurringBills'
   | 'projects'
   | 'reconciliationRules'
-  | 'mcpServers';
+  | 'mcpServers'
+  | 'notices';
 
 // Active workspace id is tracked at module level so the fire-and-forget
 // persistence helper can scope every write to the current company without
@@ -256,8 +267,9 @@ const LS_FALLBACK_FIELDS: [keyof BorgaStore, string][] = [
   ['bankAccounts', 'bankAccounts'], ['bankTxns', 'bankTxns'], ['workflows', 'workflows'],
   ['closures', 'closures'], ['timeEntries', 'timeEntries'], ['invites', 'invites'],
   ['taxProfiles', 'taxProfiles'], ['valuation', 'valuation'],
-  ['budgets', 'budgets'], ['projects', 'projects'],
+  ['budgets', 'budgets'], ['revenueTracks', 'revenueTracks'], ['recurringInvoices', 'recurringInvoices'], ['recurringBills', 'recurringBills'], ['projects', 'projects'],
   ['reconciliationRules', 'reconciliationRules'], ['mcpServers', 'mcpServers'],
+  ['notices', 'notices'],
 ];
 
 // The fundraising agent (Nadia) is a core built-in: whenever the agent list
@@ -279,15 +291,20 @@ function ensureNadia(agents: Agent[]): Agent[] {
 // also mirrored into a per-workspace localStorage composite so company-specific
 // data survives workspace switches even when the database is unavailable.
 let offlineNotified = false;
+// Set when the last load from the server failed. The screen then shows seed or local data,
+// so server writes are held: saving it later would overwrite the user's real records.
+let SERVER_LOAD_FAILED = false;
 async function persist(entity: PersistEntity, value: unknown) {
   const ws = entity === 'workspaces' ? null : ACTIVE_WS;
   writeLocal(ws, entity, value);
+  if (SERVER_LOAD_FAILED) return;
   try {
-    await fetch('/api/borga/data', {
+    const res = await fetch('/api/borga/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
       body: JSON.stringify({ entity, value, ws: entity === 'workspaces' ? undefined : ACTIVE_WS }),
     });
+    if (!res.ok && res.status !== 401) throw new Error('save failed');
     offlineNotified = false;
   } catch {
     /* offline — state still lives in memory (+ localStorage fallback) */
@@ -300,6 +317,17 @@ async function persist(entity: PersistEntity, value: unknown) {
       });
     }
   }
+}
+
+function failServerLoad() {
+  if (!SERVER_LOAD_FAILED) {
+    toast({
+      title: 'Could not load your saved data',
+      description: 'The database is not reachable. Saving to the server is paused so your records are not overwritten. Reload to retry.',
+      variant: 'error',
+    });
+  }
+  SERVER_LOAD_FAILED = true;
 }
 
 export type ThemeMode = 'system' | 'light' | 'dark' | 'midnight' | 'sunset' | 'forest';
@@ -460,6 +488,33 @@ interface BorgaStore {
   setBudgetLineGrowth: (budgetId: string, accountId: string, growthPct: number) => void;
   applyBudgetForecast: (budgetId: string) => void;
 
+  /** Merges CRM records (from the Company Engine) into customers and deals. Idempotent. */
+  importCrmRecords: (customers: CrmCustomer[] | null, leads: CrmLead[] | null) => { customers?: MergeSummary; leads?: MergeSummary };
+
+  // ── Recurring vendor bills (templates that record an unpaid bill on schedule; never pay) ──
+  recurringBills: RecurringBill[];
+  addRecurringBill: (r: RecurringBill) => void;
+  updateRecurringBill: (id: string, patch: Partial<RecurringBill>) => void;
+  deleteRecurringBill: (id: string) => void;
+  /** Records every due, not-yet-generated bill. Idempotent. Returns how many were created. */
+  runRecurringBills: (todayIso?: string) => { created: number; bills: string[] };
+
+  // ── Recurring sales invoices (templates that generate draft invoices on schedule) ──
+  recurringInvoices: RecurringInvoice[];
+  addRecurringInvoice: (r: RecurringInvoice) => void;
+  updateRecurringInvoice: (id: string, patch: Partial<RecurringInvoice>) => void;
+  deleteRecurringInvoice: (id: string) => void;
+  /** Creates every due, not-yet-generated draft invoice. Idempotent. Returns how many were created. */
+  runRecurringInvoices: (todayIso?: string) => { created: number; invoices: string[] };
+
+  // ── Revenue tracker (targets vs actuals) ────────────────────────────────
+  revenueTracks: RevenueTrack[];
+  addRevenueTrack: (t: RevenueTrack) => void;
+  updateRevenueTrack: (id: string, patch: Partial<RevenueTrack>) => void;
+  deleteRevenueTrack: (id: string) => void;
+  setRevenueActual: (trackId: string, lineId: string, monthIdx: number, amount: number) => void;
+  setRevenueActualTotal: (trackId: string, monthIdx: number, amount: number) => void;
+
   // ── Project management ─────────────────────────────────────────────────────
   projects: Project[];
   addProject: (p: Project) => void;
@@ -574,6 +629,8 @@ interface BorgaStore {
 
   llm: LlmSelection;
   setLlm: (patch: Partial<LlmSelection>) => void;
+  /** Sets the workspace default provider/model and re-points every agent that was following the old default. */
+  setDefaultLlm: (patch: Partial<LlmSelection>) => void;
 
   /** DB-backed, per-workspace AI model catalog (providers + models). Editable per company. */
   llmCatalog: LlmProvider[];
@@ -631,6 +688,11 @@ interface BorgaStore {
   agentRuns: AgentRun[];
   addAgentRun: (r: AgentRun) => void;
   clearAgentRuns: () => void;
+
+  notices: ProactiveNotice[];
+  addNotice: (n: ProactiveNotice) => void;
+  dismissNotice: (id: string) => void;
+  clearNotices: () => void;
 }
 
 let logSeq = 0;
@@ -772,7 +834,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   dbAvailable: false,
 
   workspaces: INITIAL_WORKSPACES,
-  activeWorkspaceId: INITIAL_WORKSPACES[0]?.id ?? 'ws-2point',
+  activeWorkspaceId: INITIAL_WORKSPACES[0]?.id ?? 'ws-default',
   activeWorkspace: () => get().workspaces.find((w) => w.id === get().activeWorkspaceId),
   setActiveWorkspace: (id) => {
     if (!get().workspaces.some((w) => w.id === id)) return;
@@ -1660,6 +1722,161 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('budgets', get().budgets);
   },
 
+  importCrmRecords: (customers, leads) => {
+    const now = new Date().toISOString();
+    const out: { customers?: MergeSummary; leads?: MergeSummary } = {};
+    if (customers) {
+      const r = mergeCustomers(get().customers, customers, now);
+      set({ customers: r.next });
+      persist('customers', get().customers);
+      out.customers = r.summary;
+    }
+    if (leads) {
+      const r = mergeLeads(get().leads, leads, get().customers);
+      set({ leads: r.next });
+      persist('leads', get().leads);
+      out.leads = r.summary;
+    }
+    return out;
+  },
+
+  recurringBills: [],
+  addRecurringBill: (r) => {
+    set((s) => ({ recurringBills: [r, ...s.recurringBills] }));
+    persist('recurringBills', get().recurringBills);
+  },
+  updateRecurringBill: (id, patch) => {
+    set((s) => ({ recurringBills: s.recurringBills.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
+    persist('recurringBills', get().recurringBills);
+  },
+  deleteRecurringBill: (id) => {
+    // Bills already recorded stay: they are real payables. Only the schedule goes away.
+    set((s) => ({ recurringBills: s.recurringBills.filter((r) => r.id !== id) }));
+    persist('recurringBills', get().recurringBills);
+  },
+  runRecurringBills: (todayIso) => {
+    const today = todayIso ?? new Date().toISOString().slice(0, 10);
+    const st = get();
+    let bills = st.bills;
+    const created: Bill[] = [];
+    const nextRecs = st.recurringBills.map((rec) => {
+      const runs = dueRuns(rec, today);
+      if (runs.length === 0) return rec;
+      let cur = rec;
+      for (const run of runs) {
+        if (!bills.some((b) => b.externalRef === recurringBillRef(rec.id, run.index))) {
+          const seed = Date.now().toString(36) + '-' + created.length;
+          const bill = buildBill(rec, run, nextBillNumber(bills), st.taxProfiles, seed);
+          bills = [bill, ...bills];
+          created.push(bill);
+        }
+        cur = { ...cur, generatedCount: run.index + 1, lastGeneratedIso: run.dateIso };
+      }
+      return { ...cur, status: isFinished(cur) ? ('ended' as const) : cur.status };
+    });
+    if (created.length === 0 && nextRecs.every((r, i) => r === st.recurringBills[i])) return { created: 0, bills: [] };
+    set({ bills, recurringBills: nextRecs });
+    persist('bills', get().bills);
+    persist('recurringBills', get().recurringBills);
+    if (created.length) {
+      get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'task', message: 'Recurring billing recorded ' + created.length + ' unpaid bill(s): ' + created.map((b) => b.number + ' ' + b.vendorName).join(', ') + '. Nothing was paid; review them under Finance → Vendors & AP.' });
+    }
+    return { created: created.length, bills: created.map((b) => b.number) };
+  },
+
+  recurringInvoices: [],
+  addRecurringInvoice: (r) => {
+    set((s) => ({ recurringInvoices: [r, ...s.recurringInvoices] }));
+    persist('recurringInvoices', get().recurringInvoices);
+  },
+  updateRecurringInvoice: (id, patch) => {
+    set((s) => ({ recurringInvoices: s.recurringInvoices.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
+    persist('recurringInvoices', get().recurringInvoices);
+  },
+  deleteRecurringInvoice: (id) => {
+    // Generated invoices stay: they are real documents. Only the schedule goes away.
+    set((s) => ({ recurringInvoices: s.recurringInvoices.filter((r) => r.id !== id) }));
+    persist('recurringInvoices', get().recurringInvoices);
+  },
+  runRecurringInvoices: (todayIso) => {
+    const today = todayIso ?? new Date().toISOString().slice(0, 10);
+    const st = get();
+    let invoices = st.invoices;
+    const created: Invoice[] = [];
+    const nextRecs = st.recurringInvoices.map((rec) => {
+      const runs = dueRuns(rec, today);
+      if (runs.length === 0) return rec;
+      let cur = rec;
+      for (const run of runs) {
+        // Idempotency: an occurrence already present (e.g. the template was re-imported) is skipped, not duplicated.
+        if (!invoices.some((i) => i.externalRef === recurringRef(rec.id, run.index))) {
+          const seed = Date.now().toString(36) + '-' + created.length;
+          const inv = buildInvoice(rec, run, nextInvoiceNumber(invoices), st.taxProfiles, seed);
+          invoices = [inv, ...invoices];
+          created.push(inv);
+        }
+        cur = { ...cur, generatedCount: run.index + 1, lastGeneratedIso: run.dateIso };
+      }
+      return { ...cur, status: isFinished(cur) ? ('ended' as const) : cur.status };
+    });
+    if (created.length === 0 && nextRecs.every((r, i) => r === st.recurringInvoices[i])) return { created: 0, invoices: [] };
+    set({ invoices, recurringInvoices: nextRecs });
+    persist('invoices', get().invoices);
+    persist('recurringInvoices', get().recurringInvoices);
+    if (created.length) {
+      get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'task', message: 'Recurring billing created ' + created.length + ' draft invoice(s): ' + created.map((i) => i.number + ' ' + i.client).join(', ') + '. Review and send them from Sales → Invoicing.' });
+    }
+    return { created: created.length, invoices: created.map((i) => i.number) };
+  },
+
+  revenueTracks: INITIAL_REVENUE_TRACKS,
+  addRevenueTrack: (t) => {
+    set((s) => ({ revenueTracks: [t, ...s.revenueTracks] }));
+    persist('revenueTracks', get().revenueTracks);
+  },
+  updateRevenueTrack: (id, patch) => {
+    set((s) => ({ revenueTracks: s.revenueTracks.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
+    persist('revenueTracks', get().revenueTracks);
+  },
+  deleteRevenueTrack: (id) => {
+    set((s) => ({ revenueTracks: s.revenueTracks.filter((t) => t.id !== id) }));
+    persist('revenueTracks', get().revenueTracks);
+  },
+  setRevenueActual: (trackId, lineId, monthIdx, amount) => {
+    set((s) => ({
+      revenueTracks: s.revenueTracks.map((t) => {
+        if (t.id !== trackId) return t;
+        return {
+          ...t,
+          lines: t.lines.map((l) =>
+            l.id === lineId
+              ? { ...l, actuals: l.actuals.map((a, i) => (i === monthIdx ? amount : a)) }
+              : l,
+          ),
+        };
+      }),
+    }));
+    persist('revenueTracks', get().revenueTracks);
+  },
+  // Spread an all-lines actual across service lines pro-rata to that month's targets.
+  setRevenueActualTotal: (trackId, monthIdx, amount) => {
+    set((s) => ({
+      revenueTracks: s.revenueTracks.map((t) => {
+        if (t.id !== trackId) return t;
+        const monthTarget = t.lines.reduce((sum, l) => sum + (l.targets[monthIdx] ?? 0), 0);
+        return {
+          ...t,
+          lines: t.lines.map((l) => {
+            const share = monthTarget > 0 ? (l.targets[monthIdx] ?? 0) / monthTarget : 0;
+            const actuals = l.actuals.map((a, i) => (i === monthIdx ? Math.round(amount * share) : a));
+            return { ...l, actuals };
+          }),
+        };
+      }),
+    }));
+    persist('revenueTracks', get().revenueTracks);
+  },
+
   projects: INITIAL_PROJECTS,
   addProject: (p) => {
     set((s) => ({ projects: [p, ...s.projects] }));
@@ -1859,7 +2076,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
   calls: INITIAL_CALLS,
   placeCall: (a) => {
-    const voiceName = get().elevenlabs.voice || 'rachel';
+    const voiceName = get().elevenlabs.voice || 'george';
     const companyName = get().activeWorkspace()?.name ?? 'the company';
     const script = a.note || `Hello, this is ${a.agentName} calling from ${companyName}. I'm reaching out to ${a.leadName || a.contact} regarding a potential partnership opportunity. Please feel free to call us back. Have a wonderful day.`;
     const id = `call-${Date.now()}`;
@@ -2091,6 +2308,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
   addApproval: (a) => {
     set((s) => ({ approvals: [a, ...s.approvals] }));
+    if (a.status === 'pending') notifyEmail(get().activeWorkspaceId, 'approval_requested', { id: a.id, title: a.title, description: a.description, amount: a.amount, submittedBy: a.submittedBy });
     persist('approvals', get().approvals);
   },
 
@@ -2285,6 +2503,19 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('llm', get().llm);
   },
 
+  setDefaultLlm: (patch) => {
+    const prev = get().llm;
+    const next = { ...prev, ...patch };
+    set({ llm: next });
+    persist('llm', next);
+    // Agents pinned to the old default model move with it; agents with no model already follow the default.
+    if (next.model !== prev.model) {
+      for (const a of get().agents) {
+        if (a.model && a.model === prev.model) get().updateAgent(a.id, { model: next.model });
+      }
+    }
+  },
+
   llmCatalog: LLM_PROVIDERS,
   setLlmCatalog: (catalog) => {
     set({ llmCatalog: catalog });
@@ -2317,6 +2548,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       });
       const reg = await regRes.json() as { workspaces?: Workspace[]; persisted?: boolean };
       if (seq !== hydrateSeq) return; // superseded by a newer hydrate
+      if (regRes.status === 503) failServerLoad();
       const dbAvailable = reg.persisted === true;
       // When the database is available, the workspace registry is fully
       // server-authoritative (per-user) — do not merge in the global seed
@@ -2343,6 +2575,13 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       const d = await res.json();
       // Isolation guard: discard stale responses outright.
       if (seq !== hydrateSeq || get().activeWorkspaceId !== wsId) return;
+      if (!res.ok) {
+        // Database unavailable: keep what is on screen, hold server writes, never treat seed data as saved.
+        failServerLoad();
+        set({ synced: true, dbAvailable: false });
+        return;
+      }
+      SERVER_LOAD_FAILED = false;
       const dbAgents = Array.isArray(d.agents) && d.agents.length ? (d.agents as Agent[]) : null;
       const agents = dbAgents ? ensureNadia(dbAgents) : AGENTS;
       const agentsChanged = !!dbAgents && agents !== dbAgents;
@@ -2384,6 +2623,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         leads: d.leads ?? INITIAL_LEADS,
         scheduledTasks: Array.isArray(d.scheduledTasks) ? d.scheduledTasks : INITIAL_SCHEDULED_TASKS,
         agentRuns: Array.isArray(d.agentRuns) ? d.agentRuns : [],
+        notices: Array.isArray(d.notices) ? d.notices : INITIAL_NOTICES,
         employees: Array.isArray(d.employees) ? d.employees : INITIAL_EMPLOYEES,
         leaveRequests: Array.isArray(d.leave) ? d.leave : INITIAL_LEAVE,
         invoices: Array.isArray(d.invoices) ? d.invoices : INITIAL_INVOICES,
@@ -2403,6 +2643,9 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         invites: Array.isArray(d.invites) ? d.invites : [],
         taxProfiles: Array.isArray(d.taxProfiles) ? d.taxProfiles : INITIAL_TAX_PROFILES,
         budgets: Array.isArray(d.budgets) ? d.budgets : INITIAL_BUDGETS,
+        revenueTracks: Array.isArray(d.revenueTracks) ? d.revenueTracks : INITIAL_REVENUE_TRACKS,
+        recurringInvoices: Array.isArray(d.recurringInvoices) ? d.recurringInvoices : [],
+        recurringBills: Array.isArray(d.recurringBills) ? d.recurringBills : [],
         projects: Array.isArray(d.projects) ? d.projects : INITIAL_PROJECTS,
         reconciliationRules: Array.isArray(d.reconciliationRules) ? d.reconciliationRules : INITIAL_RECONCILIATION_RULES,
       });
@@ -2423,6 +2666,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     } catch {
       // Never leave the shell stuck on the loading spinner. Surface the app
       // with whatever local state we have so the user can recover.
+      failServerLoad();
       set({ synced: true });
     }
   },
@@ -2549,7 +2793,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     })
       .then((r) => r.json())
       .then((d: { ok?: boolean; mode?: string; steps?: Array<{ step: string; output: string; status: string }>; summary?: string }) => {
-        const mode = d.mode === 'remote' ? '2point engine' : 'local fallback';
+        const mode = d.mode === 'remote' ? 'company engine' : 'local fallback';
         get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow "${workflowName}" dispatched to ${mode}.` });
 
         // If local execution, process the steps
@@ -2633,6 +2877,25 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   clearAgentRuns: () => {
     set({ agentRuns: [] });
     persist('agentRuns', []);
+  },
+
+  notices: INITIAL_NOTICES,
+  addNotice: (n) => {
+    set((s) => ({ notices: [n, ...s.notices].slice(0, 100) }));
+    persist('notices', get().notices);
+  },
+  dismissNotice: (id) => {
+    set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
+    persist('notices', get().notices);
+    fetch('/api/borga/scheduler', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+      body: JSON.stringify({ action: 'dismissNotice', id, ws: ACTIVE_WS }),
+    }).catch(() => null);
+  },
+  clearNotices: () => {
+    set({ notices: [] });
+    persist('notices', []);
   },
 }));
 
