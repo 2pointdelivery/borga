@@ -14,22 +14,46 @@ export interface FreeProviderPreset {
   id: string;
   label: string;
   signupUrl: string;
-  /** all: every listed model can be used on the free tier (rate limited). priced: free ones are marked by price (OpenRouter). credits: free starter credits. */
-  free: 'all' | 'priced' | 'credits';
-  /** The model list is public, so models can be loaded before a key is added (the key is still needed to use them). */
+  /**
+   * all: every listed model can be used on the free tier (rate limited). priced: free ones are marked by price (OpenRouter).
+   * credits: free starter credits. flagged: the provider marks which models need an account (LLM7 `usage_based_only`).
+   */
+  free: 'all' | 'priced' | 'credits' | 'flagged';
+  /** The model list is public, so models can be loaded before a key is added (a key is still needed to use them, unless keyless). */
   keyOptional?: boolean;
+  /** Works with no account and no API key at all, for the list and for chat. */
+  keyless?: boolean;
+  /** Runs on the user's own machine (Ollama): listed from the local server, never through the public-URL guard. */
+  local?: boolean;
+  /** Shown on the card: what the user is trading for "free". */
+  warning?: string;
   note: string;
 }
 
+const COMMUNITY_WARNING = 'Community-run free service with no account: your prompts go to a third party and it can change or go away. Do not send confidential company data.';
+
 export const FREE_LLM_PROVIDERS: FreeProviderPreset[] = [
-  { id: 'llm-groq', label: 'Groq', signupUrl: 'https://console.groq.com/keys', free: 'all', note: 'Free tier, rate limited per model and per day' },
-  { id: 'llm-gemini', label: 'Google Gemini', signupUrl: 'https://aistudio.google.com/apikey', free: 'all', note: 'Free tier in Google AI Studio; limits differ per model' },
-  { id: 'llm-openrouter', label: 'OpenRouter', signupUrl: 'https://openrouter.ai/keys', free: 'priced', keyOptional: true, note: 'Only models priced at zero (":free"); the list changes often' },
-  { id: 'llm-nvidia', label: 'NVIDIA NIM', signupUrl: 'https://build.nvidia.com', free: 'credits', note: 'Free starter credits, no card' },
-  { id: 'llm-cerebras', label: 'Cerebras', signupUrl: 'https://cloud.cerebras.ai', free: 'all', note: 'Free tier, rate limited' },
-  { id: 'llm-sambanova', label: 'SambaNova', signupUrl: 'https://cloud.sambanova.ai', free: 'all', note: 'Free tier, rate limited' },
-  { id: 'llm-mistral', label: 'Mistral', signupUrl: 'https://console.mistral.ai/api-keys', free: 'all', note: 'Free "Experiment" plan, rate limited' },
+  { id: 'llm-pollinations', label: 'Pollinations', signupUrl: 'https://pollinations.ai', free: 'all', keyOptional: true, keyless: true, warning: COMMUNITY_WARNING, note: 'No key needed. Anonymous tier, rate limited' },
+  { id: 'llm-llm7', label: 'LLM7', signupUrl: 'https://llm7.io', free: 'flagged', keyOptional: true, keyless: true, warning: COMMUNITY_WARNING, note: 'No key needed for the models marked free; the rest need an account' },
+  { id: 'llm-ollama', label: 'Ollama (local)', signupUrl: 'https://ollama.com/download', free: 'all', keyOptional: true, keyless: true, local: true, note: 'Runs on your own computer: free and private. Install Ollama and pull a model first' },
+  { id: 'llm-openrouter', label: 'OpenRouter', signupUrl: 'https://openrouter.ai/keys', free: 'priced', keyOptional: true, note: 'List is public; only models priced at zero (":free") are free. A free key is needed to chat' },
+  { id: 'llm-nvidia', label: 'NVIDIA NIM', signupUrl: 'https://build.nvidia.com', free: 'credits', keyOptional: true, note: 'List is public; a free key with starter credits is needed to chat' },
+  { id: 'llm-sambanova', label: 'SambaNova', signupUrl: 'https://cloud.sambanova.ai', free: 'all', keyOptional: true, note: 'List is public; a free key is needed to chat. Rate limited' },
+  { id: 'llm-groq', label: 'Groq', signupUrl: 'https://console.groq.com/keys', free: 'all', note: 'Free tier, rate limited. The live list needs your free key' },
+  { id: 'llm-gemini', label: 'Google Gemini', signupUrl: 'https://aistudio.google.com/apikey', free: 'all', note: 'Free tier in Google AI Studio. The live list needs your free key' },
+  { id: 'llm-cerebras', label: 'Cerebras', signupUrl: 'https://cloud.cerebras.ai', free: 'all', note: 'Free tier, rate limited. The live list needs your free key' },
+  { id: 'llm-mistral', label: 'Mistral', signupUrl: 'https://console.mistral.ai/api-keys', free: 'all', note: 'Free "Experiment" plan. The live list needs your free key' },
 ];
+
+/**
+ * Model search used by the dropdown: every typed word must appear in the model's name, id or tag (case-insensitive). A fuzzy
+ * match lets unrelated ids through ("llama 70b" also matched "mistral-7b-instruct"). An empty query matches everything.
+ */
+export function matchesModelSearch(haystack: string, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const hay = haystack.toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
 
 export const presetFor = (providerId: string): FreeProviderPreset | undefined => FREE_LLM_PROVIDERS.find((p) => p.id === providerId);
 
@@ -47,6 +71,10 @@ interface RawModel {
   inputTokenLimit?: unknown;
   supportedGenerationMethods?: unknown;
   pricing?: { prompt?: unknown; completion?: unknown } | null;
+  /** LLM7: chat, image, video, audio_to_text, ... */
+  model_type?: unknown;
+  /** LLM7: true when the model needs an account (credits), false when it works anonymously. */
+  usage_based_only?: unknown;
 }
 
 const num = (v: unknown): number | undefined => {
@@ -91,6 +119,7 @@ export function parseModelList(providerId: string, payload: unknown, opts: { fre
     if (!id) continue;
 
     if (NOT_CHAT.test(id)) { skipped++; continue; }
+    if (typeof m.model_type === 'string' && m.model_type !== 'chat') { skipped++; continue; }
     if (Array.isArray(m.supportedGenerationMethods) && !m.supportedGenerationMethods.includes('generateContent')) { skipped++; continue; }
 
     let tier: LlmModelTier;
@@ -98,6 +127,9 @@ export function parseModelList(providerId: string, payload: unknown, opts: { fre
       const priceKnown = m.pricing && m.pricing.prompt !== undefined && m.pricing.completion !== undefined;
       const free = id.endsWith(':free') || (priceKnown && num(m.pricing?.prompt) === 0 && num(m.pricing?.completion) === 0);
       tier = free ? 'free' : 'paid';
+    } else if (preset?.free === 'flagged') {
+      // LLM7: only models the provider itself marks as not usage-based work without an account.
+      tier = m.usage_based_only === false ? 'free' : 'paid';
     } else {
       tier = preset?.free === 'credits' ? 'credits' : preset ? 'free' : 'paid';
     }
@@ -105,7 +137,9 @@ export function parseModelList(providerId: string, payload: unknown, opts: { fre
 
     const label = String((typeof m.display_name === 'string' && m.display_name) || (typeof m.displayName === 'string' && m.displayName) || (typeof m.name === 'string' && !m.name.startsWith('models/') && m.name) || id)
       .replace(/\s*\(free\)\s*$/i, '');
-    const ctx = num(m.context_length) ?? num(m.context_window) ?? num(m.max_model_len) ?? num(m.inputTokenLimit);
+    // context_window is a number for most providers and { tokens } for LLM7
+    const cw = m.context_window && typeof m.context_window === 'object' ? (m.context_window as { tokens?: unknown }).tokens : m.context_window;
+    const ctx = num(m.context_length) ?? num(cw) ?? num(m.max_model_len) ?? num(m.inputTokenLimit);
     const info: LlmModelInfo = { id, label, tier };
     if (ctx && ctx >= 1000) info.contextK = Math.round(ctx / 1000);
     const tag = tagFor(id);

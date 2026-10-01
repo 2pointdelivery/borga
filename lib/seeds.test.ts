@@ -29,6 +29,8 @@ test('KPI cards start with labels and units only: no invented values, targets or
 test('agents start with no invented track record', () => {
   assert.ok(d.AGENTS.length > 0);
   for (const a of d.AGENTS) assert.deepEqual([a.tasksCompleted, a.accuracy], [0, 0], a.name);
+  // an empty model means "workspace default"; seeded ids like nvidia/mixtral-8x22b exist in no catalog and would fail with a key
+  for (const a of d.AGENTS) assert.equal(a.model, '', `${a.name} must follow the workspace default model`);
 });
 
 test('sample scheduled tasks are switched off templates, not automation nobody asked for', () => {

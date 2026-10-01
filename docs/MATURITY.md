@@ -148,3 +148,28 @@ Still open: backups live on the same VM disk (copy them off the VM); there is no
 - **No per-account lock.** The per-IP limit does not stop one account being guessed from many addresses. After 8 wrong passwords in 15 minutes an account is locked (429 with `Retry-After`); the correct password does not bypass the lock; unknown emails are counted the same way so the lock reveals nothing; memory is bounded (an attack with endless fresh emails costs the same per request, 55 ms for 30,000 failures). Trade-off: someone can lock a known email for 15 minutes by failing on purpose; the owner can still reset the password by email.
 
 **Not verified / still open.** The Caddy header overwrite is written to Caddy's documented `header_up` syntax but Caddy has not been run here (part of the first-run checklist). The throttle and the per-IP limiter are in memory, per process: correct for the single-instance deployment, wrong if scaled out. Signup still answers "an account with this email already exists" (visible enumeration for people who hold a valid invite). The password-reset and email-verification flows were not re-tested against a real mailbox (T16).
+
+## Update 2026-10-01: free models for every provider, no-key providers, and the model dropdown
+
+**What was asked.** Free model loading only worked for OpenRouter; make it work for all providers, let free providers that need no API key work out of the box, and fix the model dropdown.
+
+**What is true, checked live against each provider (not assumed).**
+
+| Provider | Model list without a key | Chat without a key |
+|---|---|---|
+| Pollinations | yes | **yes** (anonymous tier) |
+| LLM7 | yes (5 of 67 models are free anonymously) | **yes**, for the models the provider itself flags as not usage-based; the other 47 return 401 |
+| Ollama (local) | yes (read from your own machine) | yes |
+| OpenRouter, NVIDIA NIM, SambaNova | yes | no, a free key is needed |
+| Groq, Cerebras, Mistral | no (401/403) | no |
+| Google Gemini | no (404 without a key) | no |
+
+So the four providers whose list needs a key cannot load before one is saved. They now say so plainly ("needs your free API key") instead of failing, show a starter list in the meantime, and **load their live list automatically the moment the key is saved**. Public lists (OpenRouter, NVIDIA, SambaNova, Pollinations, LLM7) load by themselves the first time the AI & Voice tab is opened, with no clicks.
+
+**Providers that work with no account.** Pollinations and LLM7 are new presets, shown as "ready" with a warning, because they are community-run services: prompts go to a third party, anonymous tiers are throttled (a burst of requests got 402 and 429), and they can change or disappear. Do not use them for confidential company data; the card and the "Use as default" toast both say so. A rate-limited reply now says it was rate limited instead of "had trouble reaching the model". A keyless provider no longer borrows NVIDIA's key name in the chat route (a latent bug for any provider without a key variable).
+
+**The dropdown.** The old native select had several real faults: it was disabled until a key existed (so you could not browse), it could show one model while "Use as default" sent a different, stale one after the list was reloaded, it had no search (NVIDIA has 70 models), and nothing told you when a saved model was not in the list. Replaced by one searchable, grouped picker (`ModelPicker`: Radix popover + cmdk) used in every provider card and in the per-agent model override. It is always usable, requires every typed word to match (fuzzy matching let unrelated ids through), accepts a custom model id, and shows a saved id that is not in the list as a "custom id" instead of silently changing it. Also fixed: all 50 seeded agents pointed at five NVIDIA model ids that exist in no catalog and would have failed once an NVIDIA key was saved; they now use the workspace default.
+
+**Verified.** Every provider's list through the real route (table above); keyless chat and the Test button through the app for Pollinations ("2+2 equals 4.") and LLM7 with no key anywhere; rejection path with bogus keys (Cerebras and Mistral: clear 401 message); in a real browser: auto-load on first visit, search ("llama 70b" gives exactly 4 models), selection, Use as default and Test on the keyless LLM7 card ("Replied in 390 ms"), the default surviving a full reload, and the picker working inside the agent edit dialog. 16 model-catalog tests, 155 unit tests in all.
+
+**Not verified.** No real keys were available, so the live lists for Groq, Gemini, Cerebras and Mistral follow their documented response shapes but have not been read from the real services. Ollama's "load installed models" was only checked in the not-running case. The free/anonymous quotas of Pollinations and LLM7 are the providers' own and may change.

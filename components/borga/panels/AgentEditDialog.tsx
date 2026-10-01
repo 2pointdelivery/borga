@@ -6,7 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ModelPicker } from './ModelPicker';
+import { presetFor } from '@/lib/borga/model-catalog';
 import { useBorga } from '@/lib/borga/store';
 import type { Agent } from '@/lib/borga/data';
 
@@ -31,7 +33,7 @@ export function AgentEditDialog({ agent, open, onOpenChange }: { agent: Agent | 
     if (!model || model === DEFAULT_VALUE) return null;
     const owner = ownerOf(model);
     if (!owner) return 'This model is not in the catalog, so the agent will use the default model.';
-    if (usable && !usable.has(owner.id)) return owner.label + ' has no usable key right now, so this agent will use the default model.';
+    if (usable && !usable.has(owner.id)) return owner.label + (presetFor(owner.id)?.local ? ' is not running right now' : ' has no usable key right now') + ', so this agent will use the default model.';
     return null;
   };
   const [form, setForm] = useState<Agent | null>(null);
@@ -101,18 +103,15 @@ export function AgentEditDialog({ agent, open, onOpenChange }: { agent: Agent | 
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Model</label>
-                <Select value={editing.model && ownerOf(editing.model) ? editing.model : DEFAULT_VALUE} onValueChange={(v) => patch({ model: v === DEFAULT_VALUE ? '' : v })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DEFAULT_VALUE}>Workspace default ({llm.model || 'demo'})</SelectItem>
-                    {providers.map((p) => (
-                      <SelectGroup key={p.id}>
-                        <SelectLabel>{p.label}{usable && !usable.has(p.id) ? ' (no key)' : ''}</SelectLabel>
-                        {p.models.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
-                      </SelectGroup>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <ModelPicker
+                  className="mt-1 h-9"
+                  aria-label="Agent model"
+                  sections={providers.map((p) => ({ key: p.id, label: p.label + (usable && !usable.has(p.id) ? (presetFor(p.id)?.local ? ' (not running)' : ' (no key yet)') : ''), models: p.models }))}
+                  value={editing.model || DEFAULT_VALUE}
+                  leading={{ value: DEFAULT_VALUE, label: `Workspace default (${llm.model || 'demo'})` }}
+                  allowCustom={false}
+                  onChange={(v) => patch({ model: v === DEFAULT_VALUE ? '' : v })}
+                />
                 {modelWarning(editing.model) && <p className="mt-1 text-[11px] text-amber-600">{modelWarning(editing.model)}</p>}
               </div>
               <div>

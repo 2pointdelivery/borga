@@ -558,7 +558,9 @@ const RAW_AGENTS: Agent[] = [
 ];
 
 // The literal above carried invented stats (for example 1284 tasks done, 97% accuracy). Every agent starts at zero.
-export const AGENTS: Agent[] = RAW_AGENTS.map((a) => ({ ...a, tasksCompleted: 0, accuracy: 0 }));
+// Seeded agents also carried model ids that exist in no provider's catalog (for example "nvidia/mixtral-8x22b"), which would fail
+// as soon as an NVIDIA key was saved. An empty model means "use the workspace default", which is what a new agent should do.
+export const AGENTS: Agent[] = RAW_AGENTS.map((a) => ({ ...a, model: '', tasksCompleted: 0, accuracy: 0 }));
 
 // Operational KPI baselines across every functional area. These seed the
 // "KPIs & Reports" tab and are fully editable/additive per company.
@@ -1117,6 +1119,26 @@ export const LLM_PROVIDERS: LlmProvider[] = [
       { id: 'o3-mini', label: 'o3 Mini', tier: 'paid', contextK: 200, tag: 'reasoning' },
       { id: 'o4-mini', label: 'o4 Mini', tier: 'paid', contextK: 200, tag: 'reasoning' },
       { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', tier: 'paid', contextK: 128 },
+    ],
+  },
+  {
+    id: 'llm-pollinations', label: 'Pollinations', baseUrl: 'https://text.pollinations.ai/openai', accent: '#A855F7',
+    envVar: '',
+    freeTierNote: 'No key needed. Community-run: your prompts go to a third party, so avoid confidential data.',
+    models: [
+      { id: 'openai-fast', label: 'GPT-OSS 20B', tier: 'free', contextK: 128, tag: 'reasoning' },
+    ],
+  },
+  {
+    id: 'llm-llm7', label: 'LLM7', baseUrl: 'https://api.llm7.io/v1', accent: '#0EA5E9',
+    envVar: '',
+    freeTierNote: 'No key needed for the models marked free. Community-run: your prompts go to a third party, so avoid confidential data.',
+    models: [
+      { id: 'DeepSeek-V4-Flash-0731', label: 'DeepSeek V4 Flash', tier: 'free', contextK: 400, tag: 'reasoning' },
+      { id: 'codestral-latest', label: 'Codestral', tier: 'free', tag: 'coding' },
+      { id: 'GLM-5.3-Flash', label: 'GLM 5.3 Flash', tier: 'free', tag: 'fast' },
+      { id: 'minimax-m2.7', label: 'MiniMax M2.7', tier: 'free' },
+      { id: 'mistral-Nemo-Instruct-2407', label: 'Mistral NeMo', tier: 'free', tag: 'fast' },
     ],
   },
   {

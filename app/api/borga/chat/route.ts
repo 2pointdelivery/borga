@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getBorgaState, scopedKey } from '@/lib/borga/persistence';
-import { getApiKey } from '@/lib/borga/secrets';
-import { resolveProviderConfig } from '@/lib/borga/llm-providers';
+import { resolveProviderConfig, resolveApiKey } from '@/lib/borga/llm-providers';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { kbFactsFor } from '@/lib/borga/supermemory-context';
 import { userWsKey } from '@/lib/borga/keys';
@@ -82,10 +81,10 @@ export async function POST(req: NextRequest) {
   }
 
   const cfg = await resolveProviderConfig(providerId, ws, userId);
-  const envKeyName = cfg.envVar || 'NVIDIA_API_KEY';
+  // A keyless provider (Pollinations, LLM7) has no key variable and must not borrow NVIDIA's; the others resolve env first, then the DB-stored key.
+  const envKeyName = cfg.envVar;
   const baseUrl = cfg.baseUrl;
-  // Resolve from env first, then fall back to DB-stored key
-  const apiKey = envKeyName ? await getApiKey(envKeyName) : '';
+  const apiKey = await resolveApiKey(cfg);
   const messages: ChatMsg[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...(body.messages ?? [])];
 
   // Load knowledge base for injection / demo responses — same key the dashboard
@@ -198,7 +197,7 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Standard cloud providers (require API key) ---
-  if (!apiKey) {
+  if (envKeyName && !apiKey) {
     const providerLabel = providerId.replace('llm-', '');
     return NextResponse.json(
       { 

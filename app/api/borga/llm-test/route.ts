@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
-import { resolveProviderConfig } from '@/lib/borga/llm-providers';
-import { getApiKey } from '@/lib/borga/secrets';
+import { resolveProviderConfig, resolveApiKey } from '@/lib/borga/llm-providers';
 import { callLlm } from '@/lib/borga/agent-context';
 
 export const runtime = 'nodejs';
@@ -28,7 +27,7 @@ export async function POST(req: NextRequest) {
 
   const cfg = await resolveProviderConfig(providerId, ws, userId);
   if (!cfg.baseUrl) return NextResponse.json({ ok: false, error: 'No base URL configured for this provider.' });
-  const apiKey = cfg.envVar ? await getApiKey(cfg.envVar) : '';
+  const apiKey = await resolveApiKey(cfg);
   if (cfg.envVar && !apiKey) return NextResponse.json({ ok: false, error: `No API key saved (${cfg.envVar}).` });
 
   const t0 = Date.now();

@@ -34,6 +34,8 @@ import { LLM_PROVIDERS, VOICE_PROVIDERS, EMAIL_APPS, COMPOSIO_TOOLKITS, type App
 import { SectionTitle } from '../bits';
 import { ModelCatalogEditor } from './ModelCatalogEditor';
 import { FreeLlmPanel } from './FreeLlmPanel';
+import { ModelPicker, tierSections } from './ModelPicker';
+import { presetFor } from '@/lib/borga/model-catalog';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast-bus';
 
@@ -97,6 +99,9 @@ const LLM_KEY_MAP: Record<string, { envVar: string; label: string; kind: 'key' |
 const VOICE_KEY_MAP: Record<string, { envVar: string; label: string; hint: string }> = {
   'voice-elevenlabs': { envVar: 'ELEVENLABS_API_KEY', label: 'API key', hint: 'elevenlabs.io/app/api-key' },
 };
+
+/** The model a card shows before the user picks one: the first free model, else the first model. */
+const firstModelOf = (p: { models: { id: string; tier: string }[] }): string => (p.models.find((m) => m.tier === 'free') ?? p.models[0])?.id ?? '';
 
 const TWILIO_KEYS: { envVar: string; label: string; kind: 'key' | 'url'; hint: string }[] = [
   { envVar: 'TWILIO_ACCOUNT_SID', label: 'Account SID', kind: 'key', hint: 'console.twilio.com' },
@@ -249,7 +254,7 @@ export type ToolsSection = 'ai-providers' | 'email' | 'composio' | 'apps';
  * switching sections never loses OAuth/key state; only the JSX output changes.
  */
 export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection }) {
-  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, removeComposioConnection, updateComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, elevenlabs, setElevenlabs } = useBorga();
+  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, removeComposioConnection, updateComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, elevenlabs, setElevenlabs, loadFreeModels } = useBorga();
   // Dynamic, per-workspace catalog (DB-backed); falls back to the seed list.
   const catalog = llmCatalog && llmCatalog.length ? llmCatalog : LLM_PROVIDERS;
   const [query, setQuery] = useState('');
@@ -832,6 +837,13 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     fetchKeys();
     const p = catalog.find((x) => x.id === providerId);
     if (p) log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' API key saved.' });
+    // A saved key unlocks the provider's live model list: load it now so the dropdown shows what is really available.
+    if (p && presetFor(providerId)) {
+      void loadFreeModels(providerId).then((r) => {
+        if (r.ok) toast({ title: `${p.label}: ${r.count} free model${r.count === 1 ? '' : 's'} loaded`, description: 'Pick one in the dropdown, then press Use as default.', variant: 'success' });
+        else if (r.error) toast({ title: `${p.label}: models not loaded`, description: r.error, variant: 'warning' });
+      });
+    }
   };
 
   // Derive ElevenLabs "connected" from the real key instead of a manual switch.
@@ -887,7 +899,12 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             const isDemo = p.id === 'llm-demo';
             const expanded = expandedProviders.has(p.id);
             const mainKeyStatus = keyConfig ? keys[keyConfig.envVar] : undefined;
-            const isConfigured = isDemo || mainKeyStatus?.configured;
+            // Keyless providers (Pollinations, LLM7, local Ollama) work with no account: they are ready as soon as they exist.
+            const preset = presetFor(p.id);
+            const keyless = !!preset?.keyless;
+            const isConfigured = isDemo || keyless || mainKeyStatus?.configured;
+            // One source of truth for what the card shows and what its buttons send, so they can never disagree.
+            const selectedModel = isDefault ? llm.model : (modelChoice[p.id] ?? firstModelOf(p));
 
             return (
               <Card key={p.id} className="flex flex-col p-4">
@@ -916,6 +933,13 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                 {isDemo ? (
                   <div className="mt-3 rounded-lg border bg-sky-500/5 px-3 py-2 text-[11px] text-sky-600">
                     Built-in — No API key needed — Always on
+                  </div>
+                ) : keyless ? (
+                  <div className="mt-3 space-y-1.5">
+                    <div className="rounded-lg border bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+                      No API key needed. {preset?.note}.
+                    </div>
+                    {preset?.warning && <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">{preset.warning}</p>}
                   </div>
                 ) : keyConfig ? (
                   <div className="mt-3">
@@ -954,16 +978,14 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                 ) : null}
 
                 <div className="mt-3 space-y-2">
-                  <select
-                    value={isDefault ? llm.model : (modelChoice[p.id] ?? p.models[0]?.id ?? '')}
-                    onChange={(e) => (isDefault ? setDefaultLlm({ model: e.target.value, online: false, latency: 0 }) : setModelChoice((m) => ({ ...m, [p.id]: e.target.value })))}
-                    disabled={!isConfigured}
-                    className="h-8 w-full rounded-lg border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                  >
-                    {p.models.map((m) => (
-                      <option key={m.id} value={m.id}>{m.tier === 'free' ? '🟢 ' : m.tier === 'credits' ? '🟡 ' : '💳 '}{m.label}{m.contextK ? ' — ' + m.contextK + 'k' : ''}</option>
-                    ))}
-                  </select>
+                  {/* Always usable, even before a key is added: browse and pick, then add the key to use it. */}
+                  <ModelPicker
+                    aria-label={`${p.label} model`}
+                    sections={tierSections(p.models)}
+                    value={selectedModel}
+                    onChange={(id) => (isDefault ? setDefaultLlm({ model: id, online: false, latency: 0 }) : setModelChoice((m) => ({ ...m, [p.id]: id })))}
+                    placeholder={isDemo ? 'Built-in demo' : 'Choose a model'}
+                  />
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -972,8 +994,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                       disabled={isDefault || !isConfigured}
                       title={!isConfigured ? 'Add an API key above first' : undefined}
                       onClick={() => {
-                        setDefaultLlm({ providerId: p.id, model: modelChoice[p.id] ?? p.models[0]?.id ?? '', online: isDemo, latency: 0 });
+                        setDefaultLlm({ providerId: p.id, model: selectedModel, online: isDemo, latency: 0 });
                         log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' set as the default AI provider.' });
+                        if (preset?.warning) toast({ title: `${p.label} is now your default AI`, description: 'It is a no-account community service: avoid confidential company data.', variant: 'warning' });
                       }}
                     >
                       <ShieldCheck className="h-3.5 w-3.5" /> {isDefault ? 'In use' : 'Use as default'}
@@ -983,7 +1006,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                         size="sm"
                         variant="outline"
                         disabled={!isConfigured || llmTests[p.id]?.busy}
-                        onClick={() => testLlm(p.id, isDefault ? llm.model : (modelChoice[p.id] ?? p.models[0]?.id ?? ''))}
+                        onClick={() => testLlm(p.id, selectedModel)}
                       >
                         {llmTests[p.id]?.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : 'Test'}
                       </Button>

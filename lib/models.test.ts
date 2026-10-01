@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseModelList, mergeLoadedModels, repairCatalog, presetFor, FREE_LLM_PROVIDERS } from './borga/model-catalog';
+import { parseModelList, mergeLoadedModels, repairCatalog, presetFor, matchesModelSearch, FREE_LLM_PROVIDERS } from './borga/model-catalog';
 import type { LlmProvider } from './borga/data';
 
 // Shapes follow each provider's documented /models response.
@@ -75,6 +75,59 @@ test('Gemini compat: the models/ prefix is removed so the id works in chat compl
 test('Gemini native listing: models that cannot generate content are dropped and names are used', () => {
   const r = parseModelList('llm-gemini', GEMINI_NATIVE);
   assert.deepEqual(r.models.map((m) => [m.id, m.label, m.contextK]), [['gemini-2.0-flash', 'Gemini 2.0 Flash', 1049]]);
+});
+
+// Shapes copied from the live responses of these providers (2026-10-01).
+const LLM7 = {
+  object: 'list',
+  data: [
+    { id: 'DeepSeek-V4-Flash-0731', model_type: 'chat', tier: 'turbo', usage_based_only: false, context_window: { tokens: 400000, chars: null }, reasoning: true },
+    { id: 'codestral-latest', model_type: 'chat', tier: 'turbo', usage_based_only: false, context_window: { tokens: 256000 } },
+    { id: 'anthropic/claude-opus-4-5', model_type: 'chat', tier: 'pro', usage_based_only: true, context_window: { tokens: 200000 } },
+    { id: 'gpt-oss:20b', model_type: 'chat', tier: 'turbo', usage_based_only: true },
+    { id: 'flux-dev', model_type: 'image', tier: 'pro', usage_based_only: true },
+    { id: 'whisper-large', model_type: 'audio_to_text', tier: 'turbo', usage_based_only: false },
+  ],
+};
+
+test('LLM7: only models the provider marks as not usage-based are free; images, audio and credit models are not', () => {
+  const free = parseModelList('llm-llm7', LLM7);
+  assert.deepEqual(free.models.map((m) => m.id).sort(), ['DeepSeek-V4-Flash-0731', 'codestral-latest']);
+  assert.ok(free.models.every((m) => m.tier === 'free'));
+  assert.equal(free.models.find((m) => m.id === 'DeepSeek-V4-Flash-0731')!.contextK, 400, 'context_window can be an object');
+  const all = parseModelList('llm-llm7', LLM7, { freeOnly: false });
+  assert.equal(all.models.find((m) => m.id === 'anthropic/claude-opus-4-5')!.tier, 'paid');
+  assert.ok(!all.models.some((m) => m.id === 'flux-dev' || m.id === 'whisper-large'), 'non-chat model types are never offered');
+});
+
+test('Pollinations and Ollama lists: every listed model is usable', () => {
+  const poll = parseModelList('llm-pollinations', { object: 'list', data: [{ id: 'openai-fast', object: 'model', owned_by: 'ovh' }] });
+  assert.deepEqual(poll.models.map((m) => [m.id, m.tier]), [['openai-fast', 'free']]);
+  const ollama = parseModelList('llm-ollama', { object: 'list', data: [{ id: 'llama3.2:latest' }, { id: 'nomic-embed-text:latest' }, { id: 'qwen2.5-coder:7b' }] });
+  assert.deepEqual(ollama.models.map((m) => m.id).sort(), ['llama3.2:latest', 'qwen2.5-coder:7b'], 'embedding models are not chat models');
+  assert.ok(ollama.models.every((m) => m.tier === 'free'));
+});
+
+test('model search needs every typed word, ignores case and order, and an empty query matches all', () => {
+  const llama = 'nvidia/llama-3.1-nemotron-70b-instruct coding';
+  assert.equal(matchesModelSearch(llama, 'llama 70b'), true);
+  assert.equal(matchesModelSearch(llama, '70B LLAMA'), true, 'case and word order do not matter');
+  assert.equal(matchesModelSearch('mistralai/mistral-7b-instruct-v0.3', 'llama 70b'), false, 'the fuzzy false positive is gone');
+  assert.equal(matchesModelSearch(llama, 'llama gemma'), false, 'every word is required');
+  assert.equal(matchesModelSearch(llama, '   '), true);
+  assert.equal(matchesModelSearch(llama, ''), true);
+});
+
+test('keyless and public-list flags match what was verified live', () => {
+  const p = (id: string) => presetFor(id)!;
+  for (const id of ['llm-pollinations', 'llm-llm7', 'llm-ollama']) assert.equal(p(id).keyless, true, id);
+  assert.ok(p('llm-pollinations').warning && p('llm-llm7').warning, 'community-run keyless providers carry a privacy warning');
+  assert.equal(p('llm-ollama').warning, undefined, 'Ollama stays on your machine');
+  // list is public (200 with no key): OpenRouter, NVIDIA, SambaNova. List needs a key (401/403): Groq, Cerebras, Mistral, Gemini.
+  for (const id of ['llm-openrouter', 'llm-nvidia', 'llm-sambanova']) assert.equal(p(id).keyOptional, true, id);
+  for (const id of ['llm-groq', 'llm-gemini', 'llm-cerebras', 'llm-mistral']) assert.equal(p(id).keyOptional, undefined, id);
+  // a key-optional list is not the same as keyless chat
+  for (const id of ['llm-openrouter', 'llm-nvidia', 'llm-sambanova']) assert.equal(p(id).keyless, undefined, id);
 });
 
 test('NVIDIA models are marked as credits, not free', () => {

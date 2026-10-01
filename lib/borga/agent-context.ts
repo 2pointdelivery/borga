@@ -1,7 +1,7 @@
 import 'server-only';
 import { getAllBorgaStates, getBorgaState, getBorgaStatesByPrefix, scopedKey } from './persistence';
 import { userWsKey } from './keys';
-import { resolveProviderConfig } from './llm-providers';
+import { resolveProviderConfig, resolveApiKey } from './llm-providers';
 import { getApiKey } from './secrets';
 import type {
   Agent, AgentMemory, KnowledgeEntry, Task, Lead,
@@ -306,7 +306,7 @@ type ResolvedLlm = { providerId: string; model: string; apiKey: string; baseUrl:
 /** Turns (provider, model) into a callable config, or null when the key/URL is missing. */
 async function buildLlm(providerId: string, model: string, ws?: string | null, userId?: string | null): Promise<ResolvedLlm | null> {
   const cfg = await resolveProviderConfig(providerId, ws, userId);
-  const apiKey = cfg.envVar ? await getApiKey(cfg.envVar) : '';
+  const apiKey = await resolveApiKey(cfg);
   if (!cfg.baseUrl) return null;
   if (cfg.envVar && !apiKey) return null; // key required but not set
   return { providerId, model, apiKey, baseUrl: cfg.baseUrl };

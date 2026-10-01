@@ -687,7 +687,7 @@ interface BorgaStore {
   llmCatalog: LlmProvider[];
   setLlmCatalog: (catalog: LlmProvider[]) => void;
   /** Loads a provider's live model list (free ones by default) into this workspace's catalog. */
-  loadFreeModels: (providerId: string) => Promise<{ ok: boolean; count?: number; total?: number; error?: string }>;
+  loadFreeModels: (providerId: string) => Promise<{ ok: boolean; count?: number; total?: number; error?: string; needsKey?: boolean }>;
 
   /** DB-backed, per-company valuation configuration (baseline + methods + market assumptions). */
   valuation: ValuationConfig;
@@ -2598,8 +2598,8 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
         body: JSON.stringify({ providerId }),
       });
-      const d = (await res.json().catch(() => ({}))) as { ok?: boolean; models?: LlmModelInfo[]; total?: number; loadedAt?: number; error?: string };
-      if (!d.ok || !d.models) return { ok: false, error: d.error ?? `The server answered HTTP ${res.status}.` };
+      const d = (await res.json().catch(() => ({}))) as { ok?: boolean; models?: LlmModelInfo[]; total?: number; loadedAt?: number; error?: string; needsKey?: boolean };
+      if (!d.ok || !d.models) return { ok: false, error: d.error ?? `The server answered HTTP ${res.status}.`, needsKey: d.needsKey };
       const loaded = d.models;
       const s = get();
       const catalog = (s.llmCatalog.length ? s.llmCatalog : LLM_PROVIDERS).map((p) =>
