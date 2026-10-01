@@ -116,6 +116,13 @@ export async function proxy(req: NextRequest) {
     return res;
   }
 
+  // Scheduler (systemd timer, cron-job.org): carries no session cookie, so the route itself checks
+  // `Authorization: Bearer $CRON_SECRET` (and answers 401 when CRON_SECRET is unset). Without this
+  // exemption the gate below rejected every scheduled run and no background job ever ran.
+  if (pathname === '/api/borga/cron' && (req.method === 'POST' || req.method === 'GET')) {
+    return res;
+  }
+
   // Provider webhooks (Meta, Twilio): authenticated inside the route by the provider's
   // HMAC signature against the tenant's stored credentials; rate limited above.
   if (pathname.startsWith('/api/borga/hooks/') && (req.method === 'POST' || req.method === 'GET')) {

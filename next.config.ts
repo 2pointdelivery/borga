@@ -72,6 +72,9 @@ const nextConfig: NextConfig = {
               `connect-src 'self' https://2pointlogistics.com https://*.happyseeds.ai ${connectExtra}`.trim(),
               "object-src 'none'",
               "base-uri 'self'",
+              // No other site may frame the app (clickjacking), and forms may only post back to it.
+              "frame-ancestors 'none'",
+              "form-action 'self'",
             ].join('; '),
           },
         ],

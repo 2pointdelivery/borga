@@ -1,6 +1,11 @@
 # Automatic HTTPS (Let's Encrypt) for {$DOMAIN}. DNS A record must point at this VM first.
 {$DOMAIN} {
 	encode zstd gzip
+	header {
+		# Browsers must use https for this host from now on.
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
 	reverse_proxy app:13000
 	# Provider webhooks and the browser both arrive here; Caddy sets X-Forwarded-* for the app.
 	log {

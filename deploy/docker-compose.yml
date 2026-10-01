@@ -1,10 +1,18 @@
 # Borga on a single VM (Oracle Cloud Always Free, Ampere A1 / Ubuntu works).
 #   cp .env.example .env   # fill it in
 #   docker compose up -d --build
+# Container logs are capped so they cannot fill the free-tier disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: mysql:8.4
     restart: unless-stopped
+    logging: *logging
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
       MYSQL_DATABASE: borga
@@ -25,6 +33,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *logging
     depends_on:
       db:
         condition: service_healthy
@@ -39,6 +48,7 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    logging: *logging
     depends_on:
       - app
     ports:

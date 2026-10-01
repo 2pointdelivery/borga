@@ -19,4 +19,5 @@ RUN pnpm install --frozen-lockfile --prod && chown -R node:node /app
 USER node
 EXPOSE 13000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:13000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["pnpm", "start"]
+# Run next directly: "pnpm start" would need corepack to resolve pnpm again at runtime, as the unprivileged user, and fail offline.
+CMD ["node", "node_modules/next/dist/bin/next", "start", "-p", "13000"]

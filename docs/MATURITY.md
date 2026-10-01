@@ -72,3 +72,16 @@ FreeLLM.net is a directory of providers that hand out free API keys; it has no A
 Also fixed: Gemini chat used `/v1beta/chat/completions`, which does not exist; Google's OpenAI-compatible path is `/v1beta/openai`. New and saved catalogs are corrected.
 
 Verified live: OpenRouter (public list, no key): 20 free of 463 models loaded in the browser, persisted across reload. Verified: error, authorization and unsupported-provider paths. **Not verified against real keys:** Groq, Gemini, NVIDIA, Cerebras, SambaNova and Mistral (response shapes follow their documented OpenAI-compatible `/models` formats; base URLs for Cerebras, SambaNova and Mistral are from their public docs). The Gemini URL change is also unverified live. "Free" for these providers means every chat model the provider lists for the key, subject to its own rate limits and plan rules, which can change.
+
+## Update 2026-10-01: deployment review (T50, T51)
+
+**Docker has never been run on this project.** Docker is not installed on the development machine, so `docker compose` and `docker build` were not executed. What was done instead: every deploy file was reviewed against what the app now requires, and the runner stage was simulated without Docker (fresh build with no `.env`; a separate directory holding only what the image copies, with production-only dependencies and no `next.config.ts`; started with environment variables only). Verified in that simulation: starts and serves, `/api/health` reports the database connected, refuses to start without secrets (exit code 1), security headers present, scheduler endpoint works with its secret. **Not verified:** the image build itself, running as the unprivileged `node` user, MySQL initialisation from `init.sql`, Caddy and certificate issuance, the systemd timers, backup and restore, and anything on arm64 (Oracle Ampere A1). Treat the first run on the VM as the real test and follow the checklist in deploy/README.md.
+
+Found and fixed during the review:
+- **The scheduler was blocked by the proxy.** `proxy.ts` required a session cookie for `/api/borga/cron`, so a systemd timer (which sends only `Authorization: Bearer $CRON_SECRET`) was rejected with 401. Heartbeats, SLA sweeps, mailbox polling, sync jobs and email digests would never have run in production. The route already authenticates with `CRON_SECRET`, so the proxy now lets it through (verified: no or wrong secret gives 401; the right one runs all 7 local workspaces). The secret comparison is now constant time. `lib/proxy.test.ts` (7 tests) covers the proxy's whole access policy and fails on the old behaviour.
+- The container ran `pnpm start` as the `node` user although pnpm was installed by corepack as root, which can fail offline at runtime. It now runs `next` directly.
+- No clickjacking protection: the CSP now has `frame-ancestors 'none'` and `form-action 'self'`; Caddy adds HSTS.
+- Container logs are capped (10 MB x 3) so they cannot fill the free-tier disk.
+- `deploy/update.sh` now fails if `/api/health` does not answer after the restart, instead of reporting success.
+
+Still open: backups live on the same VM disk (copy them off the VM); there is no automatic rollback in `update.sh`; the Docker image is not scanned or pinned to digests.

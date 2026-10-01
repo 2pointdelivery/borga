@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { tickWorkspace, listScheduledWorkspaces } from '@/lib/borga/heartbeat';
 import { loadFeatures } from '@/lib/borga/features-server';
@@ -26,8 +27,9 @@ export const runtime = 'nodejs';
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET ?? '';
   if (!secret) return false;
-  const header = req.headers.get('authorization') ?? '';
-  return header === `Bearer ${secret}`;
+  const given = Buffer.from(req.headers.get('authorization') ?? '');
+  const want = Buffer.from(`Bearer ${secret}`);
+  return given.length === want.length && timingSafeEqual(given, want);
 }
 
 export async function POST(req: NextRequest) {
