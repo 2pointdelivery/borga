@@ -62,7 +62,9 @@ test('country names map to the right tax region', () => {
   for (const c of ['USA', 'US', 'U.S.A.', 'United States', ' united states of america ']) assert.equal(d.taxRegionFor(c), 'US', c);
   for (const c of ['Canada', 'CA', 'canada']) assert.equal(d.taxRegionFor(c), 'CA', c);
   for (const c of ['Ghana', 'GH', 'ghana ']) assert.equal(d.taxRegionFor(c), 'GH', c);
-  for (const c of ['', undefined, null, 'France', 'Denmark']) assert.equal(d.taxRegionFor(c), 'OTHER', String(c));
+  for (const c of ['', undefined, null, 'France', 'Germany']) assert.equal(d.taxRegionFor(c), 'OTHER', String(c));
+  assert.equal(d.taxRegionFor('Denmark'), 'DK');
+  assert.equal(d.taxRegionFor('danmark'), 'DK');
 });
 
 test('every preset has exactly one default, unique ids, and a zero-rated option', () => {

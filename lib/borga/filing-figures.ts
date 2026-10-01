@@ -1,6 +1,9 @@
 // The numbers behind a filing: what the books say for one period. These are a worksheet for the person (or accountant) who prepares
 // the return, not the return itself. They come from invoices, bills and the People list only, so anything booked some other way
 // (journals, bank-only expenses, depreciation, owner draws) is not in them, and the screen says so.
+//
+// Every number is also published under a name in `values` (sales, taxCharged, netTax...), which is how the form templates
+// (filing-templates.ts) pick the amount for each line of a real form.
 
 import type { Bill, Employee, Invoice, TaxCategory, TaxProfile } from './data';
 import { daysBetween, isIso, type FigureBasis, type Obligation, type Period } from './filing-catalog';
@@ -17,6 +20,11 @@ export interface FigureLine {
 export interface FilingFigures {
   basis: FigureBasis;
   lines: FigureLine[];
+  /**
+   * The same numbers by name. Sales tax: sales, taxCharged, purchases, taxPaid, netTax (positive = to pay, negative = refund), plus
+   * taxCharged.<category> and taxPaid.<category> (gst, vat, sales, custom...). Income: revenue, expenses, profit. Payroll: employees, grossPay.
+   */
+  values: Record<string, number>;
   notes: string[];
   /** Documents left out because their date is not a calendar date. */
   skippedUndated: number;
@@ -58,13 +66,25 @@ function split(total: number, rate: number | undefined, profileIds: string[] | u
   return { net, tax };
 }
 
-function addTax(into: Map<string, { rate: number; amount: number }>, t: Taxed, wanted: (cat: TaxCategory | undefined) => boolean) {
+interface Bucket {
+  /** by profile name */
+  byName: Map<string, { rate: number; amount: number }>;
+  /** by tax category */
+  byCat: Map<string, number>;
+}
+
+function addTax(into: Bucket, t: Taxed, wanted: (cat: TaxCategory | undefined) => boolean) {
   for (const [name, v] of t.tax) {
     if (!wanted(v.category)) continue;
-    const cur = into.get(name);
-    into.set(name, { rate: v.rate, amount: (cur?.amount ?? 0) + v.amount });
+    const cur = into.byName.get(name);
+    into.byName.set(name, { rate: v.rate, amount: (cur?.amount ?? 0) + v.amount });
+    const c = v.category ?? 'other';
+    into.byCat.set(c, (into.byCat.get(c) ?? 0) + v.amount);
   }
 }
+
+const newBucket = (): Bucket => ({ byName: new Map(), byCat: new Map() });
+const total = (b: Bucket) => [...b.byName.values()].reduce((s, v) => s + v.amount, 0);
 
 function salesTaxFigures(ob: Obligation, p: Period, d: FigureInput): FilingFigures {
   const cats = ob.taxCategories;
@@ -77,34 +97,40 @@ function salesTaxFigures(ob: Obligation, p: Period, d: FigureInput): FilingFigur
   const skippedUndated = invoices.filter((i) => !isIso(i.issued)).length + bills.filter((b) => !isIso(b.received)).length;
 
   let sales = 0;
-  const collected = new Map<string, { rate: number; amount: number }>();
+  const collected = newBucket();
   for (const i of dated) {
     const t = split(i.amount, i.taxRate, i.taxProfileIds, i.taxProfileId, i.taxProfileName, d.taxProfiles);
     sales += t.net;
     addTax(collected, t, wanted);
   }
   let purchases = 0;
-  const paid = new Map<string, { rate: number; amount: number }>();
+  const paid = newBucket();
   for (const b of datedBills) {
     const t = split(b.amount, b.taxRate, b.taxProfileIds, b.taxProfileId, b.taxProfileName, d.taxProfiles);
     purchases += t.net;
     addTax(paid, t, wanted);
   }
-  const sum = (m: Map<string, { amount: number }>) => [...m.values()].reduce((s, v) => s + v.amount, 0);
   const lines: FigureLine[] = [{ label: `Sales, before tax (${dated.length} invoice${dated.length === 1 ? '' : 's'})`, amount: r2(sales) }];
-  for (const [name, v] of collected) lines.push({ label: `Tax charged: ${name} (${v.rate}%)`, amount: r2(v.amount) });
-  lines.push({ label: 'Total tax charged on sales', amount: r2(sum(collected)), strong: true });
+  for (const [name, v] of collected.byName) lines.push({ label: `Tax charged: ${name} (${v.rate}%)`, amount: r2(v.amount) });
+  lines.push({ label: 'Total tax charged on sales', amount: r2(total(collected)), strong: true });
   lines.push({ label: `Purchases, before tax (${datedBills.length} bill${datedBills.length === 1 ? '' : 's'})`, amount: r2(purchases) });
-  for (const [name, v] of paid) lines.push({ label: `Tax paid on purchases: ${name} (${v.rate}%)`, amount: r2(v.amount) });
-  lines.push({ label: 'Total tax paid on purchases (credit you may claim)', amount: r2(sum(paid)), strong: true });
-  const net = sum(collected) - sum(paid);
+  for (const [name, v] of paid.byName) lines.push({ label: `Tax paid on purchases: ${name} (${v.rate}%)`, amount: r2(v.amount) });
+  lines.push({ label: 'Total tax paid on purchases (credit you may claim)', amount: r2(total(paid)), strong: true });
+  const net = total(collected) - total(paid);
   lines.push({ label: net >= 0 ? 'Net tax to pay' : 'Net refund claimed', amount: r2(Math.abs(net)), strong: true });
+
+  const values: Record<string, number> = {
+    sales: r2(sales), taxCharged: r2(total(collected)), purchases: r2(purchases), taxPaid: r2(total(paid)), netTax: r2(net),
+  };
+  for (const [c, v] of collected.byCat) values[`taxCharged.${c}`] = r2(v);
+  for (const [c, v] of paid.byCat) values[`taxPaid.${c}`] = r2(v);
+
   const notes = [
     'Based on invoices by issue date and bills by received date (accrual basis). If you file on a cash basis, use the dates the payments were made instead.',
     'The tax on a purchase is only claimable if you hold a valid supplier invoice and the purchase was for the business. Your accountant decides what is claimable.',
   ];
   if (cats && cats.length) notes.push('Only the tax profiles that belong on this return are listed. Sales is every invoice in the period, including zero-rated and exempt ones.');
-  return { basis: 'salesTax', lines, notes, skippedUndated };
+  return { basis: 'salesTax', lines, values, notes, skippedUndated };
 }
 
 function incomeFigures(p: Period, d: FigureInput): FilingFigures {
@@ -122,6 +148,7 @@ function incomeFigures(p: Period, d: FigureInput): FilingFigures {
       { label: `Expenses from bills, before tax (${bil.length})`, amount: r2(expenses) },
       { label: 'Indicative profit before adjustments', amount: r2(revenue - expenses), strong: true },
     ],
+    values: { revenue: r2(revenue), expenses: r2(expenses), profit: r2(revenue - expenses) },
     notes: [
       'This is a starting point, not taxable income. Payroll, depreciation (capital cost allowance), owner pay, interest, non-deductible items, carried-forward losses and credits are not here. Your accountant prepares the return from the full books.',
     ],
@@ -139,6 +166,7 @@ function payrollFigures(p: Period, d: FigureInput): FilingFigures {
       { label: 'Employees on the payroll list', amount: active.length, count: true },
       { label: `Gross pay for ${months} month${months === 1 ? '' : 's'} (annual salaries ÷ 12, indicative)`, amount: r2(gross), strong: true },
     ],
+    values: { employees: active.length, grossPay: r2(gross) },
     notes: [
       'Estimated from the salaries on the People page. The amount to remit (income tax withheld, pension, employment insurance, employer contributions) depends on the tax tables and each person\'s pay run, which this app does not calculate. Take those figures from your payroll provider or accountant.',
     ],
@@ -155,11 +183,4 @@ export function figuresFor(ob: Obligation, p: Period, d: FigureInput): FilingFig
   }
 }
 
-export function figuresCsv(title: string, f: FilingFigures, currency: string): string {
-  const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
-  const rows = [[q(title), ''], [q(`Amounts in ${currency}`), '']];
-  for (const l of f.lines) rows.push([q(l.label), l.count ? String(l.amount) : l.amount.toFixed(2)]);
-  rows.push(['', '']);
-  for (const n of f.notes) rows.push([q(n), '']);
-  return rows.map((r) => r.join(',')).join('\n');
-}
+export type { FigureBasis };

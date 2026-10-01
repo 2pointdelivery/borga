@@ -15,8 +15,9 @@ import {
   type CustomObligation, type DueState, type EntityType, type FilingLevel, type FilingProfile, type FilingRecord, type Frequency,
 } from '@/lib/borga/filing-catalog';
 import { planFilings, summarize, type PlanRow } from '@/lib/borga/filing-plan';
-import { figuresCsv, figuresFor } from '@/lib/borga/filing-figures';
-import { buildFilingPack } from '@/lib/borga/filing-pack';
+import { figuresFor } from '@/lib/borga/filing-figures';
+import { buildFilingSheets, exportFileName, toCsv, toExcelSheets, type ExportArgs } from '@/lib/borga/filing-export';
+import { fillTemplate, templateFor } from '@/lib/borga/filing-templates';
 import { SectionTitle } from '../bits';
 import { DateInput, Field } from '../form-widgets';
 
@@ -245,7 +246,7 @@ export function FilingTab() {
       )}
       {open && (
         <FilingDialog
-          key={`${open.ob.id}|${open.filing.key}`} row={open} today={today} currency={currency} legal={ws.legalName || ws.name} company={ws}
+          key={`${open.ob.id}|${open.filing.key}`} row={open} today={today} currency={currency} legal={ws.legalName || ws.name} company={ws} jurisdiction={jurisdiction}
           data={{ invoices, bills, employees, taxProfiles }}
           onClose={() => setOpen(null)}
           onSave={(rec) => { saveFilingRecord(rec); log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `${open.ob.name} (${open.filing.label}) marked ${rec.status === 'not-required' ? 'not required' : rec.status === 'review' ? 'waiting for review' : rec.status}.` }); setOpen(null); }}
@@ -270,8 +271,8 @@ function Tile({ icon: Icon, label, value, tone = '' }: { icon: React.ComponentTy
 
 // ── one filing: the worksheet and the record ──────────────────────────────────────────────────────────────────────────
 
-function FilingDialog({ row, today, currency, legal, company, data, onClose, onSave, onClear }: {
-  row: PlanRow; today: string; currency: string; legal: string; company: Parameters<typeof buildFilingPack>[0]['company'];
+function FilingDialog({ row, today, currency, legal, company, jurisdiction, data, onClose, onSave, onClear }: {
+  row: PlanRow; today: string; currency: string; legal: string; company: ExportArgs['company']; jurisdiction: ExportArgs['jurisdiction'];
   data: Parameters<typeof figuresFor>[2];
   onClose: () => void; onSave: (rec: FilingRecord) => void; onClear: (key: string) => void;
 }) {
@@ -287,26 +288,26 @@ function FilingDialog({ row, today, currency, legal, company, data, onClose, onS
   const [dueOverride, setDueOverride] = useState(rec?.dueOverride ?? '');
   const figs = useMemo(() => figuresFor(row.ob, row.filing.period, data), [row.ob, row.filing.period, data]);
   const manual = row.filing.due === null;
-  const title = `${row.ob.name} · ${row.filing.label}`;
 
-  const download = () => {
-    if (!figs) return;
-    const blob = new Blob([figuresCsv(`${legal}: ${title}`, figs, currency)], { type: 'text/csv;charset=utf-8' });
+  const exportArgs = (): ExportArgs => ({
+    company, jurisdiction, ob: row.ob, period: row.filing.period, label: row.filing.label, due: row.due, figures: figs, record: rec, currency, generatedOn: today,
+  });
+  const saveBlob = (blob: Blob, ext: 'xlsx' | 'csv') => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${row.ob.id}-${row.filing.key.replace('#', '-')}.csv`;
+    a.download = exportFileName(legal, row.ob.id, row.filing.key, ext);
     a.click();
     URL.revokeObjectURL(a.href);
   };
-
-  const downloadPack = () => {
-    const html = buildFilingPack({ company, ob: row.ob, period: row.filing.period, label: row.filing.label, due: row.due, figures: figs, record: rec, currency, generatedOn: today });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
-    a.download = `filing-pack-${row.ob.id}-${row.filing.key.replace('#', '-')}.html`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+  const downloadCsv = () => saveBlob(new Blob([toCsv(buildFilingSheets(exportArgs()), currency)], { type: 'text/csv;charset=utf-8' }), 'csv');
+  const downloadExcel = async () => {
+    // loaded on demand: the spreadsheet writer is only needed when someone exports
+    const { default: writeExcelFile } = await import('write-excel-file/browser');
+    const blob = await writeExcelFile(toExcelSheets(buildFilingSheets(exportArgs()), currency) as never).toBlob();
+    saveBlob(blob, 'xlsx');
   };
+  const template = useMemo(() => templateFor(row.ob), [row.ob]);
+  const filled = useMemo(() => fillTemplate(template, figs), [template, figs]);
 
   const save = () => {
     if (status === 'open') { onClear(key); return; }
@@ -337,7 +338,8 @@ function FilingDialog({ row, today, currency, legal, company, data, onClose, onS
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${STATE_STYLE[row.state]}`}>{stateText(row)}</span>
             <span className="text-muted-foreground">Due {fmtDate(row.due)}</span>
-            <Button size="sm" variant="outline" onClick={downloadPack}><Download className="h-3.5 w-3.5" /> Filing pack</Button>
+            <Button size="sm" variant="outline" onClick={() => void downloadExcel()}><Download className="h-3.5 w-3.5" /> Excel</Button>
+            <Button size="sm" variant="outline" onClick={downloadCsv}><Download className="h-3.5 w-3.5" /> CSV</Button>
             {row.ob.url && (
               <a href={row.ob.url} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 text-xs text-primary hover:underline">
                 Authority page <ExternalLink className="h-3 w-3" />
@@ -346,30 +348,36 @@ function FilingDialog({ row, today, currency, legal, company, data, onClose, onS
           </div>
           {row.ob.note && <p className="rounded-md bg-muted/50 p-2.5 text-xs text-muted-foreground">{row.ob.note}</p>}
 
-          {figs && (
-            <div>
-              <div className="mb-1 flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Worksheet · {row.filing.period.start} to {row.filing.period.end}</p>
-                <Button size="sm" variant="ghost" onClick={download}><Download className="h-3.5 w-3.5" /> CSV</Button>
-              </div>
-              <table className="w-full text-sm">
-                <tbody>
-                  {figs.lines.map((l) => (
-                    <tr key={l.label} className="border-b last:border-0">
-                      <td className={`py-1.5 pr-3 ${l.strong ? 'font-semibold' : 'text-muted-foreground'}`}>{l.label}</td>
-                      <td className={`py-1.5 text-right font-mono text-xs ${l.strong ? 'font-semibold' : ''}`}>{l.count ? l.amount : fmtMoneyFull(l.amount, currency)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{template.title}</p>
+            <p className="mb-1 text-[11px] text-muted-foreground">Period {row.filing.period.start} to {row.filing.period.end}. Lines follow the form; blank amounts are for you or your accountant to fill in.</p>
+            <table className="w-full text-sm">
+              <tbody>
+                {filled.map((r, i) => r.section ? (
+                  <tr key={i}><td colSpan={3} className="pb-1 pt-3 text-xs font-semibold">{r.label}</td></tr>
+                ) : (
+                  <tr key={i} className="border-b align-top last:border-0">
+                    <td className="w-16 py-1.5 pr-2 font-mono text-[11px] text-muted-foreground">{r.ref}</td>
+                    <td className="py-1.5 pr-3">
+                      {r.label}
+                      <span className="block text-[11px] text-muted-foreground">{r.source}</span>
+                    </td>
+                    <td className="whitespace-nowrap py-1.5 text-right font-mono text-xs">{r.amount === null ? <span className="text-muted-foreground">—</span> : r.count ? r.amount : fmtMoneyFull(r.amount, currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {figs && (
+              <>
               {figs.skippedUndated > 0 && (
                 <p className="mt-1.5 text-[11px] text-amber-600">{figs.skippedUndated} document{figs.skippedUndated === 1 ? ' has' : 's have'} a date that is not a calendar date and {figs.skippedUndated === 1 ? 'is' : 'are'} left out. Open {figs.skippedUndated === 1 ? 'it' : 'them'} and set the date.</p>
               )}
               <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-muted-foreground">
                 {figs.notes.map((n) => <li key={n}>{n}</li>)}
               </ul>
-            </div>
-          )}
+              </>
+            )}
+          </div>
 
           <div className="space-y-3 border-t pt-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Record</p>
@@ -439,6 +447,7 @@ function SetupDialog({ profile, country, detected, joined, onClose, onSave }: {
   const [freq, setFreq] = useState<Frequency>(profile.salesTaxFrequency);
   const [from, setFrom] = useState(profile.trackedFrom ?? joined);
   const entities = ENTITY_TYPES_BY_COUNTRY[country];
+  const freqOptions: Frequency[] = country === 'DK' ? ['monthly', 'quarterly', 'semiannual'] : ['monthly', 'quarterly', 'annual'];
   const triSelect = (v: Tri, set: (t: Tri) => void, autoLabel: string) => (
     <Select value={v} onValueChange={(x) => set(x as Tri)}>
       <SelectTrigger><SelectValue /></SelectTrigger>
@@ -469,7 +478,7 @@ function SetupDialog({ profile, country, detected, joined, onClose, onSave }: {
           <Field label="How often do you file it?" hint="The authority assigns this when you register. It is on your registration letter or in your online account.">
             <Select value={freq} onValueChange={(v) => setFreq(v as Frequency)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{(['monthly', 'quarterly', 'annual'] as const).map((f) => <SelectItem key={f} value={f}>{FREQUENCY_LABEL[f]}</SelectItem>)}</SelectContent>
+              <SelectContent>{freqOptions.map((f) => <SelectItem key={f} value={f}>{FREQUENCY_LABEL[f]}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
           <Field label="Do you have employees on payroll?" hint={`Detected from the People page: ${detected.employees ? 'yes' : 'none'}.`}>
@@ -526,7 +535,7 @@ function CustomDialog({ onClose, onSave }: { onClose: () => void; onSave: (c: Cu
             <Field label="How often">
               <Select value={frequency} onValueChange={(v) => setFrequency(v as Frequency)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{(['monthly', 'quarterly', 'annual'] as const).map((f) => <SelectItem key={f} value={f}>{FREQUENCY_LABEL[f]}</SelectItem>)}</SelectContent>
+                <SelectContent>{(['monthly', 'quarterly', 'semiannual', 'annual'] as const).map((f) => <SelectItem key={f} value={f}>{FREQUENCY_LABEL[f]}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
           </div>

@@ -10,9 +10,9 @@ import type { TaxCategory } from './data';
 
 export type FilingLevel = 'federal' | 'provincial' | 'state' | 'regional';
 export type EntityType = 'corporation' | 's-corp' | 'partnership' | 'sole-proprietor';
-export type Frequency = 'monthly' | 'quarterly' | 'annual';
+export type Frequency = 'monthly' | 'quarterly' | 'semiannual' | 'annual';
 export type FigureBasis = 'salesTax' | 'income' | 'payroll' | 'none';
-export type FilingCountry = 'CA' | 'US' | 'GH' | 'OTHER';
+export type FilingCountry = 'CA' | 'US' | 'GH' | 'DK' | 'OTHER';
 
 /** How the due date follows from the period. Day 'end' means the last day of the month. */
 export type DueRule =
@@ -112,6 +112,7 @@ export const ENTITY_TYPES_BY_COUNTRY: Record<FilingCountry, EntityType[]> = {
   CA: ['corporation', 'partnership', 'sole-proprietor'],
   US: ['corporation', 's-corp', 'partnership', 'sole-proprietor'],
   GH: ['corporation', 'partnership', 'sole-proprietor'],
+  DK: ['corporation', 'partnership', 'sole-proprietor'],
   OTHER: ['corporation', 'partnership', 'sole-proprietor'],
 };
 
@@ -190,7 +191,8 @@ function periodEnds(freq: Frequency, basis: 'fiscal' | 'calendar', fye: FiscalYe
     for (let y = fy - 1; y <= ty + 1; y++) out.push(make(y, anchor.month, anchor.day));
   } else {
     for (let y = fy - 1; y <= ty + 1; y++) {
-      for (let m = 1; m <= 12; m++) if (freq === 'monthly' || (m - anchor.month) % 3 === 0) out.push(make(y, m, 31));
+      const every = freq === 'monthly' ? 1 : freq === 'quarterly' ? 3 : 6;
+      for (let m = 1; m <= 12; m++) if ((m - anchor.month) % every === 0) out.push(make(y, m, 31));
     }
   }
   return out.filter((e) => e >= fromEnd && e <= toEnd).sort();
@@ -198,7 +200,7 @@ function periodEnds(freq: Frequency, basis: 'fiscal' | 'calendar', fye: FiscalYe
 
 /** The period that ends on `end` for this frequency, with its first day. */
 function periodOf(freq: Frequency, basis: 'fiscal' | 'calendar', fye: FiscalYearEnd, end: string): Period {
-  const prev = freq === 'annual' ? previousAnnualEnd(end, basis, fye) : addMonths(end, freq === 'monthly' ? -1 : -3, 'end');
+  const prev = freq === 'annual' ? previousAnnualEnd(end, basis, fye) : addMonths(end, freq === 'monthly' ? -1 : freq === 'quarterly' ? -3 : -6, 'end');
   return { start: addDays(prev, 1), end, key: end };
 }
 
@@ -232,7 +234,7 @@ export function frequencyOf(ob: Obligation, profile: Pick<FilingProfile, 'salesT
 function periodLabel(freq: Frequency, p: Period): string {
   const [y, m] = parts(p.end);
   if (freq === 'monthly') return `${MONTHS[m - 1]} ${y}`;
-  if (freq === 'quarterly') return `${MONTHS[parts(p.start)[1] - 1]}–${MONTHS[m - 1]} ${y}`;
+  if (freq === 'quarterly' || freq === 'semiannual') return `${MONTHS[parts(p.start)[1] - 1]}–${MONTHS[m - 1]} ${y}`;
   return `Year ended ${p.end}`;
 }
 const MONTHS =['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -285,6 +287,7 @@ export function filingCountryOf(country?: string | null): FilingCountry {
   if (['us', 'usa', 'united states', 'united states of america'].includes(c)) return 'US';
   if (['ca', 'canada'].includes(c)) return 'CA';
   if (['gh', 'ghana'].includes(c)) return 'GH';
+  if (['dk', 'denmark', 'danmark'].includes(c)) return 'DK';
   return 'OTHER';
 }
 
@@ -536,6 +539,40 @@ const GH_OBLIGATIONS: Obligation[] = [
   },
 ];
 
+const SKAT = 'Skattestyrelsen (Danish Tax Agency)';
+
+const DK_OBLIGATIONS: Obligation[] = [
+  {
+    id: 'dk-moms', level: 'federal', authority: SKAT, name: 'VAT return (momsangivelse)', frequency: 'chosen', periodBasis: 'fiscal',
+    rule: { monthly: AFTER(1, 25), quarterly: AFTER(3, 1), semiannual: AFTER(3, 1) }, figures: 'salesTax', taxCategories: ['vat'], when: 'taxRegistered', confidence: 'confirm',
+    note: 'Skattestyrelsen assigns the period by turnover: roughly under DKK 5 million a year is half-yearly, DKK 5 to 50 million quarterly, above that monthly. Filed on TastSelv Erhverv.',
+    url: 'https://skat.dk/erhverv/moms',
+  },
+  {
+    id: 'dk-corp-tax', level: 'federal', authority: SKAT, name: 'Corporate income tax return (selskabsselvangivelse)', frequency: 'annual', periodBasis: 'fiscal', rule: AFTER(6, 'end'),
+    figures: 'income', appliesTo: CORP, note: 'Due 6 months after the end of the financial year. The corporate tax rate is 22%.', url: 'https://skat.dk/erhverv/selskaber',
+  },
+  {
+    id: 'dk-acontoskat', level: 'federal', authority: SKAT, name: 'Preliminary corporate tax (acontoskat)', frequency: 'annual', periodBasis: 'fiscal', rule: { kind: 'instalments', months: [3, 11], day: 20 },
+    figures: 'none', appliesTo: CORP, confidence: 'confirm', note: 'Paid in two instalments, 20 March and 20 November for a calendar-year company. A company can choose to pay in more.',
+    url: 'https://skat.dk/erhverv/selskaber',
+  },
+  {
+    id: 'dk-annual-report', level: 'federal', authority: 'Danish Business Authority (Erhvervsstyrelsen)', name: 'Annual report (årsrapport)', frequency: 'annual', periodBasis: 'fiscal', rule: AFTER(5, 'end'),
+    figures: 'income', appliesTo: CORP, confidence: 'confirm', note: 'Filed with the business register. The deadline is 5 months after the year end for most companies; check your reporting class.',
+    url: 'https://erhvervsstyrelsen.dk/',
+  },
+  {
+    id: 'dk-sole', level: 'federal', authority: SKAT, name: 'Personal return with business income (oplysningsskema)', frequency: 'annual', periodBasis: 'calendar', rule: AFTER(7, 1),
+    figures: 'income', appliesTo: ['sole-proprietor'], confidence: 'confirm', note: 'Self-employed people usually file by 1 July for the previous calendar year.', url: 'https://skat.dk/borger/selvstaendig',
+  },
+  {
+    id: 'dk-payroll', level: 'federal', authority: SKAT, name: 'Withheld income tax and labour market contribution (A-skat, AM-bidrag)', frequency: 'monthly', periodBasis: 'calendar', rule: AFTER(1, 10),
+    figures: 'payroll', when: 'employees', confidence: 'confirm', note: 'Reported through eIndkomst. Small employers report monthly, due the 10th of the next month; larger ones report on a different schedule.',
+    url: 'https://skat.dk/erhverv/loen-og-personale',
+  },
+];
+
 export interface Jurisdiction {
   country: FilingCountry;
   /** The province or state code when it is recognised, otherwise ''. */
@@ -570,9 +607,18 @@ export function jurisdictionOf(country?: string | null, state?: string | null): 
       notes: ['Ghana does not have provincial or state taxes. Almost everything is filed with the Ghana Revenue Authority.'],
     };
   }
+  if (c === 'DK') {
+    return {
+      country: c, region: '', regionName: state ?? '', regionLevel: null,
+      notes: [
+        'Denmark has no regional taxes on companies: income tax and VAT are filed with Skattestyrelsen, and the annual report with the Danish Business Authority.',
+        'Partnerships (I/S) are not taxed themselves: each partner reports their share, so there is no company income tax return to track here.',
+      ],
+    };
+  }
   return {
     country: 'OTHER', region: '', regionName: state ?? '', regionLevel: null,
-    notes: ['Built-in filings cover Canada, the United States and Ghana. For another country, add your own filings below with the authority, how often, and the due date rule.'],
+    notes: ['Built-in filings cover Canada, the United States, Denmark and Ghana. For another country, add your own filings below with the authority, how often, and the due date rule.'],
   };
 }
 
@@ -581,6 +627,7 @@ export function builtInObligations(j: Jurisdiction): Obligation[] {
   if (j.country === 'CA') list = [...CA_FEDERAL, ...(CA_PROVINCIAL[j.region] ?? [])];
   else if (j.country === 'US') list = [...US_FEDERAL, ...(j.regionName || j.region ? usStateGeneric(j.regionName || j.region) : []), ...(US_STATE_SPECIFIC[j.region] ?? [])];
   else if (j.country === 'GH') list = GH_OBLIGATIONS;
+  else if (j.country === 'DK') list = DK_OBLIGATIONS;
   // an obligation can take the place of a more general one (the Quebec return replaces the federal GST/HST return)
   const replaced = new Set(list.map((o) => o.replaces).filter(Boolean));
   return list.filter((o) => !replaced.has(o.id));
@@ -613,16 +660,16 @@ export function recordKey(obligationId: string, key: string): string {
   return `${obligationId}|${key}`;
 }
 
-export const FREQUENCY_LABEL: Record<Frequency, string> = { monthly: 'Monthly', quarterly: 'Quarterly', annual: 'Annual' };
+export const FREQUENCY_LABEL: Record<Frequency, string> = { monthly: 'Monthly', quarterly: 'Quarterly', semiannual: 'Every six months', annual: 'Annual' };
 
 /** The heading for a level in this country: the top level is "National" in Ghana and "Federal" elsewhere. */
 export function levelLabel(country: FilingCountry, level: FilingLevel): string {
-  if (level === 'federal') return country === 'GH' || country === 'OTHER' ? 'National' : 'Federal';
+  if (level === 'federal') return country === 'GH' || country === 'DK' || country === 'OTHER' ? 'National' : 'Federal';
   return LEVEL_LABEL[level];
 }
 
 const ENTITY_SET = new Set<string>(['corporation', 's-corp', 'partnership', 'sole-proprietor']);
-const FREQ_SET = new Set<string>(['monthly', 'quarterly', 'annual']);
+const FREQ_SET = new Set<string>(['monthly', 'quarterly', 'semiannual', 'annual']);
 const LEVEL_SET = new Set<string>(['federal', 'provincial', 'state', 'regional']);
 
 /** Accepts whatever was saved (nothing, an older shape, a damaged value) and returns a state the screen can always render. */

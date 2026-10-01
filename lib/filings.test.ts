@@ -326,7 +326,6 @@ test('a filing with no computable date is not listed for a period that ended bef
 // ── reminders, stages and the filing pack ─────────────────────────────────────────────────────────────────────────────
 
 import { dueReminders, MAX_REMINDERS_PER_SWEEP } from './borga/filing-plan';
-import { buildFilingPack } from './borga/filing-pack';
 
 const on = (today: string, over: Partial<Parameters<typeof planFilings>[0]> = {}) => plan('Canada', 'Ontario', { today, trackedFrom: '2026-01-01', ...over });
 const gst = (rows: ReturnType<typeof on>) => rows.filter((r) => r.ob.id === 'ca-gsthst');
@@ -379,24 +378,161 @@ test('a catch-up never raises more than the cap, most urgent first', () => {
   assert.equal(out[0].severity, 'urgent', 'overdue filings come first');
 });
 
-test('the filing pack carries the figures, the checklist and sign-off, and escapes what the user typed', () => {
+// ── Denmark ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+import { taxRegionFor, TAX_PRESETS } from './borga/data';
+import { hasOwnTemplate, templateFor, fillTemplate } from './borga/filing-templates';
+import { buildFilingSheets, toCsv, toExcelSheets, csvSafe, exportFileName } from './borga/filing-export';
+
+test('Denmark: VAT by the period Skattestyrelsen assigns, corporate tax 6 months after year end, acontoskat in March and November', () => {
+  assert.equal(filingCountryOf('Denmark'), 'DK');
+  assert.equal(filingCountryOf('Danmark'), 'DK');
+  assert.equal(taxRegionFor('Denmark'), 'DK');
+  assert.equal(TAX_PRESETS.DK.profiles[0].rate, 25);
+  const moms = find('Denmark', '', 'dk-moms');
+  assert.equal(dues(moms, profile({ salesTaxFrequency: 'monthly' }), DEC, '2026-01-31', '2026-01-31')[0].due, '2026-02-25');
+  const q = dues(moms, profile({ salesTaxFrequency: 'quarterly' }), DEC, '2026-03-31', '2026-12-31');
+  assert.deepEqual(q.map((d) => d.due), ['2026-06-01', '2026-09-01', '2026-12-01', '2027-03-01']);
+  const h = dues(moms, profile({ salesTaxFrequency: 'semiannual' }), DEC, '2026-06-30', '2026-12-31');
+  assert.deepEqual(h.map((d) => [d.period.start, d.period.end, d.due]), [['2026-01-01', '2026-06-30', '2026-09-01'], ['2026-07-01', '2026-12-31', '2027-03-01']]);
+  assert.equal(h[0].label, 'Jan–Jun 2026');
+  assert.equal(dues(find('Denmark', '', 'dk-corp-tax'), profile(), DEC, '2025-12-31', '2025-12-31')[0].due, '2026-06-30');
+  assert.deepEqual(dues(find('Denmark', '', 'dk-acontoskat'), profile(), DEC, '2026-12-31', '2026-12-31').map((d) => d.due), ['2026-03-20', '2026-11-20']);
+  assert.equal(dues(find('Denmark', '', 'dk-payroll'), profile(), DEC, '2026-01-31', '2026-01-31')[0].due, '2026-02-10');
+  assert.equal(dues(find('Denmark', '', 'dk-annual-report'), profile(), DEC, '2025-12-31', '2025-12-31')[0].due, '2026-05-31');
+  assert.equal(dues(find('Denmark', '', 'dk-sole'), profile(), DEC, '2025-12-31', '2025-12-31')[0].due, '2026-07-01');
+  const j = jurisdictionOf('Denmark', 'Capital Region');
+  assert.equal(j.regionLevel, null);
+  assert.equal(levelLabel('DK', 'federal'), 'National');
+  assert.equal(normalizeFilings({ profile: { salesTaxFrequency: 'semiannual' } }).profile.salesTaxFrequency, 'semiannual');
+});
+
+// ── form templates ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const ALL_PLACES: Array<[string, string]> = [
+  ...['Alberta', 'British Columbia', 'Manitoba', 'Ontario', 'Quebec', 'Saskatchewan', 'Nova Scotia'].map((p): [string, string] => ['Canada', p]),
+  ...['California', 'Texas', 'Ohio'].map((s): [string, string] => ['United States', s]),
+  ['Ghana', 'Greater Accra'], ['Denmark', ''],
+];
+const VALUE_KEYS: Record<string, RegExp> = {
+  salesTax: /^(sales|taxCharged|purchases|taxPaid|netTax|(taxCharged|taxPaid)\.[a-z]+)$/,
+  income: /^(revenue|expenses|profit)$/,
+  payroll: /^(employees|grossPay)$/,
+  none: /^$/,
+};
+
+test('every built-in filing in Canada, the United States, Denmark and Ghana has its own form template', () => {
+  let n = 0;
+  for (const [country, state] of ALL_PLACES) {
+    for (const ob of builtInObligations(jurisdictionOf(country, state))) {
+      n++;
+      assert.ok(hasOwnTemplate(ob.id) || ob.figures === 'none', `${country}/${state}: ${ob.id} (${ob.name}) has no template`);
+    }
+  }
+  assert.ok(n >= 50, `checked ${n} filings`);
+});
+
+test('a template line only takes a figure its kind of return actually produces', () => {
+  for (const [country, state] of ALL_PLACES) {
+    for (const ob of builtInObligations(jurisdictionOf(country, state))) {
+      for (const r of templateFor(ob).rows) {
+        if (r.section || !r.value) continue;
+        assert.match(r.value, VALUE_KEYS[ob.figures], `${ob.id}: line "${r.label}" uses ${r.value}, but this is a ${ob.figures} return`);
+      }
+    }
+  }
+});
+
+test('the GST34 template has the form line numbers in order and the right amounts on them', () => {
   const ob = find('Canada', 'Ontario', 'ca-gsthst');
-  const f = figuresFor(ob, period, { invoices: [inv({ amount: 113, taxProfileIds: ['hst'] })], bills: [], employees: [], taxProfiles: PROFILES });
-  const html = buildFilingPack({
-    company: { name: 'M', legalName: '<script>alert(1)</script> Inc.', taxNumber: '123 "RT"', country: 'Canada', state: 'Ontario', city: 'Toronto' },
-    ob, period, label: 'Jan–Mar 2026', due: '2026-04-30', figures: f,
-    record: { key: 'k', status: 'review', preparer: 'Sam & Co', reviewer: 'Lee' }, currency: 'CAD', generatedOn: '2026-04-01',
-  });
-  assert.ok(html.startsWith('<!doctype html>'));
-  assert.ok(!html.includes('<script>alert'), 'a company name cannot inject markup');
-  assert.match(html, /&lt;script&gt;/);
-  assert.match(html, /Sam &amp; Co/);
-  assert.match(html, /C\$13\.00/);
-  assert.match(html, /Net tax to pay/);
-  assert.match(html, /Before filing/);
-  assert.match(html, /Reviewed by \/ date/);
-  assert.match(html, /not a tax return or tax advice/);
-  const noFigures = buildFilingPack({ company: { name: 'M' }, ob: find('United States', 'Texas', 'us-est-corp'), period, label: 'x', due: null, figures: null, currency: 'USD', generatedOn: '2026-04-01' });
-  assert.ok(!noFigures.includes('Figures from the books'));
-  assert.match(noFigures, /to be confirmed/);
+  const f = figuresFor(ob, period, { invoices: [inv({ amount: 113, taxProfileIds: ['hst'] })], bills: [bill({ amount: 56.5, taxProfileIds: ['hst'] })], employees: [], taxProfiles: PROFILES });
+  const rows = fillTemplate(templateFor(ob), f).filter((r) => !r.section);
+  assert.deepEqual(rows.map((r) => r.ref), ['101', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '113A']);
+  const at = (ref: string) => rows.find((r) => r.ref === ref)!.amount;
+  assert.equal(at('101'), 100);
+  assert.equal(at('103'), 13);
+  assert.equal(at('105'), 13);
+  assert.equal(at('106'), 6.5);
+  assert.equal(at('109'), 6.5);
+  assert.equal(at('113A'), 6.5);
+  assert.equal(at('104'), null, 'adjustments are for the preparer, never invented');
+  assert.equal(at('110'), null);
+});
+
+test('the Danish VAT template has Salgsmoms, Købsmoms and the four Rubrik boxes', () => {
+  const ob = find('Denmark', '', 'dk-moms');
+  const f = figuresFor(ob, period, { invoices: [inv({ amount: 125, taxProfileIds: ['dk'] })], bills: [bill({ amount: 62.5, taxProfileIds: ['dk'] })], employees: [], taxProfiles: [{ id: 'dk', name: 'Moms', rate: 25, category: 'vat' }] });
+  const rows = fillTemplate(templateFor(ob), f);
+  const label = (re: RegExp) => rows.find((r) => re.test(r.label))!;
+  assert.equal(label(/^Salgsmoms/).amount, 25);
+  assert.equal(label(/^Købsmoms/).amount, 12.5);
+  assert.equal(label(/^Moms i alt/).amount, 12.5);
+  assert.deepEqual(rows.map((r) => r.ref).filter(Boolean), ['Rubrik A', 'Rubrik B', 'Rubrik C', 'Rubrik D']);
+});
+
+test('the US and Ghana templates carry their form lines, and a tax category with nothing in it is a zero', () => {
+  const us = templateFor(find('United States', 'Texas', 'us-1120')).rows.map((r) => r.ref).filter(Boolean);
+  assert.deepEqual(us, ['Line 1a', 'Line 2', 'Line 11', 'Line 27', 'Line 28', 'Line 30', 'Line 31']);
+  assert.deepEqual(templateFor(find('United States', 'Texas', 'us-941')).rows.map((r) => r.ref).filter(Boolean), ['Line 1', 'Line 2', 'Line 3', 'Line 5a', 'Line 5c', 'Line 10', 'Line 13', 'Line 14']);
+  const gh = find('Ghana', 'Greater Accra', 'gh-vat');
+  const f = figuresFor(gh, period, { invoices: [inv({ amount: 115, taxProfileIds: ['v'] })], bills: [], employees: [], taxProfiles: [{ id: 'v', name: 'VAT', rate: 15, category: 'vat' }] });
+  const rows = fillTemplate(templateFor(gh), f);
+  assert.equal(rows.find((r) => /^Output VAT/.test(r.label))!.amount, 15);
+  assert.equal(rows.find((r) => /^NHIL/.test(r.label))!.amount, 0, 'no levy was charged: zero, not blank');
+});
+
+// ── export: CSV and Excel ─────────────────────────────────────────────────────────────────────────────────────────────
+
+const exportArgs = (over: Record<string, unknown> = {}) => {
+  const ob = find('Canada', 'Ontario', 'ca-gsthst');
+  const f = figuresFor(ob, period, { invoices: [inv({ amount: 113, taxProfileIds: ['hst'] })], bills: [bill({ amount: 56.5, taxProfileIds: ['hst'] })], employees: [], taxProfiles: PROFILES });
+  return {
+    company: { name: 'Maple', legalName: 'Maple Inc.', taxNumber: '123456789RT0001', country: 'Canada', state: 'Ontario', city: 'Toronto' },
+    jurisdiction: { country: 'CA' as const, regionName: 'Ontario' }, ob, period, label: 'Jan–Mar 2026', due: '2026-04-30', figures: f,
+    record: { key: 'k', status: 'review' as const, preparer: 'Sam', reviewer: 'Lee' }, currency: 'CAD', generatedOn: '2026-04-01', ...over,
+  };
+};
+
+test('the export is the form: header, lines, worksheet, checklist and sign-off, in three sheets', () => {
+  const sheets = buildFilingSheets(exportArgs());
+  assert.deepEqual(sheets.map((s) => s.name), ['Filing', 'Worksheet', 'Checklist']);
+  const text = JSON.stringify(sheets[0].rows);
+  for (const needle of ['GST/HST return for registrants (GST34)', 'Maple Inc.', '123456789RT0001', '2026-04-30', 'Prepared by', 'Sam', 'Lee', '113A', 'Sign-off', 'not tax advice']) assert.ok(text.includes(needle), needle);
+  assert.ok(buildFilingSheets(exportArgs({ figures: null, ob: find('United States', 'Texas', 'us-est-corp') })).every((s) => s.name !== 'Worksheet'), 'no worksheet when there are no figures');
+});
+
+test('CSV: byte order mark, CRLF, amounts at the currency decimals, quotes doubled, formulas defused', () => {
+  const csv = toCsv(buildFilingSheets(exportArgs()), 'CAD');
+  assert.ok(csv.startsWith('﻿'));
+  assert.ok(csv.includes('\r\n') && !/[^\r]\n/.test(csv));
+  assert.match(csv, /"101","Sales and other revenue",100\.00,/);
+  assert.match(csv, /"113A",.*,6\.50,/);
+  assert.match(toCsv(buildFilingSheets(exportArgs()), 'JPY'), /"101","Sales and other revenue",100,/, 'yen has no decimals');
+  assert.match(toCsv(buildFilingSheets(exportArgs()), 'KWD'), /"101","Sales and other revenue",100\.000,/, 'dinar has three');
+  assert.equal(csvSafe('=HYPERLINK("http://x")'), "'=HYPERLINK(\"http://x\")");
+  assert.equal(csvSafe('+1'), "'+1");
+  assert.equal(csvSafe('@SUM(A1)'), "'@SUM(A1)");
+  assert.equal(csvSafe('Maple'), 'Maple');
+  const evil = toCsv(buildFilingSheets(exportArgs({ company: { name: 'x', legalName: '=cmd|"/c calc"!A1', country: 'Canada' } })), 'CAD');
+  assert.ok(evil.includes('"\'=cmd|""/c calc""!A1"'), 'a company name cannot run as a formula in the CSV');
+  assert.equal(exportFileName('Maple Inc.!', 'ca-gsthst', '2026-03-31', 'csv'), 'maple-inc-ca-gsthst-2026-03-31.csv');
+  assert.equal(exportFileName('', 'us-est-corp', '2026-12-31#2', 'xlsx'), 'company-us-est-corp-2026-12-31-2.xlsx');
+});
+
+test('Excel: a real .xlsx file with three sheets, numeric amounts and the form lines', async () => {
+  const { default: writeExcelFile } = await import('write-excel-file/node');
+  const { unzipSync, strFromU8 } = await import('fflate');
+  const buf: Buffer = await writeExcelFile(toExcelSheets(buildFilingSheets(exportArgs()), 'CAD') as never).toBuffer();
+  assert.equal(buf.subarray(0, 2).toString(), 'PK', 'a zip container, which is what .xlsx is');
+  const files = unzipSync(new Uint8Array(buf));
+  const names = Object.keys(files);
+  assert.ok(names.includes('[Content_Types].xml') && names.includes('xl/workbook.xml'));
+  assert.equal(names.filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).length, 3);
+  const workbook = strFromU8(files['xl/workbook.xml']);
+  for (const n of ['Filing', 'Worksheet', 'Checklist']) assert.ok(workbook.includes(`name="${n}"`), n);
+  const all = names.filter((n) => n.endsWith('.xml')).map((n) => strFromU8(files[n])).join('\n');
+  assert.ok(all.includes('GST/HST return for registrants (GST34)'));
+  assert.ok(all.includes('Sales and other revenue'));
+  assert.match(all, /<v>100<\/v>/, 'the sales figure is a number Excel can add up');
+  assert.match(all, /#,##0\.00/, 'amounts are shown with the currency decimals');
 });

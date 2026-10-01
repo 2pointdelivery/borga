@@ -2991,7 +2991,7 @@ export const TAX_CATEGORY_LABEL: Record<TaxCategory, string> = {
 // applied when the company's country is set (see applyTaxPreset in the store). Only rates that are certain are filled in:
 // Canada GST 5%, Ontario HST 13% and Ghana standard VAT 15%. Everything else (US state and local sales tax, other Canadian
 // provinces, Ghana levies) is left at 0% for the company to enter. Every preset says it is a starter, to be confirmed.
-export type TaxRegion = 'US' | 'CA' | 'GH' | 'OTHER';
+export type TaxRegion = 'US' | 'CA' | 'GH' | 'DK' | 'OTHER';
 
 const ZERO_RATED: TaxProfile = { id: 'tax-zero', name: 'Zero-rated', rate: 0, category: 'custom', description: 'Exempt / zero-rated supplies' };
 const CONFIRM = 'Starter rate: confirm with your accountant or the tax authority before relying on it.';
@@ -3020,6 +3020,13 @@ export const TAX_PRESETS: Record<TaxRegion, { profiles: TaxProfile[]; note: stri
       ZERO_RATED,
     ],
   },
+  DK: {
+    note: 'Danish VAT (moms) is 25% for almost all supplies. Some supplies are exempt (for example health care, education, insurance and most financial services): enter those as zero-rated. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-dk-vat', name: 'Moms (Danish VAT)', rate: 25, category: 'vat', description: 'Standard rate. ' + CONFIRM, isDefault: true },
+      ZERO_RATED,
+    ],
+  },
   GH: {
     note: 'Ghana standard VAT (15%) is filled in. Levies such as NHIL and GETFund, and any flat-rate scheme, are not: confirm the current rules with the Ghana Revenue Authority or your accountant. ' + CONFIRM,
     profiles: [
@@ -3036,6 +3043,7 @@ export function taxRegionFor(country?: string | null): TaxRegion {
   if (['us', 'usa', 'united states', 'united states of america'].includes(c)) return 'US';
   if (['ca', 'canada'].includes(c)) return 'CA';
   if (['gh', 'ghana'].includes(c)) return 'GH';
+  if (['dk', 'denmark', 'danmark'].includes(c)) return 'DK';
   return 'OTHER';
 }
 

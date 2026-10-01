@@ -223,3 +223,15 @@ So the four providers whose list needs a key cannot load before one is saved. Th
 **Filing pack.** Each filing can be downloaded as a one-page HTML pack for the accountant: company details, period and due date, status and people, the figures, a checklist for that kind of return, and sign-off lines. Anything the user typed is escaped.
 
 **Tests.** 31 in `lib/filings.test.ts` (201 in all). One real bug found by them: the reminder step was picked from the wrong end of the list, so a filing 11 days away would have been told "30 days".
+
+## Update 2026-10-01: Denmark, form templates and Excel/CSV export for filings
+
+**Tab.** Filing now sits after Book Closure in Finance.
+
+**Denmark.** A fourth jurisdiction (with a 25% moms starter profile): VAT return (monthly due the 25th of the next month; quarterly and half-yearly due the 1st of the third month after the period; Skattestyrelsen assigns the period by turnover), corporate income tax return (6 months after year end, 22%), acontoskat (20 March and 20 November), annual report to the Danish Business Authority (5 months), A-skat and AM-bidrag (10th of the next month) and the personal return for sole proprietors (1 July). Half-yearly is a new filing frequency. Partnerships (I/S) have no company return, and the screen says why.
+
+**Templates.** Every built-in filing in Canada (federal, ON, QC, AB, BC, SK, MB), the United States (federal, CA, TX, generic states) and Ghana and Denmark now has its own form layout (`lib/borga/filing-templates.ts`): GST34 lines 101 to 113A, T2 Schedule 125, T2125, Form 1120 / 1120-S / 1065 / Schedule C / 941 / 940 / W-3, the Danish momsangivelse with Salgsmoms, Købsmoms and Rubrik A to D, the Ghana VAT return, and so on. A line either takes its amount from the books or is left blank with a note on where the preparer gets it: payroll tax, depreciation, credits, instalments and carry-forwards are never invented. A test checks that no template line uses a figure its kind of return does not produce.
+
+**Export.** The old HTML pack is replaced by Excel (.xlsx) and CSV downloads of the same content: the form lines, a worksheet, a checklist and sign-off. Amounts are real numbers shown with the currency's own decimals. The CSV has a byte order mark so Excel reads accents, and any text that a spreadsheet would run as a formula (starts with = + - @) is defused. The Excel writer (`write-excel-file`, MIT) loads only when someone exports. Verified in a browser (a Danish company: both files generated, the .xlsx is a valid zip) and by a test that unzips the .xlsx.
+
+**Not verified.** I could not open the .xlsx in Excel itself here. And the line numbers and due dates are from my knowledge of the published forms, not checked against this year's: forms change, so every export says to check the current form, and rows we are less sure of say "confirm". Entries without a line reference are ones where I would not guess. This is for the accountant review (T90).
