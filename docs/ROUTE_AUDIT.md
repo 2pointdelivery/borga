@@ -57,3 +57,9 @@ Decision: launch as **one organisation with invite-only signup**. All signed-in 
 Verified end to end on a production build (throwaway accounts, removed afterwards): stranger refused; operator can always sign up; invite works only for its email; reuse refused; two simultaneous signups with one code gave one success; revoked invite refused; a non-operator cannot read masked keys, change keys or issue invites.
 
 Known and accepted: probing an operator's own email on the signup form returns 409 (operators bypass the signup mode so the owner can always bootstrap), which reveals that an administrator email has an account.
+
+## Added later: chat paths and editable provider URLs
+
+| # | Finding | Risk | Resolution path |
+|---|---|---|---|
+| 8 | `chat`, `llm-test` and agent runs send the shared provider API key to the base URL stored in the workspace catalog, which any signed-in user can edit (Advanced: edit the model catalog). A user could point a provider at their own server and receive the shared key. | Low under the one-organisation, invite-only model; High if untrusted users can sign up | Use the built-in base URL for the known providers and allow a custom URL only for `llm-custom`/`llm-ollama` (which never receive a shared provider key). The new `llm-models` route already does this. |

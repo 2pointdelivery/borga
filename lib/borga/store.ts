@@ -27,6 +27,7 @@ INITIAL_APPROVALS,
   DEFAULT_LLM,
   LLM_PROVIDERS,
   type LlmProvider,
+  type LlmModelInfo,
   VALUATION_CONFIG_SEED,
   type ValuationConfig,
   INITIAL_SCHEDULED_TASKS,
@@ -141,6 +142,7 @@ INITIAL_APPROVALS,
   normalizeReconciliationPattern,
 } from './data';
 import { notifyEmail } from './email-client';
+import { mergeLoadedModels, repairCatalog } from './model-catalog';
 import { mergeCustomers, mergeLeads, type CrmCustomer, type CrmLead, type MergeSummary } from './crm-core';
 import { buildBill, buildInvoice, dueRuns, isFinished, nextBillNumber, nextInvoiceNumber, recurringBillRef, recurringRef, type RecurringBill, type RecurringInvoice } from './recurring';
 
@@ -643,6 +645,8 @@ interface BorgaStore {
   /** DB-backed, per-workspace AI model catalog (providers + models). Editable per company. */
   llmCatalog: LlmProvider[];
   setLlmCatalog: (catalog: LlmProvider[]) => void;
+  /** Loads a provider's live model list (free ones by default) into this workspace's catalog. */
+  loadFreeModels: (providerId: string) => Promise<{ ok: boolean; count?: number; total?: number; error?: string }>;
 
   /** DB-backed, per-company valuation configuration (baseline + methods + market assumptions). */
   valuation: ValuationConfig;
@@ -2525,6 +2529,28 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
 
   llmCatalog: LLM_PROVIDERS,
+  loadFreeModels: async (providerId) => {
+    try {
+      const res = await fetch('/api/borga/llm-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ providerId }),
+      });
+      const d = (await res.json().catch(() => ({}))) as { ok?: boolean; models?: LlmModelInfo[]; total?: number; loadedAt?: number; error?: string };
+      if (!d.ok || !d.models) return { ok: false, error: d.error ?? `The server answered HTTP ${res.status}.` };
+      const loaded = d.models;
+      const s = get();
+      const catalog = (s.llmCatalog.length ? s.llmCatalog : LLM_PROVIDERS).map((p) =>
+        p.id === providerId
+          ? { ...p, models: mergeLoadedModels(p.models, loaded, s.llm.providerId === providerId ? [s.llm.model] : []), modelsLoadedAt: d.loadedAt ?? Date.now() }
+          : p,
+      );
+      get().setLlmCatalog(catalog);
+      return { ok: true, count: loaded.length, total: d.total };
+    } catch {
+      return { ok: false, error: 'Network error. Try again.' };
+    }
+  },
   setLlmCatalog: (catalog) => {
     set({ llmCatalog: catalog });
     persist('llmCatalog', catalog);
@@ -2609,7 +2635,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         mcpServers: d.mcpServers ?? INITIAL_MCP_SERVERS,
         kpiGroups: d.kpis ?? INITIAL_KPI_GROUPS,
         llm: d.llm ?? DEFAULT_LLM,
-        llmCatalog: Array.isArray(d.llmCatalog) && d.llmCatalog.length ? d.llmCatalog : LLM_PROVIDERS,
+        llmCatalog: Array.isArray(d.llmCatalog) && d.llmCatalog.length ? repairCatalog(d.llmCatalog, LLM_PROVIDERS) : LLM_PROVIDERS,
         valuation: d.valuation ?? VALUATION_CONFIG_SEED,
         fundraising: d.fundraising ?? INITIAL_FUNDRAISING,
         browses: d.browses ?? INITIAL_BROWSES,

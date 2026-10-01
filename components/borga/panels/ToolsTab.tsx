@@ -33,6 +33,7 @@ import { useBorga } from '@/lib/borga/store';
 import { LLM_PROVIDERS, VOICE_PROVIDERS, EMAIL_APPS, COMPOSIO_TOOLKITS, type AppConnection, type EmailApp, type Toolkit } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
 import { ModelCatalogEditor } from './ModelCatalogEditor';
+import { FreeLlmPanel } from './FreeLlmPanel';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast-bus';
 
@@ -83,6 +84,9 @@ const LLM_KEY_MAP: Record<string, { envVar: string; label: string; kind: 'key' |
   'llm-claude': { envVar: 'ANTHROPIC_API_KEY', label: 'API key', kind: 'key', hint: 'console.anthropic.com' },
   'llm-openai': { envVar: 'OPENAI_API_KEY', label: 'API key', kind: 'key', hint: 'platform.openai.com/api-keys' },
   'llm-openrouter': { envVar: 'OPENROUTER_API_KEY', label: 'API key', kind: 'key', hint: 'openrouter.ai/keys' },
+  'llm-cerebras': { envVar: 'CEREBRAS_API_KEY', label: 'API key', kind: 'key', hint: 'cloud.cerebras.ai — free tier' },
+  'llm-sambanova': { envVar: 'SAMBANOVA_API_KEY', label: 'API key', kind: 'key', hint: 'cloud.sambanova.ai — free tier' },
+  'llm-mistral': { envVar: 'MISTRAL_API_KEY', label: 'API key', kind: 'key', hint: 'console.mistral.ai/api-keys — free Experiment plan' },
   'llm-ollama': { envVar: 'OLLAMA_BASE_URL', label: 'Base URL', kind: 'url', hint: 'default: http://127.0.0.1:11434/v1' },
   'llm-custom': {
     envVar: 'LLM_BASE_URL', label: 'Base URL', kind: 'url', hint: 'e.g. http://localhost:8000/v1',
@@ -875,6 +879,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           <SectionTitle title="LLM providers" sub="Paste API keys here — encrypted and stored server-side" />
           {keysLoading && <RefreshCw className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
+        <FreeLlmPanel catalog={catalog} hasKey={(id) => !!(LLM_KEY_MAP[id] && keys[LLM_KEY_MAP[id].envVar]?.configured)} />
         <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {catalog.map((p) => {
             const keyConfig = LLM_KEY_MAP[p.id];
@@ -905,6 +910,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                     </span>
                   ))}
                   {p.models.length > 2 && <span>+{p.models.length - 2} more</span>}
+                  {p.models.some((m) => m.tier === 'free') && <span className="ml-2 text-emerald-600">{p.models.filter((m) => m.tier === 'free').length} free</span>}
                 </p>
 
                 {isDemo ? (
@@ -1005,6 +1011,10 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
               { label: 'Google Gemini', href: 'https://aistudio.google.com/apikey' },
               { label: 'OpenRouter', href: 'https://openrouter.ai/keys' },
               { label: 'NVIDIA NIM', href: 'https://build.nvidia.com' },
+              { label: 'Cerebras', href: 'https://cloud.cerebras.ai' },
+              { label: 'SambaNova', href: 'https://cloud.sambanova.ai' },
+              { label: 'Mistral', href: 'https://console.mistral.ai/api-keys' },
+              { label: 'More free providers (FreeLLM.net)', href: 'https://freellm.net/free-llm-api-keys' },
             ].map((l) => (
               <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 hover:text-foreground hover:underline">
                 {l.label} <ExternalLink className="h-2.5 w-2.5" />

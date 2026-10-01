@@ -962,6 +962,8 @@ export interface LlmProvider {
   accent: string;
   connectionId?: string;
   freeTierNote?: string;
+  /** When the model list was last loaded live from the provider (epoch ms). */
+  modelsLoadedAt?: number;
   /** Env var holding this provider's API key. Resolved server-side; never sent to the client. */
   envVar?: string;
   models: LlmModelInfo[];
@@ -1011,7 +1013,7 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     ],
   },
   {
-    id: 'llm-gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', accent: '#4285F4', connectionId: 'cn-gemini',
+    id: 'llm-gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', accent: '#4285F4', connectionId: 'cn-gemini',
     envVar: 'GEMINI_API_KEY',
     freeTierNote: 'Free tier — aistudio.google.com',
     models: [
@@ -1112,6 +1114,32 @@ export const LLM_PROVIDERS: LlmProvider[] = [
       { id: 'o3-mini', label: 'o3 Mini', tier: 'paid', contextK: 200, tag: 'reasoning' },
       { id: 'o4-mini', label: 'o4 Mini', tier: 'paid', contextK: 200, tag: 'reasoning' },
       { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', tier: 'paid', contextK: 128 },
+    ],
+  },
+  {
+    id: 'llm-cerebras', label: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1', accent: '#F15A29',
+    envVar: 'CEREBRAS_API_KEY',
+    freeTierNote: 'Free tier — cloud.cerebras.ai. Use "Load free models" for the current list.',
+    models: [
+      { id: 'llama-3.3-70b', label: 'Llama 3.3 70B', tier: 'free', contextK: 128, tag: 'powerful' },
+      { id: 'llama3.1-8b', label: 'Llama 3.1 8B', tier: 'free', contextK: 128, tag: 'fast' },
+    ],
+  },
+  {
+    id: 'llm-sambanova', label: 'SambaNova', baseUrl: 'https://api.sambanova.ai/v1', accent: '#EE7624',
+    envVar: 'SAMBANOVA_API_KEY',
+    freeTierNote: 'Free tier — cloud.sambanova.ai. Use "Load free models" for the current list.',
+    models: [
+      { id: 'Meta-Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B', tier: 'free', contextK: 128, tag: 'powerful' },
+    ],
+  },
+  {
+    id: 'llm-mistral', label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', accent: '#FA520F',
+    envVar: 'MISTRAL_API_KEY',
+    freeTierNote: 'Free Experiment plan — console.mistral.ai. Use "Load free models" for the current list.',
+    models: [
+      { id: 'mistral-small-latest', label: 'Mistral Small', tier: 'free', contextK: 128, tag: 'fast' },
+      { id: 'open-mistral-nemo', label: 'Mistral NeMo', tier: 'free', contextK: 128 },
     ],
   },
   {
