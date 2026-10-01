@@ -35,7 +35,6 @@ INITIAL_APPROVALS,
   INITIAL_EMPLOYEES,
   INITIAL_LEAVE,
   makeOnboarding,
-  CURRENCY_SYMBOL,
   LEAVE_KIND_LABEL,
   computeLeaveBalance,
   INITIAL_INVOICES,
@@ -148,6 +147,7 @@ INITIAL_APPROVALS,
 import { notifyEmail } from './email-client';
 import { mergeLoadedModels, repairCatalog } from './model-catalog';
 import { SaveQueue } from './save-queue';
+import { fmtMoneyFull } from './currencies';
 import { mergeCustomers, mergeLeads, type CrmCustomer, type CrmLead, type MergeSummary } from './crm-core';
 import { buildBill, buildInvoice, dueRuns, isFinished, nextBillNumber, nextInvoiceNumber, recurringBillRef, recurringRef, type RecurringBill, type RecurringInvoice } from './recurring';
 
@@ -1198,7 +1198,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
 
     get().log({
       agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task',
-      message: `Invoice ${inv.number} marked paid via ${method.replace('-', ' ')} — ${CURRENCY_SYMBOL[ws?.currency ?? 'USD']}${inv.amount.toLocaleString()} posted to the ledger and journal.`,
+      message: `Invoice ${inv.number} marked paid via ${method.replace('-', ' ')} — ${fmtMoneyFull(inv.amount, ws?.currency ?? 'USD')} posted to the ledger and journal.`,
     });
   },
   runDunningSweep: () => {
@@ -1476,7 +1476,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
 
     get().log({
       agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task',
-      message: `Bill ${bill.number} paid to ${bill.vendorName} via ${method.replace('-', ' ')} — ${CURRENCY_SYMBOL[ws?.currency ?? 'USD']}${bill.amount.toLocaleString()} posted to the ledger and journal.`,
+      message: `Bill ${bill.number} paid to ${bill.vendorName} via ${method.replace('-', ' ')} — ${fmtMoneyFull(bill.amount, ws?.currency ?? 'USD')} posted to the ledger and journal.`,
     });
   },
 

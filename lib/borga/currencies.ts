@@ -74,3 +74,34 @@ export function currencySymbol(code: string): string {
 
 /** Text shown for one currency in a dropdown: "GHS — Ghana Cedi". */
 export const currencyLabel = (c: CurrencyInfo): string => `${c.code} — ${c.name}`;
+
+// ── Formatting ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Symbol plus amount; a symbol made of letters ("KES", "KWD") gets a space so it does not run into the digits. */
+const withSymbol = (sym: string, body: string) => `${sym}${/^[A-Za-z]+$/.test(sym) ? ' ' : ''}${body}`;
+
+const group = (n: number, digits: number) => n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+/**
+ * Exact amount in the currency's own decimals: "$1,234.56", "¥1,235" (JPY has none), "KWD 1,234.568" (KWD has three).
+ * Use where cents matter (a document total, a ledger line, an activity message).
+ */
+export function fmtMoneyFull(amount: number, code: string): string {
+  if (!Number.isFinite(amount)) return '—';
+  const body = group(Math.abs(amount), currencyDigits(code));
+  // "-0.00" must not appear for an amount that rounds to zero
+  const negative = amount < 0 && Number(body.replace(/,/g, '')) !== 0;
+  return `${negative ? '−' : ''}${withSymbol(currencySymbol(code), body)}`;
+}
+
+/**
+ * Compact amount for cards and tables: "$12.50" under 1,000 (at the currency's own decimals), then "$1.2K", "$2.5M", "$1.1B".
+ * Replaces the old fmtNum, which had no millions, did not round amounts under 1,000 and ignored the currency's decimals.
+ */
+export function fmtMoney(amount: number, code: string): string {
+  if (!Number.isFinite(amount)) return '—';
+  const a = Math.abs(amount);
+  const body = a >= 1e9 ? `${(a / 1e9).toFixed(1)}B` : a >= 1e6 ? `${(a / 1e6).toFixed(1)}M` : a >= 1e3 ? `${(a / 1e3).toFixed(1)}K` : group(a, currencyDigits(code));
+  const negative = amount < 0 && !/^0(\.0+)?$/.test(body);
+  return `${negative ? '−' : ''}${withSymbol(currencySymbol(code), body)}`;
+}

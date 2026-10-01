@@ -38,13 +38,12 @@ import {
   EMPLOYEE_STATUS_STYLE,
   LEAVE_KIND_LABEL,
   computeLeaveBalance,
-  fmtNum,
   type Employee,
   type EmploymentType,
   type LeaveKind,
   type LeaveRequest,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
+import { fmtMoney, fmtMoneyFull } from '@/lib/borga/currencies';
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { DateInput, Field } from '../form-widgets';
@@ -235,7 +234,7 @@ export function HRDirectoryTab() {
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Employee directory" sub={`${active.length} active of ${employees.length} — annual payroll ≈ ${CURRENCY_SYMBOL[currency]}${fmtNum(payroll)}`} />
+        <SectionTitle title="Employee directory" sub={`${active.length} active of ${employees.length} — annual payroll ≈ ${fmtMoney(payroll, currency)}`} />
         <div className="flex gap-2">
           <Button
             variant="outline"
@@ -244,7 +243,7 @@ export function HRDirectoryTab() {
             onClick={() => {
               const label = new Date().toLocaleDateString([], { month: 'long', year: 'numeric' });
               const total = Math.round(active.reduce((s, e) => s + e.salary / 12, 0));
-              if (window.confirm(`Run payroll for ${label}? ${active.length} employees — total ${(CURRENCY_SYMBOL[currency])}${fmtNum(total)} will post to the ledger and journal.`)) {
+              if (window.confirm(`Run payroll for ${label}? ${active.length} employees — total ${fmtMoneyFull(total, currency)} will post to the ledger and journal.`)) {
                 runPayroll(label);
               }
             }}
@@ -310,7 +309,7 @@ export function HRDirectoryTab() {
                   </span>
                 </td>
                 <td className="hidden px-4 py-2.5 text-right font-mono text-xs sm:table-cell">
-                  {CURRENCY_SYMBOL[currency]}{fmtNum(e.salary)}
+                  {fmtMoney(e.salary, currency)}
                   <span className="block text-[9px] uppercase tracking-wide text-muted-foreground">{TYPE_LABEL[e.employmentType]}</span>
                 </td>
                 <td className="hidden px-4 py-2.5 xl:table-cell">

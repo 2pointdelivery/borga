@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, Trash2, TrendingUp, Target, Gauge, CalendarRange, Pencil } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -10,9 +11,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Label } from '@/components/ui/label';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import {
-  CURRENCY_SYMBOL,
-  fmtNum,
-  type RevenueTrack,
+      type RevenueTrack,
   type RevenueLine,
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
@@ -37,7 +36,7 @@ export function RevenueTrackerTab() {
   const { services, save: saveServices } = useCompanyServices();
   const [planOpen, setPlanOpen] = useState(false);
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${n < 0 ? '−' : ''}${CURRENCY_SYMBOL[currency]}${fmtNum(Math.abs(n))}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [trackId, setTrackId] = useState<string | null>(null);
   const track = revenueTracks.find((t) => t.id === trackId) ?? revenueTracks[0];

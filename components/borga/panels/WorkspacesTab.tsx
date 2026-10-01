@@ -10,7 +10,7 @@ import {
   Globe,
 } from 'lucide-react';
 import { MONTH_NAMES } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
+import { fmtMoney } from '@/lib/borga/currencies';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -48,8 +48,7 @@ export function WorkspacesTab() {
     };
   };
 
-  const fmt = (n: number, cur: Workspace['currency']) =>
-    `${CURRENCY_SYMBOL[cur]}${n >= 1000 ? `${(n / 1000).toFixed(0)}K` : n}`;
+  const fmt = (n: number, cur: Workspace['currency']) => fmtMoney(n, cur);
 
   return (
     <div className="borga-fade-up space-y-5">

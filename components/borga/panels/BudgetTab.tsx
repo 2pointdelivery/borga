@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { Fragment, useMemo, useState } from 'react';
 import { Plus, Trash2, Copy, Download, Printer, TrendingUp, Wand2, CalendarRange } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -22,9 +23,7 @@ import {
 } from '@/components/ui/select';
 import {
   ACCOUNT_TYPE_STYLE,
-  CURRENCY_SYMBOL,
-  fmtNum,
-  fiscalYearMonths,
+      fiscalYearMonths,
   computeAccountMonthlyActuals,
   forecastRemainingMonths,
   rollBudgetForward,
@@ -45,7 +44,7 @@ const BUDGET_ROW_TYPES: AccountType[] = ['revenue', 'expense'];
 export function BudgetTab() {
   const { budgets, addBudget, updateBudget, deleteBudget, setBudgetLine, setBudgetLineGrowth, applyBudgetForecast, coa, journals, activeWorkspace, log } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${n < 0 ? '−' : ''}${CURRENCY_SYMBOL[currency]}${fmtNum(Math.abs(n))}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [selectedId, setSelectedId] = useState<string>(budgets[0]?.id ?? '');
   const budget = budgets.find((b) => b.id === selectedId) ?? budgets[0];

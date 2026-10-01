@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, Trash2, Download, Search, Ban } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -19,8 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { fmtNum, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, type FinanceKind, type PaymentMethod } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL, type FinanceKind, type PaymentMethod } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { Field, ProjectSelect, AccountSelect } from '../form-widgets';
@@ -44,7 +44,7 @@ export function LedgerTab() {
   const [page, setPage] = useState(0);
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const filtered = useMemo(
     () =>

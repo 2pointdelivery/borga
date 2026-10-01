@@ -252,8 +252,8 @@ export function ValuationTab() {
             <LineChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickMargin={8} />
-              <YAxis yAxisId="usd" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `$${val.toFixed(2)}`} domain={[0.15, 0.3]} />
-              <YAxis yAxisId="eqv" orientation="right" tick={{ fontSize: 10, fill: '#FBBF24' }} tickFormatter={(val) => `$${val.toFixed(1)}M`} domain={[1.5, 2.8]} />
+              <YAxis yAxisId="usd" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `${sym}${val.toFixed(2)}`} domain={[0.15, 0.3]} />
+              <YAxis yAxisId="eqv" orientation="right" tick={{ fontSize: 10, fill: '#FBBF24' }} tickFormatter={(val) => `${sym}${val.toFixed(1)}M`} domain={[1.5, 2.8]} />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: 11, color: '#9BBFBA' }} />
               <Line yAxisId="usd" type="monotone" dataKey="usd" name="FMV Price (USD)" stroke="#3D9B8E" strokeWidth={2} dot={{ r: 2, fill: '#3D9B8E' }} />
@@ -358,8 +358,8 @@ export function ValuationTab() {
               <BarChart data={BRIDGE} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickMargin={8} interval={0} />
-                <YAxis tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `$${val.toFixed(1)}M`} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => `$${val.toFixed(2)}M CAD`} />
+                <YAxis tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `${sym}${val.toFixed(1)}M`} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => `${sym}${val.toFixed(2)}M ${ws?.currency ?? 'USD'}`} />
                 <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                   {BRIDGE.map((_, i) => (
                     <Cell key={i} fill={i === BRIDGE.length - 1 ? '#4ADE80' : '#2B7A6F'} />

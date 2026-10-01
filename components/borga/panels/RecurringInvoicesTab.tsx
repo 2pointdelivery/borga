@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, Pause, Play, Trash2, Pencil, RefreshCw, Repeat } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -9,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CURRENCY_SYMBOL, PAYMENT_METHOD_LABEL, fmtNum, type InvoiceLine, type PaymentMethod } from '@/lib/borga/data';
+import { PAYMENT_METHOD_LABEL, type InvoiceLine, type PaymentMethod } from '@/lib/borga/data';
 import { FREQUENCY_LABEL, isFinished, nextRunIso, type RecurringFrequency, type RecurringInvoice } from '@/lib/borga/recurring';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
@@ -53,7 +54,7 @@ const emptyForm = (taxId?: string): Form => ({
 export function RecurringInvoicesTab() {
   const { recurringInvoices, addRecurringInvoice, updateRecurringInvoice, deleteRecurringInvoice, runRecurringInvoices, invoices, customers, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);

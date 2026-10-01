@@ -186,6 +186,16 @@ So the four providers whose list needs a key cannot load before one is saved. Th
 
 **Limits.**
 - Cities with fewer than 1,000 people are not listed (type them). Names are in English only.
-- Selecting a currency does not yet change how amounts are rounded: money formatting still shows two decimals, which is wrong for zero-decimal currencies such as JPY or three-decimal ones such as KWD. Decimal places are available (`currencyDigits`) but not applied to the app's money helpers.
+- ~~Selecting a currency does not change how amounts are rounded~~ Fixed the same day, see the next update.
 - GeoNames is community-maintained; some admin names differ from official ones.
 - Tax presets and accounting standards still exist only for the US, Canada, Ghana (and Denmark's standard); other countries get the neutral 0% tax placeholder and the IFRS default.
+
+## Update 2026-10-01: money follows the currency's own decimals
+
+**The problem.** Choosing a currency changed only the symbol. Amounts were printed by `fmtNum`, which showed 1,234,567 as "1234.6K" (no millions), printed anything under 1,000 as a raw number (cents unrounded, float noise such as 0.30000000000000004 possible), and had no idea that JPY has no decimals or that KWD has three. Sixteen tabs each carried their own copy of the same `money` closure, and several screens hard-coded "$" (Advertising, Time Clock, the valuation charts also said "CAD").
+
+**What changed.** One formatter, `lib/borga/currencies.ts`: `fmtMoney` for cards and tables ("$12.50" under 1,000 at the currency's own decimals, then "$1.2K", "$2.5M", "$1.1B") and `fmtMoneyFull` for exact amounts ("$1,234.56", "¥1,234,567", "KWD 1,234.568"; used in activity messages and the payroll confirmation). Symbols made only of letters get a space ("KWD 12.500"), an amount that rounds to zero never shows a minus sign, and bad input prints "—" instead of NaN. The 16 duplicate closures, the report template, HR, Analytics, Workspaces, Advertising, Time Clock and the valuation charts all use it now, and the no-longer-needed copies of the old helper imports were removed. 5 new tests (170 in all).
+
+**Verified on a production build in a browser** with a seeded company: in JPY the Ledger shows ¥1.2M, ¥13 and −¥1,000 (it used to show 1234.6K), Invoicing ¥12.3K and ¥2.5M, HR ¥4.5M, and no "$" anywhere; switching the same company to KWD shows KWD 12.500, −KWD 999.600 and KWD 0.000 with three decimals.
+
+**Still not done.** The compact "K / M / B" style is the app's existing design and is kept for cards and tables, so a document list shows "$1.2K" and not the exact total (the exact formatter exists but most tabs do not use it yet). A few screens print bare numbers with no symbol (journal line chips, the bank-match hint) and were left alone. The email and HTML-report helpers format their own way. Stored amounts are plain numbers, so rounding is a display concern only: nothing is rounded in the ledger itself, which is the right place for a decision about minor units (T90, with the accountant).

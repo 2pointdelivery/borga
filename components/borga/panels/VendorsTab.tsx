@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import {
   Plus, Trash2, Pencil, Truck, ReceiptText, CircleDollarSign, Download, Mail, Send, X, Ban,
@@ -23,13 +24,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  PAYMENT_TERMS_LABEL, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, fmtNum,
-  computeVendorRisk, VENDOR_RISK_STYLE,
+  PAYMENT_TERMS_LABEL, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, computeVendorRisk, VENDOR_RISK_STYLE,
   INITIAL_TAX_PROFILES, DEFAULT_TAX_PROFILE_ID,
   AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD,
   type Vendor, type Bill, type BillLine, type PaymentTerms, type PaymentMethod,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect, CountrySelect, CityInput } from '../form-widgets';
@@ -81,7 +80,7 @@ export function VendorsTab() {
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [vendorDialogOpen, setVendorDialogOpen] = useState(false);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);

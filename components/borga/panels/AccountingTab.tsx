@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, BookOpen, Trash2, SendHorizontal, FileCheck, X, Lock, ChevronRight, Ban, Pencil } from 'lucide-react';
 import {
@@ -37,7 +38,6 @@ import {
   type AccountType,
   type GlAccount,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { ProjectSelect } from '../form-widgets';
@@ -46,6 +46,11 @@ import { cn } from '@/lib/utils';
 const DEBIT_NORMAL: AccountType[] = ['asset', 'expense'];
 
 type LineDraft = { accountId: string; debit: string; credit: string };
+
+/** Today as YYYY-MM-DD. A helper outside the component, so the clock is read only when a handler runs, never while rendering. */
+const todayIso = () => new Date().toISOString().slice(0, 10);
+/** A fresh id suffix, read from the clock only when a handler runs. */
+const stamp = () => Date.now();
 
 export function AccountingTab() {
   const {
@@ -61,7 +66,7 @@ export function AccountingTab() {
     approvals.some((a) => a.journalId === journalId && a.status === 'pending');
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [accountOpen, setAccountOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<string | null>(null);
@@ -131,7 +136,7 @@ export function AccountingTab() {
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `GL account updated: ${accountForm.code.trim()} — ${accountForm.name.trim()}.` });
     } else {
       addAccount({
-        id: `gl-${Date.now()}`,
+        id: `gl-${stamp()}`,
         code: accountForm.code.trim(),
         name: accountForm.name.trim(),
         type: accountForm.type,
@@ -155,10 +160,10 @@ export function AccountingTab() {
     // Machine-readable date for period reporting; falls back to today.
     const parsedIso = new Date(journalForm.date);
     const dateIso = Number.isNaN(parsedIso.getTime())
-      ? new Date().toISOString().slice(0, 10)
+      ? todayIso()
       : parsedIso.toISOString().slice(0, 10);
     const entry = {
-      id: `je-${Date.now()}`,
+      id: `je-${stamp()}`,
       date: journalForm.date,
       dateIso,
       memo: journalForm.memo.trim() || 'Journal entry',

@@ -122,3 +122,45 @@ test('currency symbols: the hand-picked ones stay, others come from the platform
   assert.equal(currencySymbol('ZZZ'), 'ZZZ');
   assert.equal(currencySymbol(''), '');
 });
+
+// ── money formatting follows ISO 4217 decimals ────────────────────────────────────────────────────────────────────────
+
+import { fmtMoney, fmtMoneyFull } from './borga/currencies';
+
+test('compact money: under 1,000 uses the currency decimals, then K, M, B', () => {
+  assert.equal(fmtMoney(12.5, 'USD'), '$12.50');
+  assert.equal(fmtMoney(0, 'USD'), '$0.00');
+  assert.equal(fmtMoney(999.994, 'USD'), '$999.99');
+  assert.equal(fmtMoney(1000, 'USD'), '$1.0K');
+  assert.equal(fmtMoney(1234, 'CAD'), 'C$1.2K');
+  assert.equal(fmtMoney(2_500_000, 'GHS'), 'GH₵2.5M', 'the old formatter printed "2500.0K"');
+  assert.equal(fmtMoney(1_100_000_000, 'EUR'), '€1.1B');
+});
+
+test('zero-decimal and three-decimal currencies are not forced to two decimals', () => {
+  assert.equal(fmtMoney(999, 'JPY'), '¥999');
+  assert.equal(fmtMoney(12.6, 'JPY'), '¥13', 'yen has no minor unit');
+  assert.equal(fmtMoney(12.3456, 'KWD'), 'KWD 12.346');
+  assert.equal(fmtMoney(5000, 'KRW'), '₩5.0K');
+  assert.equal(fmtMoneyFull(1234567, 'JPY'), '¥1,234,567');
+  assert.equal(fmtMoneyFull(1234.5678, 'KWD'), 'KWD 1,234.568');
+});
+
+test('exact money keeps separators and cents', () => {
+  assert.equal(fmtMoneyFull(1234.5, 'USD'), '$1,234.50');
+  assert.equal(fmtMoneyFull(1234567.891, 'USD'), '$1,234,567.89');
+  assert.equal(fmtMoneyFull(0.1 + 0.2, 'USD'), '$0.30', 'floating point noise is rounded away');
+});
+
+test('negative amounts get a minus sign, but an amount that rounds to zero does not', () => {
+  assert.equal(fmtMoney(-12.5, 'USD'), '−$12.50');
+  assert.equal(fmtMoneyFull(-1234.5, 'USD'), '−$1,234.50');
+  assert.equal(fmtMoney(-0.001, 'USD'), '$0.00');
+  assert.equal(fmtMoneyFull(-0.004, 'USD'), '$0.00');
+});
+
+test('letter symbols are separated from the digits and bad input does not print NaN', () => {
+  assert.equal(fmtMoney(1500, 'ZZZ'), 'ZZZ 1.5K');
+  assert.equal(fmtMoney(NaN, 'USD'), '—');
+  assert.equal(fmtMoneyFull(Infinity, 'USD'), '—');
+});

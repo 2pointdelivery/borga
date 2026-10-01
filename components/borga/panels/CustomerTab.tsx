@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Plus,
@@ -46,12 +47,10 @@ import {
   PROJECT_STATUS_LABEL,
   PROJECT_STATUS_STYLE,
   computeProjectActualSpend,
-  fmtNum,
-  type Customer,
+    type Customer,
   type Contact,
   type CustomerStatus,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { CityInput, CountrySelect, Field, IndustryInput, RegionSelect } from '../form-widgets';
@@ -84,7 +83,7 @@ export function CustomerTab() {
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [selectedId, setSelectedId] = useState<string | null>(customers[0]?.id ?? null);
   const [query, setQuery] = useState('');

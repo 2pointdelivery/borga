@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useState, useCallback } from 'react';
 import { Plus, Trash2, ArrowLeft, CheckSquare, Receipt, LayoutGrid, GripVertical, CalendarClock, Users, X, Check } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -27,9 +28,7 @@ import {
   PROJECT_STATUS_LABEL,
   PROJECT_STATUS_STYLE,
   computeProjectActualSpend,
-  CURRENCY_SYMBOL,
-  fmtNum,
-  type Project,
+      type Project,
   type ProjectStatus,
   type Task,
   type TaskStatus,
@@ -59,7 +58,7 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
     agents, activeWorkspace, log,
   } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [selectedId, setSelectedId] = useState<string | null>(initialProjectId ?? null);
   const selected = projects.find((p) => p.id === selectedId) ?? null;

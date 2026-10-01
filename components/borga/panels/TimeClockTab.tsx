@@ -28,7 +28,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { fmtNum, type TimeEntry } from '@/lib/borga/data';
+import { type TimeEntry } from '@/lib/borga/data';
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
@@ -55,7 +56,8 @@ function LiveDuration({ since }: { since: string }) {
 }
 
 export function TimeClockTab() {
-  const { employees, timeEntries, clockIn, clockOut, addTimeEntry, updateTimeEntry, deleteTimeEntry, log, userName, finance } = useBorga();
+  const { employees, timeEntries, clockIn, clockOut, addTimeEntry, updateTimeEntry, deleteTimeEntry, log, userName, finance, activeWorkspace } = useBorga();
+  const currency = activeWorkspace()?.currency ?? 'USD';
   const [query, setQuery] = useState('');
   const [manualOpen, setManualOpen] = useState(false);
   const [editing, setEditing] = useState<TimeEntry | null>(null);
@@ -202,7 +204,7 @@ export function TimeClockTab() {
               <div key={m.month} className="flex items-center justify-between rounded-lg border px-3 py-2">
                 <div>
                   <p className="text-xs font-medium">{new Date(`${m.month}-01T00:00:00`).toLocaleDateString([], { month: 'long', year: 'numeric' })}</p>
-                  <p className="text-[10px] text-muted-foreground">{m.hours}h across {m.headcount} people{m.reconciled ? '' : ` · est. $${fmtNum(m.estCost)} unpaid`}</p>
+                  <p className="text-[10px] text-muted-foreground">{m.hours}h across {m.headcount} people{m.reconciled ? '' : ` · est. ${fmtMoney(m.estCost, currency)} unpaid`}</p>
                 </div>
                 <span className={cn(
                   'rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase ring-1',

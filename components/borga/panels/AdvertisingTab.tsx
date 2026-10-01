@@ -34,13 +34,15 @@ import {
   type AdPlatform,
 } from '@/lib/borga/data';
 import { computeCashRunway } from '@/lib/borga/insights';
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { CampaignEditDialog } from './SocialEditDialogs';
 import { cn } from '@/lib/utils';
 
 export function AdvertisingTab() {
-  const { ads, addCampaign, setCampaignStatus, log, finance, bankAccounts } = useBorga();
+  const { ads, addCampaign, setCampaignStatus, log, finance, bankAccounts, activeWorkspace } = useBorga();
+  const currency = activeWorkspace()?.currency ?? 'USD';
   const [adOpen, setAdOpen] = useState(false);
   const [editCampaign, setEditCampaign] = useState<AdCampaign | null>(null);
   const [adForm, setAdForm] = useState({ name: '', platform: 'google' as AdPlatform, budget: '', spent: '', status: 'active' as AdCampaign['status'] });
@@ -116,10 +118,10 @@ export function AdvertisingTab() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card className="p-3">
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><DollarSign className="h-3.5 w-3.5" /> Total budget</p>
-          <p className="mt-1 text-xl font-semibold">${fmtNum(totalBudget)}</p>
+          <p className="mt-1 text-xl font-semibold">{fmtMoney(totalBudget, currency)}</p>
         </Card>        <Card className="p-3">
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><CircleDollarSign className="h-3.5 w-3.5" /> Spent</p>
-          <p className="mt-1 text-xl font-semibold">${fmtNum(totalSpent)}</p>
+          <p className="mt-1 text-xl font-semibold">{fmtMoney(totalSpent, currency)}</p>
         </Card>
         <Card className="p-3">
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><MousePointerClick className="h-3.5 w-3.5" /> Clicks / Conv.</p>
@@ -193,8 +195,8 @@ export function AdvertisingTab() {
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-lg bg-muted/20 p-2">
-                <p className="text-sm font-semibold">${fmtNum(a.spent)}</p>
-                <p className="text-[10px] text-muted-foreground">of ${fmtNum(a.budget)}</p>
+                <p className="text-sm font-semibold">{fmtMoney(a.spent, currency)}</p>
+                <p className="text-[10px] text-muted-foreground">of {fmtMoney(a.budget, currency)}</p>
               </div>
 
               <div className="rounded-lg bg-muted/20 p-2">

@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Landmark,
@@ -37,7 +38,7 @@ import {
   fmtNum, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, normalizeReconciliationPattern,
   type BankAccount, type BankTxn, type BankSource, type PaymentMethod, type ReconciliationRule,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL, BANK_ACCOUNT_KINDS, BANK_ACCOUNT_KIND_LABEL } from '@/lib/borga/data';
+import { BANK_ACCOUNT_KINDS, BANK_ACCOUNT_KIND_LABEL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { DateInput, Field } from '../form-widgets';
@@ -108,7 +109,7 @@ export function BankingTab() {
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [selectedAccountId, setSelectedAccountId] = useState<string>(bankAccounts[0]?.id ?? '');
   const [addOpen, setAddOpen] = useState(false);

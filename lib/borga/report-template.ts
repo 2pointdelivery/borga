@@ -10,15 +10,13 @@
  */
 
 import type { Workspace, Invoice, InvoiceLine, Bill, BillLine } from './data';
-import { PAYMENT_METHOD_LABEL, fmtNum, CURRENCY_SYMBOL } from './data';
+import { PAYMENT_METHOD_LABEL } from './data';
+import { fmtMoney } from './currencies';
 
 const esc = (s: string) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const money = (ws: Workspace | null | undefined, n: number) => {
-  const symbol = CURRENCY_SYMBOL[ws?.currency ?? 'USD'];
-  return `${n < 0 ? '−' : ''}${symbol}${fmtNum(Math.abs(n))}`;
-};
+const money = (ws: Workspace | null | undefined, n: number) => fmtMoney(n, ws?.currency ?? 'USD');
 
 function logoBlock(ws: Workspace, size = 56): string {
   if (ws.logoDataUrl) {

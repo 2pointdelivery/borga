@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Plus, Trash2, Pencil, ReceiptText, Download, Search, Mail, Send, CircleDollarSign, X, Ban, BellRing,
@@ -26,15 +27,13 @@ import {
   INVOICE_STATUS_STYLE,
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABEL,
-  fmtNum,
-  INITIAL_TAX_PROFILES,
+    INITIAL_TAX_PROFILES,
   DEFAULT_TAX_PROFILE_ID,
   type Invoice,
   type InvoiceLine,
   type InvoiceStatus,
   type PaymentMethod,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { invoiceHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
@@ -89,7 +88,7 @@ export function InvoiceTab() {
     settings, addApproval,
   } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Invoice | null>(null);

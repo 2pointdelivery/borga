@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { Fragment, useMemo, useState } from 'react';
 import {
   Download,
@@ -27,8 +28,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ACCOUNT_TYPE_STYLE, fmtNum, type GlAccount } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL, computeAccountMonthlyActuals, getAccountingStandard, computeProjectActualSpend, PROJECT_STATUS_LABEL, deriveValuation } from '@/lib/borga/data';
+import { ACCOUNT_TYPE_STYLE, type GlAccount } from '@/lib/borga/data';
+import { computeAccountMonthlyActuals, getAccountingStandard, computeProjectActualSpend, PROJECT_STATUS_LABEL, deriveValuation } from '@/lib/borga/data';
 import { deriveBusinessInsights } from '@/lib/borga/insights';
 import { brandedDocHtml, openPrintWindow } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
@@ -67,7 +68,7 @@ export function ReportsCenter() {
     finance, invoices, bills, vendors, customers, leads, goals, bankTxns, bankAccounts, employees,
     projects, fundraising, knowledge, valuation, agents } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${n < 0 ? '−' : ''}${CURRENCY_SYMBOL[currency]}${fmtNum(Math.abs(n))}`;
+  const money = (n: number) => fmtMoney(n, currency);
   const standard = getAccountingStandard(activeWorkspace()?.country);
   const reportLabel = (id: ReportId): string => {
     if (id === 'pl') return standard.statementNames.incomeStatement;

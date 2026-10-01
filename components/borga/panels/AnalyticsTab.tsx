@@ -1,5 +1,5 @@
 'use client';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
+import { fmtMoney } from '@/lib/borga/currencies';
 
 import { useMemo } from 'react';
 import {
@@ -86,8 +86,7 @@ export function AnalyticsTab() {
     return Math.round(Math.min(100, margin * 40 + winRate * 25 + roas * 15 + perf * 20));
   }, [healthDimensions]);
 
-  const money = (n: number) =>
-    `${CURRENCY_SYMBOL[activeWorkspace()?.currency ?? 'USD']}${n >= 1000 ? `${(n / 1000).toFixed(0)}K` : n}`;
+  const money = (n: number) => fmtMoney(n, activeWorkspace()?.currency ?? 'USD');
 
   const cards = [
     { label: 'Revenue (MTD)', value: money(revenue), icon: DollarSign, color: 'text-emerald-600' },
