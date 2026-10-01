@@ -306,7 +306,10 @@ export async function GET(req: NextRequest) {
   });
 }
 
-const MAX_PAYLOAD_BYTES = 500_000; // ~0.5 MB per entity write
+// One entity is saved as a whole list (invoices, journals, bank transactions...), so this is the size of
+// that list. 8 MB is far below the database limit (JSON values may be as large as max_allowed_packet,
+// 64 MB by default on MySQL 8.4) and still small enough that one request cannot exhaust memory.
+const MAX_PAYLOAD_BYTES = 8_000_000;
 
 export async function POST(req: NextRequest) {
   const userId = await getUserId(req);
@@ -314,8 +317,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
   try {
+    // Refuse by the declared size first so an oversized body is never read into memory.
+    if (Number(req.headers.get('content-length') ?? 0) > MAX_PAYLOAD_BYTES) {
+      return NextResponse.json({ ok: false, error: 'Payload too large' }, { status: 413 });
+    }
     const raw = await req.text();
-    if (!raw || raw.length > MAX_PAYLOAD_BYTES) {
+    if (!raw || Buffer.byteLength(raw) > MAX_PAYLOAD_BYTES) {
       return NextResponse.json({ ok: false, error: 'Payload too large' }, { status: 413 });
     }
     const body = JSON.parse(raw) as { entity?: string; value?: unknown; ws?: unknown };

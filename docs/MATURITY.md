@@ -18,7 +18,7 @@ Legend: **P0** fix before exposing to real users, **P1** fix before relying on i
 4. **Uncommitted work.** ~130 changed/untracked files (Electron shell, agent core, heartbeat, cron, revenue tracker, this work) are not in git. Review and commit; one disk failure loses them.
 
 ## P1
-5. **Last-write-wins persistence.** The browser writes whole entity arrays (`/api/borga/data`, 500 KB cap per entity). Two tabs/devices, or a server-side writer (heartbeat notices, agent runs), silently overwrite each other. Tickets avoid this (server-authoritative, one row per ticket); other entities do not. Path forward: per-record rows or versioned writes.
+5. **Last-write-wins persistence.** The browser writes whole entity arrays (`/api/borga/data`, 8 MB cap per entity since T25, was 500 KB; over the cap the user now sees "Too much data to save" instead of silent loss). Two tabs/devices, or a server-side writer (heartbeat notices, agent runs), silently overwrite each other. Tickets avoid this (server-authoritative, one row per ticket); other entities do not. Path forward: per-record rows or versioned writes.
 6. **Persistence hides failures. PARTLY FIXED (2026-10-01, T20):** the dashboard load and save route (`/api/borga/data`) now return 503 on a database error, and the client holds server writes after a failed load. Still open: single-key readers such as `getBorgaState` and the server-side agent/cron paths still treat a database error as "no data". Original finding: `getBorgaState` returns `null` on DB errors and the data route falls back to seed data, so an outage can look like "fresh install" and the next autosave may overwrite real data with seeds. Fail loudly (503) instead.
 7. **Cron enumerates by loading every row** (`listScheduledWorkspaces` -> `getAllBorgaStates`). Use `listBorgaKeys` (added) instead.
 8. **In-memory rate limiter** resets per instance and trusts `x-forwarded-for`. Use a shared store or the host's limiter; only trust the header behind your own proxy.
@@ -60,3 +60,7 @@ In production the server now refuses to start (exit code 1, message lists every 
 ## Update 2026-10-01: tenancy, signup and shared keys (T10, T11)
 
 Launch model is one organisation with invite-only signup (`SIGNUP_MODE=invite`, default in production). Shared API keys can only be changed by operators (`BORGA_OPERATOR_EMAILS`, required in production). See docs/ROUTE_AUDIT.md. Still true: shared keys are deployment-wide, so this is not a multi-tenant SaaS until keys are per workspace.
+
+## Update 2026-10-01: save size limit (T25)
+
+The per-entity save cap is now 8 MB (it was 500 KB, which a growing company's journals or bank transactions would have hit, with writes silently refused). Bodies are refused by `Content-Length` before being read, and the size is measured in bytes. 8 MB is well under the MySQL JSON limit (`max_allowed_packet`, 64 MB default on 8.4). A save over the cap now shows a clear message and keeps the data on the device. Verified: 1 MB and 7.9 MB save, 8.5 MB and a multibyte 9 MB body return 413. Remaining risk is unchanged: each save sends the whole list (bandwidth) and last-write-wins applies; per-record rows are the real fix.

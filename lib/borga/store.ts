@@ -304,6 +304,14 @@ async function persist(entity: PersistEntity, value: unknown) {
       headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
       body: JSON.stringify({ entity, value, ws: entity === 'workspaces' ? undefined : ACTIVE_WS }),
     });
+    if (res.status === 413) {
+      toast({
+        title: 'Too much data to save',
+        description: `The ${entity} list is over the 8 MB save limit. Archive or delete old records; recent changes are kept on this device only.`,
+        variant: 'error',
+      });
+      return;
+    }
     if (!res.ok && res.status !== 401) throw new Error('save failed');
     offlineNotified = false;
   } catch {
