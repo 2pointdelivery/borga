@@ -109,6 +109,7 @@ import {
 } from '@/lib/borga/data';
 import { getBorgaRowsByPrefixOrThrow, setBorgaState, setBorgaStateIfVersion } from '@/lib/borga/persistence';
 import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
+import { EMPTY_FILINGS, type FilingsState } from '@/lib/borga/filing-catalog';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
 
@@ -123,7 +124,7 @@ export const WORKSPACE_ENTITIES = [
   'employees', 'leave', 'invoices', 'messagingChannels', 'secureChats',
   'customers', 'contacts', 'vendors', 'bills', 'coa', 'journals', 'bankAccounts', 'bankTxns',
   'workflows', 'closures', 'timeEntries', 'invites', 'taxProfiles', 'budgets', 'revenueTracks', 'projects', 'reconciliationRules',
-  'mcpServers', 'recurringInvoices', 'recurringBills',
+  'mcpServers', 'recurringInvoices', 'recurringBills', 'filings',
 ] as const;
 
 const GLOBAL_ENTITIES = ['workspaces'] as const;
@@ -187,6 +188,7 @@ const DEFAULT_STATE = {
   mcpServers: INITIAL_MCP_SERVERS,
   recurringInvoices: [] as RecurringInvoice[],
   recurringBills: [] as RecurringBill[],
+  filings: EMPTY_FILINGS,
   notices: INITIAL_NOTICES,
 };
 
@@ -309,6 +311,7 @@ export async function GET(req: NextRequest) {
     mcpServers: get<McpServer[]>('mcpServers') ?? DEFAULT_STATE.mcpServers,
     recurringInvoices: get<RecurringInvoice[]>('recurringInvoices') ?? DEFAULT_STATE.recurringInvoices,
     recurringBills: get<RecurringBill[]>('recurringBills') ?? DEFAULT_STATE.recurringBills,
+    filings: get<FilingsState>('filings') ?? DEFAULT_STATE.filings,
   });
 }
 

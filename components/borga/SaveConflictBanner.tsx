@@ -9,7 +9,7 @@ const LABELS: Record<string, string> = {
   finance: 'the ledger', journals: 'the journal', bankTxns: 'bank transactions', bankAccounts: 'bank accounts', taxProfiles: 'tax profiles',
   knowledge: 'the knowledge base', kbquestions: 'knowledge questions', workspaces: 'the company list', scheduledTasks: 'scheduled tasks',
   agentRuns: 'agent runs', recurringInvoices: 'recurring invoices', recurringBills: 'recurring bills', timeEntries: 'time entries',
-  revenueTracks: 'revenue lines', reconciliationRules: 'reconciliation rules', mcpServers: 'MCP servers', messagingChannels: 'messaging channels',
+  revenueTracks: 'revenue lines', reconciliationRules: 'reconciliation rules', mcpServers: 'MCP servers', filings: 'tax filings', messagingChannels: 'messaging channels',
 };
 
 /** "bankTxns" -> "bank transactions"; unknown names fall back to their words ("secureChats" -> "secure chats"). */

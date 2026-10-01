@@ -9,6 +9,7 @@ import { VendorsTab } from '../panels/VendorsTab';
 import { ReportsCenter } from '../panels/ReportsCenter';
 import { BookClosureTab } from '../panels/BookClosureTab';
 import { TaxTab } from '../panels/TaxTab';
+import { FilingTab } from '../panels/FilingTab';
 import { BudgetTab } from '../panels/BudgetTab';
 import { RevenueTrackerTab } from '../panels/RevenueTrackerTab';
 import { RecurringBillsTab } from '../panels/RecurringBillsTab';
@@ -28,6 +29,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
         <TabsTrigger value="vendors">Vendors &amp; AP</TabsTrigger>
         <TabsTrigger value="recurring-bills">Recurring Bills</TabsTrigger>
         <TabsTrigger value="tax">Tax</TabsTrigger>
+        <TabsTrigger value="filing">Filing</TabsTrigger>
         <TabsTrigger value="budgeting">Budgeting</TabsTrigger>
         {revenue && <TabsTrigger value="revenue">Revenue Tracker</TabsTrigger>}
         <TabsTrigger value="reports">Reports</TabsTrigger>
@@ -39,6 +41,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
       <TabsContent value="vendors"><VendorsTab /></TabsContent>
       <TabsContent value="recurring-bills"><RecurringBillsTab /></TabsContent>
       <TabsContent value="tax"><TaxTab /></TabsContent>
+      <TabsContent value="filing"><FilingTab /></TabsContent>
       <TabsContent value="budgeting"><BudgetTab /></TabsContent>
       {revenue && <TabsContent value="revenue"><RevenueTrackerTab /></TabsContent>}
       <TabsContent value="reports"><ReportsCenter /></TabsContent>

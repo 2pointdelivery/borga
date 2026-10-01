@@ -148,6 +148,7 @@ import { notifyEmail } from './email-client';
 import { mergeLoadedModels, repairCatalog } from './model-catalog';
 import { SaveQueue } from './save-queue';
 import { fmtMoneyFull } from './currencies';
+import { EMPTY_FILINGS, normalizeFilings, type FilingProfile, type FilingRecord, type FilingsState } from './filing-catalog';
 import { mergeCustomers, mergeLeads, type CrmCustomer, type CrmLead, type MergeSummary } from './crm-core';
 import { buildBill, buildInvoice, dueRuns, isFinished, nextBillNumber, nextInvoiceNumber, recurringBillRef, recurringRef, type RecurringBill, type RecurringInvoice } from './recurring';
 
@@ -209,6 +210,7 @@ type PersistEntity =
   | 'projects'
   | 'reconciliationRules'
   | 'mcpServers'
+  | 'filings'
   | 'notices';
 
 // Active workspace id is tracked at module level so the fire-and-forget
@@ -276,7 +278,7 @@ const LS_FALLBACK_FIELDS: [keyof BorgaStore, string][] = [
   ['taxProfiles', 'taxProfiles'], ['valuation', 'valuation'],
   ['budgets', 'budgets'], ['revenueTracks', 'revenueTracks'], ['recurringInvoices', 'recurringInvoices'], ['recurringBills', 'recurringBills'], ['projects', 'projects'],
   ['reconciliationRules', 'reconciliationRules'], ['mcpServers', 'mcpServers'],
-  ['notices', 'notices'],
+  ['filings', 'filings'], ['notices', 'notices'],
 ];
 
 // The fundraising agent (Nadia) is a core built-in: whenever the agent list
@@ -541,6 +543,14 @@ interface BorgaStore {
 
   /** Merges CRM records (from the Company Engine) into customers and deals. Idempotent. */
   importCrmRecords: (customers: CrmCustomer[] | null, leads: CrmLead[] | null) => { customers?: MergeSummary; leads?: MergeSummary };
+
+  // ── Tax and statutory filings (the company's filing setup, and which returns are filed) ──
+  filings: FilingsState;
+  setFilingProfile: (patch: Partial<FilingProfile>) => void;
+  /** Marks one filing filed or not required, or edits that record. */
+  saveFilingRecord: (rec: FilingRecord) => void;
+  /** Removes the record, so the filing goes back to open. */
+  clearFilingRecord: (key: string) => void;
 
   // ── Recurring vendor bills (templates that record an unpaid bill on schedule; never pay) ──
   recurringBills: RecurringBill[];
@@ -1814,6 +1824,20 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     return out;
   },
 
+  filings: EMPTY_FILINGS,
+  setFilingProfile: (patch) => {
+    set((s) => ({ filings: { ...s.filings, profile: { ...s.filings.profile, ...patch } } }));
+    persist('filings', get().filings);
+  },
+  saveFilingRecord: (rec) => {
+    set((s) => ({ filings: { ...s.filings, records: [...s.filings.records.filter((r) => r.key !== rec.key), rec] } }));
+    persist('filings', get().filings);
+  },
+  clearFilingRecord: (key) => {
+    set((s) => ({ filings: { ...s.filings, records: s.filings.records.filter((r) => r.key !== key) } }));
+    persist('filings', get().filings);
+  },
+
   recurringBills: [],
   addRecurringBill: (r) => {
     set((s) => ({ recurringBills: [r, ...s.recurringBills] }));
@@ -2752,6 +2776,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         revenueTracks: Array.isArray(d.revenueTracks) ? d.revenueTracks : INITIAL_REVENUE_TRACKS,
         recurringInvoices: Array.isArray(d.recurringInvoices) ? d.recurringInvoices : [],
         recurringBills: Array.isArray(d.recurringBills) ? d.recurringBills : [],
+        filings: normalizeFilings(d.filings),
         projects: Array.isArray(d.projects) ? d.projects : INITIAL_PROJECTS,
         reconciliationRules: Array.isArray(d.reconciliationRules) ? d.reconciliationRules : INITIAL_RECONCILIATION_RULES,
       });
