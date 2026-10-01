@@ -1,6 +1,8 @@
 FROM node:22-slim AS builder
 WORKDIR /app
 ENV CI=true NEXT_TELEMETRY_DISABLED=1
+# Build-time placeholder only (next build imports every route; the pool connects lazily). Not in the runtime stage.
+ENV DATABASE_URL=mysql://build:build@127.0.0.1:3306/build
 RUN corepack enable && corepack prepare pnpm@10.33.4 --activate
 COPY . .
 RUN pnpm install --frozen-lockfile && pnpm run build && (test -d public || mkdir public)
