@@ -1,5 +1,5 @@
 import 'server-only';
-import nodemailer from 'nodemailer';
+import nodemailer, { type Transporter } from 'nodemailer';
 import { getApiKey } from '@/lib/borga/secrets';
 
 // Reusable SMTP mailer. Configure via env or the secrets store:
@@ -14,9 +14,9 @@ export async function isEmailConfigured(): Promise<boolean> {
   return !!host && !!from;
 }
 
-let cached: { sig: string; transport: nodemailer.Transporter } | null = null;
+let cached: { sig: string; transport: Transporter } | null = null;
 
-async function getTransport(): Promise<nodemailer.Transporter> {
+async function getTransport(): Promise<Transporter> {
   const host = await getApiKey('SMTP_HOST');
   const port = Number(await getApiKey('SMTP_PORT')) || 587;
   const secure = (await getApiKey('SMTP_SECURE')) === 'true' || port === 465;

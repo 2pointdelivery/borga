@@ -77,6 +77,17 @@ test('forged, tampered and expired session cookies are rejected', async () => {
   }
 });
 
+test('rotating a spoofed X-Forwarded-For value does not escape the sign-in limit', async () => {
+  // Same real peer (the right-most value, set by the proxy); the client varies the part it controls.
+  const codes: number[] = [];
+  for (let i = 0; i < 12; i++) {
+    codes.push((await proxy(req('/api/auth/login', { method: 'POST', ip: `10.${i}.${i}.${i}, 203.0.113.99` }))).status);
+  }
+  assert.deepEqual(codes.slice(10), [429, 429]);
+  // a different real peer is a different bucket
+  assert.notEqual((await proxy(req('/api/auth/login', { method: 'POST', ip: '203.0.113.100' }))).status, 429);
+});
+
 test('/app pages redirect to login without a session', async () => {
   const r = await proxy(req('/app/finance'));
   assert.equal(r.status, 307);

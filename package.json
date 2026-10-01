@@ -13,9 +13,10 @@
     "dev": "next dev -p 13000",
     "build": "pnpm check:server-boundaries && next build",
     "start": "next start -p 13000",
-    "test": "node --import tsx --test lib/request.test.ts lib/tickets.test.ts lib/features.test.ts lib/phase0.test.ts lib/recurring.test.ts lib/supermemory.test.ts lib/services.test.ts lib/crm.test.ts lib/email.test.ts lib/boot.test.ts lib/ssrf.test.ts lib/signup.test.ts lib/models.test.ts lib/proxy.test.ts lib/seeds.test.ts lib/save-queue.test.ts scripts/migrate-core.test.mjs scripts/check-server-boundaries.test.mjs",
+    "test": "node --import tsx --test lib/request.test.ts lib/tickets.test.ts lib/features.test.ts lib/phase0.test.ts lib/recurring.test.ts lib/supermemory.test.ts lib/services.test.ts lib/crm.test.ts lib/email.test.ts lib/boot.test.ts lib/ssrf.test.ts lib/signup.test.ts lib/models.test.ts lib/proxy.test.ts lib/seeds.test.ts lib/save-queue.test.ts lib/loginsec.test.ts scripts/migrate-core.test.mjs scripts/check-server-boundaries.test.mjs",
     "test:tenancy": "node --test scripts/tenancy.test.mjs",
     "test:concurrency": "node --test scripts/concurrency.test.mjs",
+    "test:loginsec": "node --test scripts/loginsec.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -45,8 +46,8 @@
     "lucide-react": "^0.564.0",
     "mailparser": "^3.9.32",
     "mysql2": "^3.24.2",
-    "next": "^16.2.12",
-    "nodemailer": "^9.0.5",
+    "next": "^16.3.8",
+    "nodemailer": "^10.0.13",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "2.15.0",
@@ -109,6 +110,23 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    }
+  },
+  "pnpm": {
+    "overrides": {
+      "browserslist@<4.28.7": "^4.28.7",
+      "baseline-browser-mapping@<2.11.0": "^2.11.0",
+      "@babel/core@<7.29.6": "^7.29.6",
+      "flatted@<3.4.2": "^3.4.2",
+      "picomatch@<2.3.2": "^2.3.2",
+      "picomatch@>=4.0.0 <4.0.4": "^4.0.4",
+      "form-data@>=4.0.0 <4.0.6": "^4.0.6",
+      "brace-expansion@<1.1.21": "^1.1.21",
+      "brace-expansion@>=2.0.0 <2.1.7": "^2.1.7",
+      "brace-expansion@>=4.0.0 <5.0.12": "^5.0.12",
+      "js-yaml@>=4.0.0 <4.3.2": "^4.3.2",
+      "undici@>=7.0.0 <7.29.1": "^7.29.1",
+      "@humanfs/node@<0.16.8": "^0.16.8"
     }
   }
 }

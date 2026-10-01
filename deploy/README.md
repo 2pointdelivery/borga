@@ -70,3 +70,7 @@ Do these in order on the VM and stop at the first failure. Each line says what a
 The schema lives only in the files in `drizzle/`. A one-shot `migrate` service applies pending migrations on every `docker compose up`, before the app starts, and the app does not start if it fails (`docker compose logs migrate` says why). `./update.sh` takes a backup first, so a failed migration can be undone by restoring it. To preview or run by hand: `./migrate.sh --dry-run`, `./migrate.sh`.
 
 The migration that makes `borga_users.email` unique refuses to run while two accounts share an email in any letter case, and lists them. Merge or delete the extras, then run it again; nothing is changed until then.
+
+## Client addresses and rate limits
+
+The app rate-limits sign-in and the API by client address. It reads that from `X-Forwarded-For` (right-most value) and `deploy/Caddyfile` overwrites the header with the real peer, so clients cannot choose their own address. If you put another proxy or CDN in front of Caddy, the address seen will be that proxy's, so every visitor would share limits: tell me and the trusted-hop handling needs extending first.

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { isValidUserId } from '@/lib/borga/keys';
+import { clientIp } from '@/lib/auth/client-ip';
 
 function reqToken(req: NextRequest): string | undefined {
   const c = req.cookies.get(sessionCookieName());
@@ -40,10 +41,9 @@ function sweepExpired(now: number): void {
 }
 
 function rateLimited(req: NextRequest, max: number = MAX_REQUESTS): boolean {
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
+  // The right-most forwarded value, which the client cannot choose (the left-most was client-controlled: rotating it gave
+  // unlimited fresh buckets). See lib/auth/client-ip.ts.
+  const ip = clientIp(req.headers);
   const bucket = req.nextUrl.pathname.split('/').slice(0, 4).join('/');
   const key = `${ip}:${bucket}`;
   const now = Date.now();
