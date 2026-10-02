@@ -334,7 +334,7 @@ async function sendToRequester(
   auto: boolean,
 ): Promise<{ messageId?: string; delivery: 'sent' | 'failed' | 'not-configured' }> {
   if (!t.requesterEmail) return { delivery: 'failed' };
-  if (!(await isEmailConfigured())) return { delivery: 'not-configured' };
+  if (!(await isEmailConfigured({ userId: u, ws }))) return { delivery: 'not-configured' };
   const refs = t.messageIds.slice(-20);
   const r = await sendThreadedEmail({
     to: t.requesterEmail,
@@ -346,7 +346,7 @@ async function sendToRequester(
     inReplyTo: refs[refs.length - 1],
     references: refs,
     headers: auto ? { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All' } : undefined,
-  });
+  }, { userId: u, ws });
   if (!r.ok) return { delivery: 'failed' };
   if (r.messageId) {
     t.messageIds.push(r.messageId);
@@ -500,7 +500,7 @@ async function routeMail(u: string, ws: string, mail: InboundEmail, settings: St
     { subject: normalizeSubject(mail.subject).slice(0, 200), description: text, requesterEmail: fromEmail, requesterName: name },
     { source: 'email', actor: name || fromEmail, messageId },
   );
-  if (settings.mailbox.autoAck && (await isEmailConfigured())) {
+  if (settings.mailbox.autoAck && (await isEmailConfigured({ userId: u, ws }))) {
     const fresh = (await getTicket(u, ws, ticket.id)) ?? ticket;
     const sent = await sendToRequester(
       u,
@@ -646,14 +646,14 @@ export async function sweepSla(u: string, ws: string): Promise<{ checked: number
     const existing = (await getBorgaState<ProactiveNotice[]>(key)) ?? [];
     await setBorgaState(key, [...notices, ...existing].slice(0, 100));
   }
-  if (emails.length && settings.escalationEmail && (await isEmailConfigured())) {
+  if (emails.length && settings.escalationEmail && (await isEmailConfigured({ userId: u, ws }))) {
     await sendThreadedEmail({
       to: settings.escalationEmail,
       subject: `[SLA] ${emails.length} breach${emails.length === 1 ? '' : 'es'} need attention`,
       text: emails.join('\n'),
       from: fromHeader(settings),
       headers: { 'Auto-Submitted': 'auto-generated' },
-    });
+    }, { userId: u, ws });
   }
   return out;
 }

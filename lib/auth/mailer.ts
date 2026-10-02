@@ -1,6 +1,9 @@
 import 'server-only';
 import nodemailer, { type Transporter } from 'nodemailer';
 import { getApiKey } from '@/lib/borga/secrets';
+import { workspaceSmtp } from '@/lib/borga/smtp-server';
+import { makeTransport } from '@/lib/borga/smtp-transport';
+import { fromHeader } from '@/lib/borga/smtp-core';
 
 // Reusable SMTP mailer. Configure via env or the secrets store:
 //   SMTP_HOST, SMTP_PORT (default 587), SMTP_USER, SMTP_PASS,
@@ -8,7 +11,14 @@ import { getApiKey } from '@/lib/borga/secrets';
 // When unconfigured, `isEmailConfigured()` is false and callers can fall back
 // to a dev link (see /api/auth/forgot).
 
-export async function isEmailConfigured(): Promise<boolean> {
+/** Which company a mail is for. With it, the company's own SMTP server is used when it has set one. */
+export interface MailContext {
+  userId: string;
+  ws: string;
+}
+
+export async function isEmailConfigured(ctx?: MailContext): Promise<boolean> {
+  if (ctx && (await workspaceSmtp(ctx.userId, ctx.ws))) return true;
   const host = await getApiKey('SMTP_HOST');
   const from = await getApiKey('EMAIL_FROM');
   return !!host && !!from;
@@ -47,11 +57,15 @@ export interface ThreadedMail {
 }
 
 /** Sends with threading headers and returns the generated Message-ID so replies can be matched back. */
-export async function sendThreadedEmail(opts: ThreadedMail): Promise<{ ok: boolean; messageId?: string }> {
-  if (!(await isEmailConfigured())) return { ok: false };
+export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): Promise<{ ok: boolean; messageId?: string }> {
+  const own = ctx ? await workspaceSmtp(ctx.userId, ctx.ws) : null;
+  if (!own && !(await isEmailConfigured())) return { ok: false };
   try {
-    const from = opts.from || (await getApiKey('EMAIL_FROM'));
-    const info = await (await getTransport()).sendMail({
+    // the company's own server only accepts its own address as the sender: keep a display name if the caller gave one
+    const nameOf = (h?: string) => /^\s*"?([^"<]*?)"?\s*<[^>]+>\s*$/.exec(h ?? '')?.[1]?.trim() ?? '';
+    const from = own ? fromHeader({ fromAddress: own.fromAddress, fromName: nameOf(opts.from) || own.fromName }) : opts.from || (await getApiKey('EMAIL_FROM'));
+    const transport = own ? await makeTransport(own) : await getTransport();
+    const info = await transport.sendMail({
       from,
       to: opts.to,
       replyTo: opts.replyTo,
@@ -62,6 +76,7 @@ export async function sendThreadedEmail(opts: ThreadedMail): Promise<{ ok: boole
       references: opts.references,
       headers: opts.headers,
     });
+    if (own) transport.close();
     return { ok: true, messageId: info.messageId };
   } catch (e) {
     console.error('[mailer] threaded send failed:', e);

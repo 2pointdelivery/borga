@@ -132,7 +132,7 @@ async function deliver(
   if (!settings.enabled && !opts.ignoreMaster) return { sent: 0, failed: 0, skipped: 'off' };
   const recipients = opts.recipients ?? settings.recipients;
   if (!recipients.length) return { sent: 0, failed: 0, skipped: 'no-recipients' };
-  if (!(await isEmailConfigured())) return { sent: 0, failed: 0, skipped: 'no-smtp' };
+  if (!(await isEmailConfigured({ userId: u, ws }))) return { sent: 0, failed: 0, skipped: 'no-smtp' };
 
   const hourAgo = Date.now() - 3_600_000;
   const recent = (await readMailLog(u, ws)).filter((e) => e.ok && Date.parse(e.at) > hourAgo).length;
@@ -166,7 +166,7 @@ async function deliver(
         'X-Auto-Response-Suppress': 'All',
         ...(unsubscribeUrl ? { 'List-Unsubscribe': `<${unsubscribeUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } : {}),
       },
-    });
+    }, { userId: u, ws });
     if (r.ok) sent++;
     else failed++;
   }

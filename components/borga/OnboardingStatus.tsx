@@ -5,7 +5,7 @@ import { Sparkles, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useBorga } from '@/lib/borga/store';
-import { onboardingProgress } from '@/lib/borga/data';
+import { onboardingProgress, normalizeOnboarding, pendingOptionalSteps } from '@/lib/borga/data';
 
 export function OnboardingStatus() {
   const { activeWorkspace } = useBorga();
@@ -14,7 +14,8 @@ export function OnboardingStatus() {
   if (!ob || ob.completed) return null;
 
   const { done, total, pct } = onboardingProgress(ob);
-  const pending = ob.steps.filter((s) => !s.completed);
+  const pending = normalizeOnboarding(ob).steps.filter((s) => !s.completed && !s.optional);
+  const optionalLeft = pendingOptionalSteps(ob).length;
 
   return (
     <div className="border-b border-primary/20 bg-primary/5 px-4 py-3 lg:px-8">
@@ -44,6 +45,7 @@ export function OnboardingStatus() {
           {pending.length > 3 && (
             <span className="text-xs text-muted-foreground">+{pending.length - 3} more</span>
           )}
+          {optionalLeft > 0 && <span className="text-xs text-muted-foreground">{optionalLeft} optional</span>}
           <Link href="/app/onboarding">
             <Button size="sm" className="gap-1.5">
               <CheckCircle2 className="h-3.5 w-3.5" /> Resume onboarding

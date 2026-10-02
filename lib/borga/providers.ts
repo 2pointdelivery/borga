@@ -3,7 +3,7 @@
  * (bring-your-own app/token). Shared by client (forms) and server (validation).
  */
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge';
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp';
 
 export interface FieldDef {
   key: string;
@@ -147,6 +147,27 @@ export const PROVIDERS: ProviderDef[] = [
       'Enable "Supermemory" under Settings → Features, then choose which data sources may be sent (Knowledge Base → Supermemory).',
     ],
     docsUrl: 'https://supermemory.ai/docs',
+    testable: true,
+  },
+  {
+    id: 'smtp',
+    label: 'Email (your own SMTP server)',
+    description: "Send this company's mail (ticket replies, update emails) from its own address through its own mail server, instead of the shared sender. Optional: without it, mail goes out from the deployment's shared sender if there is one.",
+    fields: [
+      { key: 'host', label: 'SMTP server', secret: false, required: true, placeholder: 'smtp.gmail.com', hint: 'A host name, not an IP address' },
+      { key: 'port', label: 'Port', secret: false, required: false, placeholder: '587', hint: '587 (STARTTLS) is the usual one; 465 is always encrypted. Allowed: 25, 465, 587, 2525.', pattern: '^\\d{2,5}' + '$' },
+      { key: 'secure', label: 'Encrypted from the start', secret: false, required: false, placeholder: 'no', hint: 'yes for port 465, no for 587. The connection is always encrypted either way.' },
+      { key: 'user', label: 'User name', secret: false, required: false, placeholder: 'you@yourcompany.com' },
+      { key: 'password', label: 'Password or app password', secret: true, required: false, hint: 'Gmail and Microsoft need an app password. Stored encrypted; never shown again.' },
+      { key: 'fromAddress', label: 'Send from', secret: false, required: true, placeholder: 'billing@yourcompany.com', hint: 'An address your mail provider lets this account send as' },
+      { key: 'fromName', label: 'Sender name', secret: false, required: false, placeholder: 'Your Company' },
+    ],
+    steps: [
+      'Ask your mail provider (Google Workspace, Microsoft 365, Zoho, your host) for its SMTP server name and port, and create an app password if it requires one.',
+      'Enter them here with the address mail should come from, then press Test connection.',
+      'Press Send me a test email to see it arrive in your own inbox.',
+    ],
+    docsUrl: '',
     testable: true,
   },
   {

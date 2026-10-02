@@ -2125,7 +2125,9 @@ export const CURRENCY_SYMBOL: Record<string, string> = new Proxy({} as Record<st
 // ---------------------------------------------------------------------------
 
 export type OnboardingStepId =
-  | 'profile' | 'industry' | 'financials' | 'team' | 'knowledge' | 'valuation';
+  | 'profile' | 'industry' | 'financials' | 'team' | 'knowledge' | 'valuation'
+  // optional steps: they never hold up finishing the setup
+  | 'website' | 'ai' | 'email' | 'voice';
 
 export interface OnboardingStep {
   id: OnboardingStepId;
@@ -2133,6 +2135,10 @@ export interface OnboardingStep {
   description: string;
   href: string;
   completed: boolean;
+  /** An optional step does not count towards finishing the setup. */
+  optional?: boolean;
+  /** The user chose to skip it for now. */
+  skipped?: boolean;
 }
 
 export interface WorkspaceOnboarding {
@@ -2149,7 +2155,22 @@ export const ONBOARDING_STEP_DEFS: Omit<OnboardingStep, 'completed'>[] = [
   { id: 'team', title: 'Team', description: 'Add employees and org structure.', href: '/app/hr' },
   { id: 'knowledge', title: 'Knowledge base', description: 'Answer key questions so agents have context.', href: '/app/company/knowledge' },
   { id: 'valuation', title: 'Valuation', description: 'Review your derived valuation model.', href: '/app/company/valuation' },
+  { id: 'website', title: 'Read your website', description: 'Let Borga pull what it can from your website into the knowledge base.', href: '/app/company/knowledge', optional: true },
+  { id: 'ai', title: 'AI model', description: 'Choose the model your agents think with.', href: '/app/integrations', optional: true },
+  { id: 'email', title: 'Email (SMTP)', description: 'Send invoices, replies and updates from your own address.', href: '/app/integrations', optional: true },
+  { id: 'voice', title: 'Voice', description: 'Turn on the voice assistant and pick how it sounds.', href: '/app/settings', optional: true },
 ];
+
+/**
+ * An onboarding record saved before the optional steps existed has no entry for them. Fill in whatever is missing (as not done) so
+ * the screens can always find every step, and keep what the company already did.
+ */
+export function normalizeOnboarding(o?: WorkspaceOnboarding): WorkspaceOnboarding {
+  const base = o ?? makeOnboarding();
+  const known = new Map(base.steps.map((s) => [s.id, s]));
+  const steps = ONBOARDING_STEP_DEFS.map((d) => ({ ...d, ...known.get(d.id), optional: d.optional, completed: known.get(d.id)?.completed ?? false }));
+  return { ...base, steps };
+}
 
 export function makeOnboarding(): WorkspaceOnboarding {
   return {
@@ -2160,11 +2181,17 @@ export function makeOnboarding(): WorkspaceOnboarding {
   };
 }
 
+/** Progress counts the required steps only: an optional step can be done or skipped without holding the setup up. */
 export function onboardingProgress(o?: WorkspaceOnboarding): { done: number; total: number; pct: number; complete: boolean } {
-  const steps = o?.steps ?? [];
+  const steps = (o?.steps ?? []).filter((s) => !s.optional && !ONBOARDING_STEP_DEFS.find((d) => d.id === s.id)?.optional);
   const done = steps.filter((s) => s.completed).length;
-  const total = steps.length || ONBOARDING_STEP_DEFS.length;
+  const total = steps.length || ONBOARDING_STEP_DEFS.filter((d) => !d.optional).length;
   return { done, total, pct: total ? Math.round((done / total) * 100) : 0, complete: !!o?.completed };
+}
+
+/** Optional steps the company has neither done nor skipped, for a gentle reminder. */
+export function pendingOptionalSteps(o?: WorkspaceOnboarding): OnboardingStep[] {
+  return normalizeOnboarding(o).steps.filter((s) => s.optional && !s.completed && !s.skipped);
 }
 
 export interface Workspace {

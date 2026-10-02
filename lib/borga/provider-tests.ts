@@ -1,6 +1,7 @@
 import type { ProviderId } from './providers';
 import { smBase } from './supermemory-core';
 import { createSaltEdgeClient, SaltEdgeError } from './saltedge';
+import { parseSmtp } from './smtp-core';
 
 /**
  * Live credential checks. Pure (fetch is injected) so they are unit-tested with
@@ -118,6 +119,15 @@ async function testSupermemory(v: Record<string, string>, f: Fetch): Promise<Tes
   return { ok: true, message: 'Connected to Supermemory.' };
 }
 
+async function testSmtp(v: Record<string, string>): Promise<TestResult> {
+  const r = parseSmtp(v);
+  if (!r.ok) return { ok: false, message: r.error };
+  // loaded here, not at the top: the transport is server-only and this module is also imported by tests
+  const { verifySmtp } = await import('./smtp-transport');
+  const c = await verifySmtp(r.settings);
+  return { ok: c.ok, message: c.message, details: c.ok ? ['Nothing was sent. Press Send me a test email to see a message arrive.'] : undefined };
+}
+
 async function testSaltEdge(v: Record<string, string>, f: Fetch): Promise<TestResult> {
   const pem = (process.env.SALTEDGE_PRIVATE_KEY ?? '').replace(/\\n/g, '\n') || undefined;
   const client = createSaltEdgeClient({ appId: v.appId, secret: v.secret, privateKeyPem: pem }, { fetch: f, timeoutMs: TIMEOUT_MS });
@@ -142,6 +152,7 @@ export async function runProviderTest(id: ProviderId, values: Record<string, str
       case 'linkedin': return await testLinkedIn(values, f);
       case 'supermemory': return await testSupermemory(values, f);
       case 'saltedge': return await testSaltEdge(values, f);
+      case 'smtp': return await testSmtp(values);
       case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
       case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
     }
