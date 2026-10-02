@@ -74,3 +74,14 @@ The migration that makes `borga_users.email` unique refuses to run while two acc
 ## Client addresses and rate limits
 
 The app rate-limits sign-in and the API by client address. It reads that from `X-Forwarded-For` (right-most value) and `deploy/Caddyfile` overwrites the header with the real peer, so clients cannot choose their own address. If you put another proxy or CDN in front of Caddy, the address seen will be that proxy's, so every visitor would share limits: tell me and the trusted-hop handling needs extending first.
+
+## Billing (Stripe) and bank feeds (Salt Edge)
+
+**Billing** is $2 per user per month for every workspace, paid on Stripe's hosted Checkout page before the company is set up. It is off until you set `BILLING_MODE=enforce`.
+1. In Stripe, create the webhook endpoint `https://YOUR-DOMAIN/api/borga/billing/webhook` with the events listed in `.env`, and copy its signing secret.
+2. Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `BILLING_STARTS_ON`, then `BILLING_MODE=enforce`. The server refuses to start in production if any is missing or malformed.
+3. Companies that existed before `BILLING_STARTS_ON` keep working for `BILLING_GRACE_DAYS` and see a banner; new ones are locked until paid. A failed payment keeps working for 7 days, then locks. Administrators (`BORGA_OPERATOR_EMAILS`) are never charged, and a single workspace can be exempted with `POST /api/borga/operator/billing {userId, ws, comped: true}`.
+4. Users are the owner plus each accepted Team Invite; the Stripe quantity follows the team automatically.
+Taxes (VAT, sales tax) are not handled by this app: configure them in Stripe if you must charge them. Try it without Stripe using `node scripts/fake-stripe.mjs` (see the file header; development only).
+
+**Bank feeds** use Salt Edge (API v6). Either each company enters its App ID and Secret under Connections, or you set `SALTEDGE_APP_ID` and `SALTEDGE_SECRET` for everyone. A Live client also needs `SALTEDGE_PRIVATE_KEY`. Try it without Salt Edge using `node scripts/fake-saltedge.mjs` (development only).

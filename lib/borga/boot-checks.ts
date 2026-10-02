@@ -52,5 +52,30 @@ export function checkBootEnv(env: Env): BootReport {
   if (!get('APP_URL')) warnings.push('APP_URL is not set: links in emails will be missing.');
   if (get('BORGA_ADMIN_TOKEN') && weak(get('BORGA_ADMIN_TOKEN'))) errors.push('BORGA_ADMIN_TOKEN looks like a placeholder.');
 
+  // Billing: $2 per user per month through Stripe. Off unless BILLING_MODE=enforce; switching it on without Stripe would lock everyone out.
+  const billing = get('BILLING_MODE').toLowerCase();
+  if (billing && !['off', 'enforce'].includes(billing)) errors.push('BILLING_MODE must be off or enforce.');
+  if (billing === 'enforce') {
+    const sk = get('STRIPE_SECRET_KEY');
+    if (!sk) errors.push('BILLING_MODE=enforce needs STRIPE_SECRET_KEY: without it nobody can pay and every new workspace is locked.');
+    else if (!/^(sk|rk)_(live|test)_[A-Za-z0-9]{10,}$/.test(sk)) errors.push('STRIPE_SECRET_KEY does not look like a Stripe secret key (sk_live_… or sk_test_…).');
+    else if (sk.startsWith('sk_test_')) warnings.push('STRIPE_SECRET_KEY is a TEST key: payments are not real.');
+    const wh = get('STRIPE_WEBHOOK_SECRET');
+    if (!wh) errors.push('BILLING_MODE=enforce needs STRIPE_WEBHOOK_SECRET (whsec_…): without it paid workspaces are not recognised until the user returns to the app.');
+    else if (!/^whsec_\S{16,}$/.test(wh)) errors.push('STRIPE_WEBHOOK_SECRET does not look like a Stripe webhook signing secret (whsec_…).');
+    if (get('BILLING_STARTS_ON') && !/^\d{4}-\d{2}-\d{2}$/.test(get('BILLING_STARTS_ON'))) errors.push('BILLING_STARTS_ON must be a date like 2026-12-01.');
+    if (!get('BILLING_STARTS_ON')) warnings.push('BILLING_STARTS_ON is not set: companies that already exist get their grace period counted from the first time billing is seen.');
+  } else if (get('STRIPE_SECRET_KEY')) {
+    warnings.push('STRIPE_SECRET_KEY is set but BILLING_MODE is not enforce: workspaces are not charged.');
+  }
+
+  // Salt Edge bank feeds.
+  const seId = get('SALTEDGE_APP_ID');
+  const seSecret = get('SALTEDGE_SECRET');
+  if (!!seId !== !!seSecret) errors.push('SALTEDGE_APP_ID and SALTEDGE_SECRET must both be set, or neither.');
+  if (get('SALTEDGE_PRIVATE_KEY') && !/BEGIN [A-Z ]*PRIVATE KEY/.test(get('SALTEDGE_PRIVATE_KEY').replace(/\\n/g, '\n'))) errors.push('SALTEDGE_PRIVATE_KEY must be a PEM private key (with \\n for line breaks).');
+  if (get('SALTEDGE_BASE_URL')) warnings.push('SALTEDGE_BASE_URL is ignored in production (it is for the development stand-in server only).');
+  if (get('SALTEDGE_FAKE_PROVIDERS').toLowerCase() === 'true') warnings.push('SALTEDGE_FAKE_PROVIDERS=true: Salt Edge test banks are offered to users.');
+
   return { errors, warnings };
 }

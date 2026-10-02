@@ -272,6 +272,7 @@ export function NewWorkspaceDialog({
       color,
       currency: form.currency,
       createdAt: new Date().toLocaleDateString([], { month: 'short', year: 'numeric' }),
+      createdAtIso: new Date().toISOString(),
       legalName: form.legalName.trim() || undefined,
       tradingName: form.tradingName.trim() || undefined,
       businessNumber: form.businessNumber.trim() || undefined,

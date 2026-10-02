@@ -2176,6 +2176,8 @@ export interface Workspace {
   /** ISO 4217 code, for example "USD", "GHS", "NGN" (see lib/borga/currencies.ts). */
   currency: string;
   createdAt: string;
+  /** When the company was created, as a full timestamp (createdAt is only a month label). Billing uses it to tell new companies from ones that predate it. */
+  createdAtIso?: string;
 
   // ── Full company profile (Settings → Company information) ────────────────
   legalName?: string;
@@ -3078,7 +3080,7 @@ export const DEFAULT_TAX_PROFILE_ID = 'tax-default';
 // Banking — connected accounts, imported statements and reconciliation
 // ---------------------------------------------------------------------------
 
-export type BankSource = 'manual' | 'csv' | 'composio-plaid';
+export type BankSource = 'manual' | 'csv' | 'composio-plaid' | 'saltedge';
 
 /** Account kind: the two classic bank account types plus every payment method (cash, mobile wallet, PayPal, Stripe, ...). */
 export type BankAccountKind = 'checking' | 'savings' | PaymentMethod;
@@ -3101,6 +3103,10 @@ export interface BankAccount {
   balance: number;
   source: BankSource;
   status: 'connected' | 'disconnected';
+  /** The bank's own id for the account (Salt Edge), so a re-import updates it instead of adding a copy. */
+  externalId?: string;
+  /** The bank connection this account is fed by. */
+  feedConnectionId?: string;
 }
 
 export interface BankTxn {
@@ -3114,6 +3120,8 @@ export interface BankTxn {
   status: 'unmatched' | 'matched' | 'excluded';
   matchedRef?: string; // ledger label or journal memo it reconciles against
   accountId?: string; // GlAccount.id — the GL account this reconciled line posts against
+  /** The bank's own id for the transaction: lines already imported are recognised by it and never added twice. */
+  externalId?: string;
 }
 
 /**

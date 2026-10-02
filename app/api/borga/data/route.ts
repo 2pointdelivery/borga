@@ -110,6 +110,7 @@ import {
 import { getBorgaRowsByPrefixOrThrow, setBorgaState, setBorgaStateIfVersion } from '@/lib/borga/persistence';
 import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
 import { EMPTY_FILINGS, type FilingsState } from '@/lib/borga/filing-catalog';
+import { billingInfo, paymentRequired } from '@/lib/borga/billing-server';
 import { EMPTY_FIXED_ASSETS, type FixedAssetsState } from '@/lib/borga/fixed-asset-journals';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
@@ -247,10 +248,14 @@ export async function GET(req: NextRequest) {
 
   const get = <T>(entity: string): T | null => rawGet<T>(userWsKey(userId, ws, entity));
 
+  // what this company is charged and whether it may be used: the dashboard shows the paywall from this
+  const billing = await billingInfo(userId, ws, { sync: false }).catch(() => null);
+
   return NextResponse.json({
     workspace: ws,
     workspaces,
     versions,
+    billing,
     agents: get<Agent[]>('agents') ?? DEFAULT_STATE.agents,
     goals: get<Goal[]>('goals') ?? DEFAULT_STATE.goals,
     approvals: get<Approval[]>('approvals') ?? DEFAULT_STATE.approvals,
@@ -351,6 +356,9 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'Workspace id required for this entity' }, { status: 400 });
       }
       key = userWsKey(userId, body.ws as string, entity);
+      // A workspace that has not paid cannot be set up or used: nothing of its own is saved (see lib/borga/billing.ts).
+      const unpaid = await paymentRequired(userId, body.ws as string);
+      if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
     }
 
     // Optimistic save: the client says which version of this entity it last read. If the stored version has moved on (another

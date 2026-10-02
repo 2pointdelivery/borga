@@ -76,6 +76,7 @@ export async function POST(req: Request) {
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       currency: 'USD',
       createdAt: new Date().toLocaleDateString([], { month: 'short', year: 'numeric' }),
+      createdAtIso: new Date().toISOString(),
       onboarding: makeOnboarding(),
     };
     await setBorgaState(userWorkspacesKey(user.id), [ws]);

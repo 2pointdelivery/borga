@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { paymentRequired } from '@/lib/borga/billing-server';
 import { getBorgaState, scopedKey } from '@/lib/borga/persistence';
 import { resolveProviderConfig, resolveApiKey } from '@/lib/borga/llm-providers';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
@@ -67,7 +68,11 @@ export async function POST(req: NextRequest) {
   const wsParam = body.ws;
   const ws = typeof wsParam === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(wsParam) ? wsParam : null;
   const companyName = (body.companyName ?? 'the company').slice(0, 80);
-  
+  if (userId && ws) {
+    const unpaid = await paymentRequired(userId, ws);
+    if (unpaid) return NextResponse.json({ reply: unpaid.error, billing: unpaid.billing }, { status: 402 });
+  }
+
   const rawModel = body.model ?? 'demo';
   let providerId = body.providerId ?? 'llm-demo';
   let model = rawModel;

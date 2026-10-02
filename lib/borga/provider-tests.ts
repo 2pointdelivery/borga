@@ -1,5 +1,6 @@
 import type { ProviderId } from './providers';
 import { smBase } from './supermemory-core';
+import { createSaltEdgeClient, SaltEdgeError } from './saltedge';
 
 /**
  * Live credential checks. Pure (fetch is injected) so they are unit-tested with
@@ -117,6 +118,21 @@ async function testSupermemory(v: Record<string, string>, f: Fetch): Promise<Tes
   return { ok: true, message: 'Connected to Supermemory.' };
 }
 
+async function testSaltEdge(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const pem = (process.env.SALTEDGE_PRIVATE_KEY ?? '').replace(/\\n/g, '\n') || undefined;
+  const client = createSaltEdgeClient({ appId: v.appId, secret: v.secret, privateKeyPem: pem }, { fetch: f, timeoutMs: TIMEOUT_MS });
+  try {
+    await client.request('GET', '/customers', { query: { per_page: 1 } });
+  } catch (e) {
+    if (e instanceof SaltEdgeError) {
+      if (e.status === 401 || e.status === 403 || /ApiKey|Unauthor|Signature/i.test(e.errorClass)) return { ok: false, message: `Salt Edge rejected the credentials: ${e.message}`, details: pem ? [] : ['A Live client also needs SALTEDGE_PRIVATE_KEY set on the server for request signing.'] };
+      return { ok: false, message: `Salt Edge returned: ${e.message}` };
+    }
+    throw e;
+  }
+  return { ok: true, message: 'Connected to Salt Edge.', details: [pem ? 'Requests are signed (Live client).' : 'Requests are not signed: fine for a test client.'] };
+}
+
 export async function runProviderTest(id: ProviderId, values: Record<string, string>, f: Fetch = fetch): Promise<TestResult> {
   try {
     switch (id) {
@@ -125,6 +141,7 @@ export async function runProviderTest(id: ProviderId, values: Record<string, str
       case 'google_ads': return await testGoogleAds(values, f);
       case 'linkedin': return await testLinkedIn(values, f);
       case 'supermemory': return await testSupermemory(values, f);
+      case 'saltedge': return await testSaltEdge(values, f);
       case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
       case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
     }

@@ -123,6 +123,11 @@ export async function proxy(req: NextRequest) {
     return res;
   }
 
+  // Stripe's subscription webhook: authenticated inside the route by the signature over the raw body.
+  if (pathname === '/api/borga/billing/webhook' && req.method === 'POST') {
+    return res;
+  }
+
   // Provider webhooks (Meta, Twilio): authenticated inside the route by the provider's
   // HMAC signature against the tenant's stored credentials; rate limited above.
   if (pathname.startsWith('/api/borga/hooks/') && (req.method === 'POST' || req.method === 'GET')) {

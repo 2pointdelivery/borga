@@ -148,6 +148,9 @@ import { notifyEmail } from './email-client';
 import { mergeLoadedModels, repairCatalog } from './model-catalog';
 import { SaveQueue } from './save-queue';
 import { fmtMoneyFull } from './currencies';
+import type { BillingInfo } from './billing';
+import { mergeBankFeed, markFeedDisconnected, type MergeStats } from './bank-feed';
+import type { BankFeed } from './saltedge';
 import { EMPTY_FILINGS, normalizeFilings, type FilingProfile, type FilingRecord, type FilingsState } from './filing-catalog';
 import { EMPTY_FIXED_ASSETS, normalizeFixedAssets, planPostings, type DepreciationRun, type FixedAssetsState, type PostingPlan } from './fixed-asset-journals';
 import { ASSET_ACCOUNTS, assetPolicyFor } from './fixed-asset-standards';
@@ -401,6 +404,11 @@ interface BorgaStore {
   setUserName: (n: string) => void;
 
   synced: boolean;
+  /** What this company is charged and whether it may be used (from the server). Null until loaded, and where billing is off. */
+  billing: BillingInfo | null;
+  setBilling: (b: BillingInfo | null) => void;
+  /** The company whose data has finished loading. `synced` turns true earlier, when only the company list is in, so anything that writes to the books waits for this. */
+  loadedWorkspaceId: string | null;
   dbAvailable: boolean;
 
   // ── Multi-company workspaces ──────────────────────────────────────────────
@@ -509,6 +517,10 @@ interface BorgaStore {
   deleteBankAccount: (id: string) => void;
   bankTxns: BankTxn[];
   addBankTxns: (txns: BankTxn[]) => void;
+  /** Merges what a bank connection returned into the bank accounts and statement lines. Importing it twice changes nothing. */
+  importBankFeed: (feed: BankFeed) => MergeStats;
+  /** Marks the accounts fed by a connection as disconnected (their history stays). */
+  disconnectBankFeed: (connectionId: string) => void;
   matchBankTxn: (id: string, matchedRef: string, accountId?: string) => void;
   setBankTxnAccount: (id: string, accountId: string) => void;
   unmatchBankTxn: (id: string) => void;
@@ -921,6 +933,9 @@ function distributeWorkflowTasks(workflowName: string, agents: Agent[]): void {
 export const useBorga = create<BorgaStore>((set, get) => ({
   userName: 'Lawrence',
   synced: false,
+  billing: null,
+  setBilling: (b) => set({ billing: b }),
+  loadedWorkspaceId: null,
   dbAvailable: false,
 
   workspaces: INITIAL_WORKSPACES,
@@ -1675,6 +1690,18 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   addBankTxns: (txns) => {
     set((s) => ({ bankTxns: [...txns, ...s.bankTxns] }));
     persist('bankTxns', get().bankTxns);
+  },
+  importBankFeed: (feed) => {
+    const r = mergeBankFeed(get().bankAccounts, get().bankTxns, feed);
+    set({ bankAccounts: r.accounts, bankTxns: r.txns });
+    persist('bankAccounts', get().bankAccounts);
+    persist('bankTxns', get().bankTxns);
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'sync', message: `Bank feed from ${feed.institution}: ${r.stats.txnsAdded} new transaction${r.stats.txnsAdded === 1 ? '' : 's'}, ${r.stats.accountsAdded} new account${r.stats.accountsAdded === 1 ? '' : 's'}, ${r.stats.txnsKnown} already imported.` });
+    return r.stats;
+  },
+  disconnectBankFeed: (connectionId) => {
+    set((s) => ({ bankAccounts: markFeedDisconnected(s.bankAccounts, connectionId) }));
+    persist('bankAccounts', get().bankAccounts);
   },
   matchBankTxn: (id, matchedRef, accountId) => {
     set((s) => ({ bankTxns: s.bankTxns.map((t) => (t.id === id ? { ...t, status: 'matched', matchedRef, accountId: accountId ?? t.accountId } : t)) }));
@@ -2853,6 +2880,8 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       const agentsChanged = !!dbAgents && agents !== dbAgents;
       set({
         synced: true,
+        loadedWorkspaceId: wsId,
+        billing: (d.billing ?? null) as BillingInfo | null,
         dbAvailable,
         goals: d.goals ?? INITIAL_GOALS,
         approvals: d.approvals ?? INITIAL_APPROVALS,

@@ -1,6 +1,7 @@
 'use client';
 
 import { fmtMoney } from '@/lib/borga/currencies';
+import { BankFeedCard } from './BankFeedCard';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Landmark,
@@ -369,6 +370,8 @@ export function BankingTab() {
           <Upload className="h-4 w-4" /> Import statement
         </Button>
       </div>
+
+      <BankFeedCard />
 
       {/* Bank cards */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">

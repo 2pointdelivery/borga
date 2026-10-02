@@ -3,7 +3,7 @@
  * (bring-your-own app/token). Shared by client (forms) and server (validation).
  */
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory';
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge';
 
 export interface FieldDef {
   key: string;
@@ -147,6 +147,23 @@ export const PROVIDERS: ProviderDef[] = [
       'Enable "Supermemory" under Settings → Features, then choose which data sources may be sent (Knowledge Base → Supermemory).',
     ],
     docsUrl: 'https://supermemory.ai/docs',
+    testable: true,
+  },
+  {
+    id: 'saltedge',
+    label: 'Salt Edge (bank statements)',
+    description: "Connects the company's bank accounts and imports their transactions for reconciliation. Optional: a deployment-wide SALTEDGE_APP_ID and SALTEDGE_SECRET also work, so each company does not need its own.",
+    fields: [
+      { key: 'appId', label: 'App ID', secret: false, required: true, placeholder: 'Salt Edge App-id', pattern: '^\\S{6,64}' + '$' },
+      { key: 'secret', label: 'Secret', secret: true, required: true, hint: 'Stored encrypted; never shown again.' },
+    ],
+    steps: [
+      'Create a Salt Edge client (the test client is free) and copy its App ID and Secret from the Salt Edge dashboard.',
+      'Paste them here and press Test connection.',
+      "Press Connect a bank and sign in to the bank on Salt Edge's page. Borga never sees the bank password.",
+      'A Live client also needs request signing: set SALTEDGE_PRIVATE_KEY on the server and upload the matching public key in the Salt Edge dashboard.',
+    ],
+    docsUrl: 'https://docs.saltedge.com/v6/',
     testable: true,
   },
   {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Mic,
   X,
@@ -20,6 +20,8 @@ import { deriveBusinessInsights, insightsToMemories, syncInsightsToKnowledgeBase
 import { isPageId, type PageId, type NavTarget } from './nav';
 import { useVisibleNav } from './use-visible-nav';
 import { useCrmPull } from './use-crm-pull';
+import { useSaltEdgeReturn } from './use-saltedge-return';
+import { BillingBanner, BillingPaywall, useBillingReturn } from './BillingGate';
 import { notifyEmail } from '@/lib/borga/email-client';
 import { useFeatures } from '@/lib/borga/features-client';
 import { ThemeProvider, useTheme } from './theme-provider';
@@ -68,6 +70,11 @@ function ShellInner() {
   const crmAutoPull = settings.crmAutoPull === true;
   const pullCrm = useCrmPull();
   const navPages = useVisibleNav();
+  const billing = useBorga((s) => s.billing);
+  // back from Stripe Checkout: lift the paywall as soon as the payment is confirmed
+  useBillingReturn();
+  // back from the bank (Salt Edge): import what it returned and show Banking
+  useSaltEdgeReturn(useCallback(() => setRoute({ page: 'finance', tab: 'banking' }), []));
 
   // Company Engine: keep customers and deals in step with the company CRM while the dashboard is open.
   useEffect(() => {
@@ -363,6 +370,8 @@ function ShellInner() {
 
         <main className="flex-1 px-4 py-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
+            <BillingBanner />
+            {billing?.access === 'blocked' ? <BillingPaywall /> : (
             <PageErrorBoundary key={route.page} pageName={navPages.find((p) => p.id === route.page)?.label ?? route.page}>
               {route.page === 'overview' && <OverviewPage key={`ov-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'sales' && <SalesPage key={`sa-${route.tab ?? ''}`} initialTab={route.tab} />}
@@ -377,6 +386,7 @@ function ShellInner() {
               {route.page === 'integrations' && <IntegrationsPage key={`in-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'settings' && <SettingsTab />}
             </PageErrorBoundary>
+            )}
           </div>
         </main>
       </div>
