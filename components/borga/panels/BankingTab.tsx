@@ -2,10 +2,12 @@
 
 import { fmtMoney } from '@/lib/borga/currencies';
 import { BankFeedCard } from './BankFeedCard';
+import { PdfStatementDialog } from './PdfStatementDialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Landmark,
   Upload,
+  FileText,
   Link2,
   Unplug,
   Check,
@@ -103,7 +105,7 @@ function suggestMatch(txn: BankTxn, candidates: ReturnType<typeof buildCandidate
 
 export function BankingTab() {
   const {
-    bankAccounts, addBankAccount, updateBankAccount, deleteBankAccount,
+    bankAccounts, addBankAccount, updateBankAccount, deleteBankAccount, activeWorkspaceId,
     bankTxns, addBankTxns, matchBankTxn, setBankTxnAccount, unmatchBankTxn, excludeBankTxn, deleteBankTxn, updateBankTxn, setSettings,
     reconciliationRules, recordReconciliationMatch, deleteReconciliationRule,
     finance, journals, coa, composio, log, activeWorkspace, settings,
@@ -116,6 +118,7 @@ export function BankingTab() {
   const [addOpen, setAddOpen] = useState(false);
   const [newForm, setNewForm] = useState({ name: '', institution: '', last4: '', kind: 'checking' as BankAccount['kind'], balance: '' });
   const [importOpen, setImportOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
   const [csvText, setCsvText] = useState('');
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -366,12 +369,28 @@ export function BankingTab() {
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="Banking & reconciliation" sub="Connect accounts, import statements and reconcile against the books" />
+        <div className="flex gap-2">
+        <Button variant="outline" onClick={() => setPdfOpen(true)} disabled={bankAccounts.length === 0}>
+          <FileText className="h-4 w-4" /> Import PDF
+        </Button>
         <Button variant="outline" onClick={() => setImportOpen(true)} disabled={!activeAccount}>
           <Upload className="h-4 w-4" /> Import statement
         </Button>
+        </div>
       </div>
 
       <BankFeedCard />
+      {pdfOpen && (
+        <PdfStatementDialog
+          ws={activeWorkspaceId} accounts={bankAccounts} activeId={activeAccount?.id} existing={bankTxns} currency={currency}
+          onClose={() => setPdfOpen(false)}
+          onImport={(txns, name) => {
+            addBankTxns(txns);
+            log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `Imported ${txns.length} lines from a PDF statement into ${name}.` });
+            setPdfOpen(false);
+          }}
+        />
+      )}
 
       {/* Bank cards */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
