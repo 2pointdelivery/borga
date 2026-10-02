@@ -258,37 +258,39 @@ export function OnboardingWizard() {
             <Sparkles className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Set up {ws.name}</h1>
-            <p className="text-xs text-muted-foreground">Five essential steps build the knowledge base your agents and valuation model use. Four optional ones (website, AI, email, voice) can be skipped and done later.</p>
+            <h1 className="text-xl font-bold tracking-tight text-foreground">Set up {ws.name}</h1>
+            <p className="mt-0.5 text-sm text-foreground/70">Five essential steps build the knowledge base your agents and valuation model use. Four optional ones (website, AI, email, voice) can be skipped and done later.</p>
           </div>
         </div>
 
-        {/* Stepper */}
-        <div className="mb-8 flex items-stretch gap-2 overflow-x-auto pb-1">
+        {/* Stepper: every step keeps its full name; they wrap into rows on narrow screens */}
+        <ol className="mb-8 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
           {ORDER.map((s, i) => {
-            const done = onboarding.steps.find((x) => x.id === s)?.completed;
+            const st = onboarding.steps.find((x) => x.id === s);
+            const done = st?.completed;
             const active = s === step;
             const Icon = STEP_META[s].icon;
             return (
-              <button
-                key={s}
-                onClick={() => setStep(s)}
-                className={`flex min-w-[2.75rem] flex-1 items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition ${
-                  active ? 'border-primary/50 bg-primary/5' : OPTIONAL.has(s) ? 'border-dashed border-border hover:bg-card' : 'border-border hover:bg-card'
-                }`}
-                title={OPTIONAL.has(s) ? `${STEP_META[s].title} (optional)` : STEP_META[s].title}
-              >
-                <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${done ? 'bg-emerald-500/15 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
-                  {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
-                </span>
-                <div className="hidden min-w-0 lg:block">
-                  <div className="truncate text-[11px] font-semibold">{STEP_META[s].title}</div>
-                  {OPTIONAL.has(s) && <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{onboarding.steps.find((x) => x.id === s)?.skipped ? 'skipped' : 'optional'}</div>}
-                </div>
-              </button>
+              <li key={s}>
+                <button
+                  onClick={() => setStep(s)}
+                  aria-current={active ? 'step' : undefined}
+                  className={`flex h-full w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition ${
+                    active ? 'border-primary/60 bg-primary/5' : OPTIONAL.has(s) ? 'border-dashed border-border hover:bg-card' : 'border-border hover:bg-card'
+                  }`}
+                >
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${done ? 'bg-emerald-500/15 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
+                    {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-medium text-muted-foreground">{i + 1}{OPTIONAL.has(s) ? ' · optional' : ''}{st?.skipped && !done ? ' · skipped' : ''}</span>
+                    <span className="block text-xs font-semibold leading-tight text-foreground">{STEP_META[s].title}</span>
+                  </span>
+                </button>
+              </li>
             );
           })}
-        </div>
+        </ol>
 
         <Card className="borga-fade-up p-6">
           <div className="mb-5 flex items-center gap-3">
