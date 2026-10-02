@@ -86,6 +86,7 @@ export const NAV_PAGES: NavPage[] = [
     tabs: [
       { id: 'ledger', label: 'Ledger' },
       { id: 'accounting', label: 'Accounting' },
+      { id: 'assets', label: 'Fixed Assets' },
       { id: 'banking', label: 'Banking' },
       { id: 'vendors', label: 'Vendors & AP' },
       { id: 'recurring-bills', label: 'Recurring Bills' },
@@ -93,6 +94,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'revenue', label: 'Revenue Tracker' },
       { id: 'reports', label: 'Reports' },
       { id: 'closures', label: 'Book Closure' },
+      { id: 'filing', label: 'Filing' },
     ],
   },
   {

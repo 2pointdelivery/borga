@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FEATURES, EXPERIMENTAL_ON_BY_DEFAULT, featureForTab, parseEnvOff, resolveFeatures } from './borga/features';
+import { FEATURES, FEATURE_GROUPS, EXPERIMENTAL_ON_BY_DEFAULT, featureForTab, parseEnvOff, resolveFeatures } from './borga/features';
 
 test('defaults follow the registry', () => {
   const { flags } = resolveFeatures(null);
@@ -32,4 +32,16 @@ test('nav lookup maps pages and tabs to features', () => {
   assert.equal(featureForTab('communications', 'calls'), 'calls');
   assert.equal(featureForTab('communications'), null);
   assert.equal(featureForTab('overview'), null);
+});
+
+test('every feature has a known group, a unique id, and newer modules are switchable', () => {
+  const ids = FEATURES.map((f) => f.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const f of FEATURES) assert.ok(FEATURE_GROUPS.includes(f.group), `${f.id} group`);
+  assert.equal(featureForTab('finance', 'assets'), 'fixedAssets');
+  assert.equal(featureForTab('finance', 'filing'), 'filings');
+  assert.equal(featureForTab('company', 'engine'), 'companyEngine');
+  const { flags } = resolveFeatures({ fixedAssets: false, filings: false, companyEngine: false, bankFeeds: false });
+  assert.deepEqual([flags.fixedAssets, flags.filings, flags.companyEngine, flags.bankFeeds], [false, false, false, false]);
+  assert.equal(resolveFeatures(null).flags.bankFeeds, true);
 });

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { isValidUserId, isValidWsId } from '@/lib/borga/keys';
+import { featureGate } from '@/lib/borga/features-server';
 import { paymentRequired } from '@/lib/borga/billing-server';
 import { completeConnect, disconnectBank, saltEdgeStatus, startConnect, syncConnection, userMessage } from '@/lib/borga/saltedge-server';
 
@@ -26,6 +27,8 @@ export async function GET(req: NextRequest) {
   if (!userId || !isValidUserId(userId)) return bad('unauthorized', 401);
   const ws = req.nextUrl.searchParams.get('ws');
   if (!isValidWsId(ws)) return bad('Workspace id required.');
+  const off = await featureGate('bankFeeds', userId, ws);
+  if (off) return off;
   return NextResponse.json({ ok: true, ...(await saltEdgeStatus(userId, ws)) });
 }
 
@@ -37,6 +40,8 @@ export async function POST(req: NextRequest) {
   try { body = (await req.json()) as Record<string, unknown>; } catch { return bad('Invalid JSON.'); }
   const ws = body.ws;
   if (!isValidWsId(ws)) return bad('Workspace id required.');
+  const off = await featureGate('bankFeeds', userId, ws);
+  if (off) return off;
   const unpaid = await paymentRequired(userId, ws);
   if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
   const currency = typeof body.currency === 'string' && /^[A-Za-z]{3}$/.test(body.currency) ? body.currency.toUpperCase() : 'USD';

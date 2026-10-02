@@ -1,6 +1,7 @@
 'use client';
 
 import { fmtMoney } from '@/lib/borga/currencies';
+import { useFeature } from '@/lib/borga/features-client';
 import { BankFeedCard } from './BankFeedCard';
 import { PdfStatementDialog } from './PdfStatementDialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -119,6 +120,7 @@ export function BankingTab() {
   const [newForm, setNewForm] = useState({ name: '', institution: '', last4: '', kind: 'checking' as BankAccount['kind'], balance: '' });
   const [importOpen, setImportOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
+  const bankFeeds = useFeature('bankFeeds');
   const [csvText, setCsvText] = useState('');
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -379,7 +381,7 @@ export function BankingTab() {
         </div>
       </div>
 
-      <BankFeedCard />
+      {bankFeeds && <BankFeedCard />}
       {pdfOpen && (
         <PdfStatementDialog
           ws={activeWorkspaceId} accounts={bankAccounts} activeId={activeAccount?.id} existing={bankTxns} currency={currency}

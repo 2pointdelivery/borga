@@ -21,12 +21,14 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
   const banking = useFeature('banking');
   const revenue = useFeature('revenueTracker');
   const closures = useFeature('bookClosure');
+  const assetsOn = useFeature('fixedAssets');
+  const filingOn = useFeature('filings');
   return (
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>
         <TabsTrigger value="ledger">Ledger</TabsTrigger>
         <TabsTrigger value="accounting">Accounting</TabsTrigger>
-        <TabsTrigger value="assets">Fixed Assets</TabsTrigger>
+        {assetsOn && <TabsTrigger value="assets">Fixed Assets</TabsTrigger>}
         {banking && <TabsTrigger value="banking">Banking</TabsTrigger>}
         <TabsTrigger value="vendors">Vendors &amp; AP</TabsTrigger>
         <TabsTrigger value="recurring-bills">Recurring Bills</TabsTrigger>
@@ -35,11 +37,11 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
         {revenue && <TabsTrigger value="revenue">Revenue Tracker</TabsTrigger>}
         <TabsTrigger value="reports">Reports</TabsTrigger>
         {closures && <TabsTrigger value="closures">Book Closure</TabsTrigger>}
-        <TabsTrigger value="filing">Filing</TabsTrigger>
+        {filingOn && <TabsTrigger value="filing">Filing</TabsTrigger>}
       </TabsList>
       <TabsContent value="ledger"><LedgerTab /></TabsContent>
       <TabsContent value="accounting"><AccountingTab /></TabsContent>
-      <TabsContent value="assets"><FixedAssetsTab /></TabsContent>
+      {assetsOn && <TabsContent value="assets"><FixedAssetsTab /></TabsContent>}
       {banking && <TabsContent value="banking"><BankingTab /></TabsContent>}
       <TabsContent value="vendors"><VendorsTab /></TabsContent>
       <TabsContent value="recurring-bills"><RecurringBillsTab /></TabsContent>
@@ -48,7 +50,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
       {revenue && <TabsContent value="revenue"><RevenueTrackerTab /></TabsContent>}
       <TabsContent value="reports"><ReportsCenter /></TabsContent>
       {closures && <TabsContent value="closures"><BookClosureTab /></TabsContent>}
-      <TabsContent value="filing"><FilingTab /></TabsContent>
+      {filingOn && <TabsContent value="filing"><FilingTab /></TabsContent>}
     </Tabs>
   );
 }
