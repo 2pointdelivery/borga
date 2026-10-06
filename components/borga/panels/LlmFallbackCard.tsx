@@ -17,13 +17,15 @@ export function LlmFallbackCard() {
   const llm = useBorga((s) => s.llm);
   const setSettings = useBorga((s) => s.setSettings);
   const [chain, setChain] = useState<Link[] | null>(null);
+  // the clock the pause countdown is read against, refreshed with every load (not read during render)
+  const [now, setNow] = useState(0);
   const enabled = settings.llmFallback !== false;
 
   const load = useCallback(() => {
     if (!ws || loaded !== ws) return;
     void fetch(`/api/borga/llm-fallback?ws=${encodeURIComponent(ws)}`, { cache: 'no-store' })
       .then((r) => r.json())
-      .then((j: { ok?: boolean; chain?: Link[] }) => setChain(j.ok ? j.chain ?? [] : []))
+      .then((j: { ok?: boolean; chain?: Link[] }) => { setNow(Date.now()); setChain(j.ok ? j.chain ?? [] : []); })
       .catch(() => setChain([]));
   }, [ws, loaded]);
 
@@ -43,7 +45,6 @@ export function LlmFallbackCard() {
     [ids[i], ids[j]] = [ids[j], ids[i]];
     setSettings({ llmFallbackOrder: ids });
   };
-  const now = Date.now();
 
   return (
     <Card className="p-4">
