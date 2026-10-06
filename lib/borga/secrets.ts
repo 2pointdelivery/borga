@@ -35,6 +35,10 @@ export const CONFIGURABLE_KEYS = [
   { envVar: 'SMTP_USER', label: 'SMTP Username', hint: 'Account / API user', kind: 'key' as const },
   { envVar: 'SMTP_PASS', label: 'SMTP Password', hint: 'App password or API key', kind: 'key' as const },
   { envVar: 'SMTP_SECURE', label: 'SMTP Secure', hint: 'Set "true" for port 465 (SSL)', kind: 'key' as const },
+  { envVar: 'MAILDOG_USER', label: 'MailDog user name', hint: 'your MailDog account user name (it is your email address); account at maildog.io', kind: 'key' as const },
+  { envVar: 'MAILDOG_PASSWORD', label: 'MailDog password', hint: 'your MailDog account password; used with mail.maildog.io on port 587', kind: 'key' as const },
+  { envVar: 'MAILDOG_PORT', label: 'MailDog port', hint: '587 (STARTTLS, default) or 465 (SSL)', kind: 'key' as const },
+  { envVar: 'MAILDOG_FROM', label: 'MailDog from address', hint: 'e.g. Borga <noreply@yourdomain.com>; must be on your MailDog domain (defaults to the user name)', kind: 'url' as const },
   { envVar: 'EMAIL_FROM', label: 'From Address', hint: 'e.g. Borga <noreply@yourdomain.com>', kind: 'url' as const },
 ] as const;
 

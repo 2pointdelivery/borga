@@ -1,5 +1,6 @@
 'use client';
 
+import { MAILDOG_URL } from '@/lib/borga/maildog';
 import { useCallback, useEffect, useState } from 'react';
 import { Mail, Loader2, Send, X, Plus, AlertTriangle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -99,7 +100,7 @@ export function EmailUpdatesCard() {
 
       {!s.smtpConfigured && (
         <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-700">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Outgoing email (SMTP) is not configured, so nothing can be delivered. Add the SMTP settings under Integrations → AI &amp; Voice, then send a test email here.
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Outgoing email (SMTP) is not configured, so nothing can be delivered. Add the SMTP settings under Integrations → AI &amp; Voice, then send a test email here. No mail server? <a href={MAILDOG_URL} target="_blank" rel="noopener noreferrer" className="font-medium underline">Create a MailDog account</a> to get your email address and SMTP details.
         </p>
       )}
       {!s.appUrl && <p className="text-[11px] text-muted-foreground">Links back to Borga appear in emails once the public address is known. It is remembered when you save here from your browser, or set <code>APP_URL</code> on the server.</p>}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { agentStatusNow } from '@/lib/borga/agent-status';
 import { useBorga } from '@/lib/borga/store';
 
 export interface ChatMessage {
@@ -169,7 +170,7 @@ function scheduleRestart(setVoice: (p: any) => void, delay = 150) {
 }
 
 export function useVoice() {
-  const { setVoice, log, userName, setUserName, llm, activeWorkspaceId, activeWorkspace, elevenlabs, settings, agents } = useBorga();
+  const { setVoice, log, userName, setUserName, llm, activeWorkspaceId, activeWorkspace, elevenlabs, settings, agents, agentBusy } = useBorga();
 
   const historyRef = useRef<ChatMessage[]>([
     { role: 'system', content: 'System name Borga. Assistant is Borga.' },
@@ -325,7 +326,7 @@ export function useVoice() {
         return 'Opening the planner.';
       }
       if (t.includes('hello') || t.includes('hi ') || t === 'hi') {
-        const n = agents.filter((a) => a.status === 'active').length;
+        const n = agents.filter((a) => agentStatusNow(a, agentBusy) === 'active').length;
         return `Hello ${userName}. ${n} of ${agents.length} agents are active. What should we tackle?`;
       }
       if (t.includes('who are you') || t.includes('your name')) {
@@ -336,7 +337,7 @@ export function useVoice() {
       }
       return null;
     },
-    [setUserName, userName, agents],
+    [setUserName, userName, agents, agentBusy],
   );
 
   const handleFinalCommand = useCallback(

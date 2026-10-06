@@ -28,14 +28,32 @@ const TRIGGER_RANK: Record<RunJob['triggeredBy'], number> = {
   handoff: 4,
 };
 
-/** Lower sorts first: urgent jobs, then user > scheduler > webhook > handoff, then FIFO. */
-export function jobRank(job: RunJob): number {
-  return (job.urgent ? 0 : 1) * 1000 + TRIGGER_RANK[job.triggeredBy] * 100 + (Date.parse(job.enqueuedAt) % 1e12);
+/** What a job's priority is when none was given: something a person just asked for is P0, background work P2. */
+export function effectivePriority(job: Pick<RunJob, 'priority' | 'triggeredBy'>): 0 | 1 | 2 | 3 {
+  return job.priority ?? (job.triggeredBy === 'user' ? 0 : 2);
 }
 
-/** The next queued job a worker should claim, or null when the queue is empty. */
+/**
+ * Lower sorts first: urgent jobs, then P0 before P3, then who started it (user > scheduler > webhook > automation > handoff), then
+ * first come first served. Each part is weighted above the next, so a later part never outweighs an earlier one (the timestamp used
+ * to be added in unscaled and swamped the rest).
+ */
+export function jobRank(job: RunJob): number {
+  const when = Date.parse(job.enqueuedAt);
+  return (job.urgent ? 0 : 1e15) + effectivePriority(job) * 1e14 + TRIGGER_RANK[job.triggeredBy] * 1e13 + (Number.isFinite(when) ? when : 0);
+}
+
+/**
+ * Automatic work runs in a single lane: one automation job at a time. Several at once would only hit the model's rate limit together,
+ * and the result is the same, just sooner for nobody. A person's own runs and scheduled checks are never held up by it.
+ */
+export const MAX_PARALLEL_AUTOMATION = 1;
+
+/** The next queued job a worker should claim, or null when the queue is empty (or only automation work is waiting for its lane). */
 export function nextQueuedJob(jobs: RunJob[]): RunJob | null {
-  const queued = jobs.filter((j) => j.status === 'queued' && !j.cancelRequested);
+  const automationRunning = jobs.filter((j) => j.status === 'running' && j.triggeredBy === 'automation').length;
+  const laneFull = automationRunning >= MAX_PARALLEL_AUTOMATION;
+  const queued = jobs.filter((j) => j.status === 'queued' && !j.cancelRequested && !(laneFull && j.triggeredBy === 'automation'));
   if (!queued.length) return null;
   return queued.reduce((best, j) => (jobRank(j) < jobRank(best) ? j : best));
 }

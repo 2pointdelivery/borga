@@ -30,6 +30,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useBorga } from '@/lib/borga/store';
+import { agentStatusNow } from '@/lib/borga/agent-status';
 import { computeProjectActualSpend, PROJECT_STATUS_LABEL, type ProjectStatus } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
@@ -39,6 +40,7 @@ export function AnalyticsTab() {
     leads, finance, ads, posts, employees, fundraising, agents,
     messages, calls, projects, tasks, bills, activeWorkspace,
   } = useBorga();
+  const agentBusy = useBorga((s) => s.agentBusy);
 
   const revenue = finance.filter((f) => f.kind === 'revenue' && !f.voidedAt).reduce((s, f) => s + f.amount, 0);
   const expenses = finance.filter((f) => f.kind === 'expense' && !f.voidedAt).reduce((s, f) => s + f.amount, 0);
@@ -318,7 +320,7 @@ export function AnalyticsTab() {
         <p className="mt-1 text-sm text-muted-foreground">
           Pipeline is {pipelineValue >= revenue ? 'outpacing' : 'trailing'} booked revenue at {money(pipelineValue)} open.
           Marketing converted {adConversions} paid conversions on {money(adSpend)} spend, while the fleet runs{' '}
-          {agents.filter((a) => a.status === 'active').length}/{agents.length} agents active.
+          {agents.filter((a) => agentStatusNow(a, agentBusy) === 'active').length}/{agents.length} agents working.
           {(revenue - expenses) > 0
             ? ` Net cash position is positive at ${money(revenue - expenses)}.`
             : ' Watch burn — expenses exceed booked revenue this period.'}

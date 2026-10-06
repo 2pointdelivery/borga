@@ -1959,7 +1959,7 @@ export interface SettingsState {
   /** Provider ids in the order fallback tries them (unlisted activated providers follow, in catalog order). */
   llmFallbackOrder?: string[];
   /** Which events are handed to an agent automatically. Each defaults to on. */
-  automations?: { ticketTriage?: boolean; leadFollowUp?: boolean; overdueInvoices?: boolean; agentTasks?: boolean };
+  automations?: { ticketTriage?: boolean; leadFollowUp?: boolean; overdueInvoices?: boolean; agentTasks?: boolean; borgaAssigns?: boolean };
   crmUrl: string; // per-company engine / CRM endpoint
   engineApiKey?: string; // legacy: replaced by the encrypted Company Engine connection
   /** Pull customers and deals from the Company Engine automatically while the dashboard is open. */
@@ -2138,6 +2138,8 @@ export interface RunJob {
   cancelRequested?: boolean;
   /** Scheduling priority: urgent jobs claim a worker first. */
   urgent?: boolean;
+  /** 0 (P0, most important) to 3 (P3). Among jobs of the same urgency the lower number is claimed first; absent means by who started it. */
+  priority?: 0 | 1 | 2 | 3;
   /** Links the job back to the ScheduledTask that enqueued it (stats update on finish). */
   schedTaskId?: string | null;
   /** Exact plan from the Planner; when present the worker executes these steps verbatim. */

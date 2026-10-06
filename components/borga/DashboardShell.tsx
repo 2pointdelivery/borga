@@ -20,6 +20,7 @@ import { deriveBusinessInsights, insightsToMemories, syncInsightsToKnowledgeBase
 import { isPageId, type PageId, type NavTarget } from './nav';
 import { useVisibleNav } from './use-visible-nav';
 import { useCrmPull } from './use-crm-pull';
+import { useAgentActivity } from './use-agent-activity';
 import { useSaltEdgeReturn } from './use-saltedge-return';
 import { BillingBanner, BillingPaywall, useBillingReturn } from './BillingGate';
 import { notifyEmail } from '@/lib/borga/email-client';
@@ -115,6 +116,7 @@ function ShellInner() {
     document.addEventListener('visibilitychange', onVisible);
     return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
   }, [dataReady, activeWorkspaceId, runRecurringInvoices, runRecurringBills]);
+  useAgentActivity(dataReady);
   const voiceEnabled = useFeatures((s) => s.flags.voice);
   const widgetsEnabled = useFeatures((s) => s.flags.widgets);
   const advisorEnabled = useFeatures((s) => s.flags.advisor);

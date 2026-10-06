@@ -76,6 +76,18 @@ export async function activatedCandidates(ctx: Ctx): Promise<Candidate[]> {
   return found.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c.providerId) - rank(b.c.providerId) || a.i - b.i).map((x) => x.c);
 }
 
+/**
+ * Whether any model could answer right now: the one in use or an activated one, and not paused after failing. Work that would only
+ * fail (and spend a retry budget) is not queued while this is false.
+ */
+export async function anyModelReady(ctx: Ctx): Promise<boolean> {
+  const { getConfiguredLlm } = await import('./agent-context');
+  const primary = await getConfiguredLlm(ctx.ws ?? null, ctx.userId ?? null).catch(() => null);
+  const list = [...(primary ? [primary] : []), ...((await fallbackEnabled(ctx)) ? await activatedCandidates(ctx) : [])];
+  const key = keyFor(ctx);
+  return list.some((c) => !health.coolingUntil(key(c)));
+}
+
 /** Whether fallback is on for the company (it is, unless switched off in Integrations → AI & Voice). */
 export async function fallbackEnabled(ctx: Ctx): Promise<boolean> {
   return (await loadSettings(ctx.ws ?? null, ctx.userId ?? null).catch(() => null))?.llmFallback !== false;

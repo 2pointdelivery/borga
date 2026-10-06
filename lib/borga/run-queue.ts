@@ -362,6 +362,8 @@ export interface EnqueueOptions {
   ws?: string | null;
   userId?: string | null;
   urgent?: boolean;
+  /** 0 (most important) to 3. See RunJob.priority. */
+  priority?: 0 | 1 | 2 | 3;
   schedTaskId?: string;
   plannedSteps?: PlannedStep[];
   companyName?: string;
@@ -391,6 +393,7 @@ export async function enqueueRun(opts: EnqueueOptions): Promise<RunJob> {
     error: null,
     cancelRequested: false,
     urgent: opts.urgent,
+    priority: opts.priority,
     schedTaskId: opts.schedTaskId ?? null,
     plannedSteps: opts.plannedSteps,
     steps: [],

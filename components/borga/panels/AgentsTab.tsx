@@ -17,6 +17,7 @@ import { AgentEditDialog } from './AgentEditDialog';
 import { SearchSelect } from '../SearchSelect';
 import { toast } from '@/lib/toast-bus';
 import { AUTOMATION_LABELS, resolveAutomations } from '@/lib/borga/automation-core';
+import { agentStatusNow } from '@/lib/borga/agent-status';
 import { cn } from '@/lib/utils';
 
 const PALETTE = ['#6366f1', '#22d3ee', '#f472b6', '#f59e0b', '#34d399', '#a78bfa', '#fb7185', '#38bdf8'];
@@ -25,6 +26,7 @@ export function AgentsTab() {
   const { agents, updateAgent, addAgent, addMemory, memories, log, activeAgentId, setActiveAgentId, placeCall, elevenlabs, leads,
     finance, invoices, bills, vendors, customers, goals, journals, bankTxns, bankAccounts, employees, activeWorkspace, llm, agentRuns, settings, setSettings } = useBorga();
   const automations = resolveAutomations(settings.automations);
+  const agentBusy = useBorga((s) => s.agentBusy);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
@@ -268,7 +270,7 @@ export function AgentsTab() {
                 )}
                 <p className="truncate text-xs text-muted-foreground">{a.role}</p>
               </div>
-              <StatusPill status={a.status} />
+              <StatusPill status={agentStatusNow(a, agentBusy)} />
             </div>
 
             <div className="mt-2 flex flex-wrap items-center gap-1.5">

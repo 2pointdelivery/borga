@@ -4,6 +4,7 @@ import { getApiKey } from '@/lib/borga/secrets';
 import { workspaceSmtp } from '@/lib/borga/smtp-server';
 import { makeTransport } from '@/lib/borga/smtp-transport';
 import { fromHeader } from '@/lib/borga/smtp-core';
+import { describeMailError, maildogConfig, type MailTransportConfig } from '@/lib/borga/maildog';
 
 // Reusable SMTP mailer. Configure via env or the secrets store:
 //   SMTP_HOST, SMTP_PORT (default 587), SMTP_USER, SMTP_PASS,
@@ -17,21 +18,42 @@ export interface MailContext {
   ws: string;
 }
 
+/**
+ * The deployment's shared mail server: the SMTP_* settings, else MailDog (MAILDOG_USER and MAILDOG_PASSWORD, host mail.maildog.io),
+ * else none. SMTP_HOST wins when both are present so an existing setup never changes underneath anyone.
+ */
+async function deploymentConfig(): Promise<MailTransportConfig | null> {
+  const host = await getApiKey('SMTP_HOST');
+  if (host) {
+    const port = Number(await getApiKey('SMTP_PORT')) || 587;
+    return {
+      host,
+      port,
+      secure: (await getApiKey('SMTP_SECURE')) === 'true' || port === 465,
+      user: await getApiKey('SMTP_USER'),
+      pass: await getApiKey('SMTP_PASS'),
+      from: await getApiKey('EMAIL_FROM'),
+    };
+  }
+  return maildogConfig({
+    MAILDOG_USER: await getApiKey('MAILDOG_USER'),
+    MAILDOG_PASSWORD: await getApiKey('MAILDOG_PASSWORD'),
+    MAILDOG_PORT: await getApiKey('MAILDOG_PORT'),
+    MAILDOG_FROM: await getApiKey('MAILDOG_FROM'),
+    EMAIL_FROM: await getApiKey('EMAIL_FROM'),
+  });
+}
+
 export async function isEmailConfigured(ctx?: MailContext): Promise<boolean> {
   if (ctx && (await workspaceSmtp(ctx.userId, ctx.ws))) return true;
-  const host = await getApiKey('SMTP_HOST');
-  const from = await getApiKey('EMAIL_FROM');
-  return !!host && !!from;
+  const cfg = await deploymentConfig();
+  return !!cfg?.host && !!cfg.from;
 }
 
 let cached: { sig: string; transport: Transporter } | null = null;
 
-async function getTransport(): Promise<Transporter> {
-  const host = await getApiKey('SMTP_HOST');
-  const port = Number(await getApiKey('SMTP_PORT')) || 587;
-  const secure = (await getApiKey('SMTP_SECURE')) === 'true' || port === 465;
-  const user = await getApiKey('SMTP_USER');
-  const pass = await getApiKey('SMTP_PASS');
+function getTransport(cfg: MailTransportConfig): Transporter {
+  const { host, port, secure, user, pass } = cfg;
   // Rebuild when settings change in the dashboard; a process-lifetime cache would keep stale credentials.
   const sig = [host, port, secure, user, pass].join('|');
   if (!cached || cached.sig !== sig) {
@@ -57,14 +79,15 @@ export interface ThreadedMail {
 }
 
 /** Sends with threading headers and returns the generated Message-ID so replies can be matched back. */
-export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): Promise<{ ok: boolean; messageId?: string }> {
+export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): Promise<{ ok: boolean; messageId?: string; error?: string }> {
   const own = ctx ? await workspaceSmtp(ctx.userId, ctx.ws) : null;
-  if (!own && !(await isEmailConfigured())) return { ok: false };
+  const shared = own ? null : await deploymentConfig();
+  if (!own && !(shared?.host && shared.from)) return { ok: false, error: 'No mail server is set up.' };
   try {
     // the company's own server only accepts its own address as the sender: keep a display name if the caller gave one
     const nameOf = (h?: string) => /^\s*"?([^"<]*?)"?\s*<[^>]+>\s*$/.exec(h ?? '')?.[1]?.trim() ?? '';
-    const from = own ? fromHeader({ fromAddress: own.fromAddress, fromName: nameOf(opts.from) || own.fromName }) : opts.from || (await getApiKey('EMAIL_FROM'));
-    const transport = own ? await makeTransport(own) : await getTransport();
+    const from = own ? fromHeader({ fromAddress: own.fromAddress, fromName: nameOf(opts.from) || own.fromName }) : opts.from || shared!.from;
+    const transport = own ? await makeTransport(own) : getTransport(shared!);
     const info = await transport.sendMail({
       from,
       to: opts.to,
@@ -79,8 +102,10 @@ export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): 
     if (own) transport.close();
     return { ok: true, messageId: info.messageId };
   } catch (e) {
-    console.error('[mailer] threaded send failed:', e);
-    return { ok: false };
+    // Said plainly, with the server's own words, and never the password: a send that fails must be diagnosable, not silent.
+    const why = describeMailError(e);
+    console.error(`[mailer] send to ${opts.to.replace(/(.{2}).*(@.*)/, '$1***$2')} failed: ${why.summary} (${why.detail})`);
+    return { ok: false, error: why.summary };
   }
 }
 

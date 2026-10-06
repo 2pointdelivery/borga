@@ -3,6 +3,8 @@
  * (bring-your-own app/token). Shared by client (forms) and server (validation).
  */
 
+import { MAILDOG_HOST, MAILDOG_URL } from './maildog';
+
 export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram';
 
 export interface FieldDef {
@@ -28,6 +30,10 @@ export interface ProviderDef {
   testable: boolean;
   /** Webhook path suffix, when the provider calls us back. */
   webhook?: 'meta' | 'twilio';
+  /** A service the company can create an account with to get these details, shown at the top of the form. */
+  signup?: { title: string; text: string; label: string; url: string };
+  /** Ready-made values for a known service: one click fills the fields that are the same for everybody. */
+  presets?: Array<{ id: string; label: string; values: Record<string, string>; note: string }>;
 }
 
 const E164 = '^\\+[1-9]\\d{6,14}$';
@@ -163,12 +169,27 @@ export const PROVIDERS: ProviderDef[] = [
       { key: 'fromName', label: 'Sender name', secret: false, required: false, placeholder: 'Your Company' },
     ],
     steps: [
-      'Ask your mail provider (Google Workspace, Microsoft 365, Zoho, your host) for its SMTP server name and port, and create an app password if it requires one.',
+      `No mail server yet? Create a MailDog account at ${MAILDOG_URL}: it gives you your email address and SMTP details, with a sending domain that is already verified.`,
+      'Otherwise ask your mail provider (Google Workspace, Microsoft 365, Zoho, your host) for its SMTP server name and port, and create an app password if it requires one.',
       'Enter them here with the address mail should come from, then press Test connection.',
       'Press Send me a test email to see it arrive in your own inbox.',
     ],
-    docsUrl: '',
+    docsUrl: MAILDOG_URL,
     testable: true,
+    signup: {
+      title: 'No mail server? Get one with MailDog',
+      text: 'MailDog gives your company its own email address and the SMTP details to send from it, on a domain that is already set up so your mail is trusted. Create an account, then come back and fill in the user name, password and address it gives you.',
+      label: 'Create a MailDog account',
+      url: MAILDOG_URL,
+    },
+    presets: [
+      {
+        id: 'maildog',
+        label: 'Use MailDog settings',
+        values: { host: MAILDOG_HOST, port: '587', secure: 'no' },
+        note: 'Fills in the server and port. Then add your MailDog user name, password and the address mail should come from (it must be on your MailDog domain).',
+      },
+    ],
   },
   {
     id: 'saltedge',

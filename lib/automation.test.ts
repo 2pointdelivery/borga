@@ -71,7 +71,7 @@ test('only unstarted tasks assigned to a live agent are handed over, by name or 
 });
 
 test('each automation defaults on and can be turned off on its own', () => {
-  assert.deepEqual(resolveAutomations(undefined), { ticketTriage: true, leadFollowUp: true, overdueInvoices: true, agentTasks: true });
+  assert.deepEqual(resolveAutomations(undefined), { ticketTriage: true, leadFollowUp: true, overdueInvoices: true, agentTasks: true, borgaAssigns: true });
   assert.equal(resolveAutomations({ leadFollowUp: false }).leadFollowUp, false);
   assert.equal(resolveAutomations({ leadFollowUp: false }).ticketTriage, true);
 });

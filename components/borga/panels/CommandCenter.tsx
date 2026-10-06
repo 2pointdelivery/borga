@@ -34,6 +34,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useBorga, sortTasks } from '@/lib/borga/store';
+import { agentStatusNow } from '@/lib/borga/agent-status';
 import { PRIORITY_LABEL, PRIORITY_COLOR, APPROVAL_LABEL, LLM_PROVIDERS, GOAL_KPI_PRESETS, type Goal, type GoalStatus } from '@/lib/borga/data';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { DateInput } from '../form-widgets';
@@ -229,7 +230,8 @@ export function CommandCenter() {
   }, [activeWorkspaceId]);
 
   const done = tasks.filter((t) => t.status === 'done').length;
-  const activeAgents = agents.filter((a) => a.status === 'active').length;
+  const agentBusy = useBorga((s) => s.agentBusy);
+  const activeAgents = agents.filter((a) => agentStatusNow(a, agentBusy) === 'active').length;
   const topTasks = sortTasks(tasks.filter((t) => t.status !== 'done')).slice(0, 4);
 
   // ---- Attention items ----

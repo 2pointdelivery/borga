@@ -1,5 +1,6 @@
 'use client';
 
+import { MailDogCard } from '../MailDogCard';
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   Plus,
@@ -115,6 +116,9 @@ const TWILIO_KEYS: { envVar: string; label: string; kind: 'key' | 'url'; hint: s
 ];
 
 const SMTP_KEYS: { envVar: string; label: string; kind: 'key' | 'url'; hint: string }[] = [
+  { envVar: 'MAILDOG_USER', label: 'MailDog user name', kind: 'key', hint: 'Your MailDog account user name (it is your email address)' },
+  { envVar: 'MAILDOG_PASSWORD', label: 'MailDog password', kind: 'key', hint: 'Used with mail.maildog.io on port 587; stored encrypted' },
+  { envVar: 'MAILDOG_FROM', label: 'MailDog from address', kind: 'url', hint: 'e.g. Borga <noreply@yourdomain.com>; must be on your MailDog domain' },
   { envVar: 'SMTP_HOST', label: 'SMTP Host', kind: 'url', hint: 'e.g. smtp.gmail.com or smtp.sendgrid.net' },
   { envVar: 'SMTP_PORT', label: 'SMTP Port', kind: 'key', hint: '587 (STARTTLS) or 465 (SSL)' },
   { envVar: 'SMTP_USER', label: 'SMTP Username', kind: 'key', hint: 'Account / API user' },
@@ -1261,8 +1265,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       <section>
         <div className="flex items-center gap-2 mb-3">
           <Radio className="h-4 w-4 text-primary" />
-          <SectionTitle title="SMTP / email delivery" sub="Send real emails (password resets, notifications) via your SMTP server" />
+          <SectionTitle title="SMTP / email delivery" sub="Send real emails (password resets, notifications) via MailDog or your own SMTP server" />
         </div>
+        <div className="mb-3"><MailDogCard /></div>
         <Card className="p-4">
           <div className="space-y-1">
             {SMTP_KEYS.map((k) => (
@@ -1540,6 +1545,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             Add your Composio API key below (or set COMPOSIO_API_KEY on the server) to enable OAuth email connections.
           </p>
         )}
+        <div className="mt-3"><MailDogCard /></div>
       </section>
       )}
 

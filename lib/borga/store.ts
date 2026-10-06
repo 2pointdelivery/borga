@@ -459,6 +459,9 @@ interface BorgaStore {
   synced: boolean;
   /** What this company is charged and whether it may be used (from the server). Null until loaded, and where billing is off. */
   billing: BillingInfo | null;
+  /** Which agents have a run going or waiting right now (from the run queue); everyone else is idle. */
+  agentBusy: Record<string, 'running' | 'queued'>;
+  setAgentBusy: (busy: Record<string, 'running' | 'queued'>) => void;
   setBilling: (b: BillingInfo | null) => void;
   /** The company whose data has finished loading. `synced` turns true earlier, when only the company list is in, so anything that writes to the books waits for this. */
   loadedWorkspaceId: string | null;
@@ -1040,6 +1043,8 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   synced: false,
   billing: null,
   setBilling: (b) => set({ billing: b }),
+  agentBusy: {},
+  setAgentBusy: (busy) => set({ agentBusy: busy }),
   loadedWorkspaceId: null,
   dbAvailable: false,
 

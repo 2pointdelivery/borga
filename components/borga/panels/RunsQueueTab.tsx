@@ -1,5 +1,6 @@
 'use client';
 
+import { effectivePriority } from '@/lib/borga/run-queue-core';
 import { useState, useRef, useEffect } from 'react';
 import {
   Play, Pause, RefreshCw, Clock, CheckCircle2, XCircle, Zap, ChevronDown, ChevronRight,
@@ -544,6 +545,7 @@ function QueueCard() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Badge variant="secondary" className="text-[10px]">{job.triggeredBy}</Badge>
+              {job.status === 'queued' && <Badge variant="outline" className="text-[10px]" title="Priority: the queue starts P0 first">P{effectivePriority(job)}</Badge>}
               {job.maxSteps ? <Badge variant="outline" className="text-[10px]">{job.maxSteps} steps</Badge> : null}
               <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setEditJob(job)} title="Edit queued run">
                 <Pencil className="h-3 w-3" />
