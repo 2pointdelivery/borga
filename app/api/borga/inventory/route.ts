@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { featureGate } from '@/lib/borga/features-server';
-import { resolveLlm, callLlm } from '@/lib/borga/agent-context';
+import { resolveLlm } from '@/lib/borga/agent-context';
+import { callLlmResilient } from '@/lib/borga/llm-fallback';
 import { descriptionPrompt, templateDescription, type ItemType } from '@/lib/borga/inventory';
 import { currencySymbol } from '@/lib/borga/currencies';
 
@@ -76,10 +77,11 @@ async function describeOne(
       companyName,
       currency,
     );
-    const out = await callLlm([{ role: 'user', content: prompt }], provider);
+    const answer = await callLlmResilient([{ role: 'user', content: prompt }], provider, { ws, userId });
+    const out = answer.text;
     const text = clean(out);
     if (!text || text.length < 20) return { description: fallback, source: 'template' };
-    return { description: text, source: 'model', model: provider.model };
+    return { description: text, source: 'model', model: answer.used.model };
   } catch {
     return { description: fallback, source: 'template' };
   }

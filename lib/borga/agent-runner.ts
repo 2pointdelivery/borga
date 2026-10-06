@@ -1,5 +1,6 @@
 import 'server-only';
-import { buildAgentContext, buildSystemPrompt, resolveLlm, callLlm } from './agent-context';
+import { buildAgentContext, buildSystemPrompt, resolveLlm } from './agent-context';
+import { callLlmResilient } from './llm-fallback';
 import { executeTool, parseToolCalls } from './tools';
 import { getBorgaState, setBorgaState, scopedKey } from './persistence';
 import { userWsKey } from './keys';
@@ -136,7 +137,12 @@ export async function executeAgentRun(
       if (await stopRequested()) { stopped = true; break; }
       stepCount = i + 1;
       try {
-        const llmResponse = await callLlm(messages, provider);
+        const answer = await callLlmResilient(messages, provider, { ws, userId });
+        const llmResponse = answer.text;
+        if (answer.switched) {
+          const f = answer.failures[0];
+          push({ type: 'thought', content: `Switched to ${answer.used.providerId.replace(/^llm-/, '')} (${answer.used.model}): ${f ? `${f.providerId.replace(/^llm-/, '')} failed because ${f.reason}` : 'the first model failed'}.`, at: new Date().toISOString() });
+        }
         const summaryMatch = llmResponse.match(/SUMMARY:\s*([\s\S]+?)(?:<tool_call>|$)/);
         if (summaryMatch) summary = summaryMatch[1].trim();
         const thought = llmResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').replace(/SUMMARY:[\s\S]*/g, '').trim();

@@ -624,7 +624,8 @@ ${String(params.body)}`, author: agentName });
       const depth = Number(params._depth ?? 0);
       if (!toAgentId || !goal) return { ok: false, error: 'toAgentId and goal are required for delegate' };
       if (depth >= 1) return { ok: false, error: 'Sub-agents cannot delegate further — finish the goal yourself with your own tools.' };
-      const { buildAgentContext, buildSystemPrompt, resolveLlm, callLlm } = await import('./agent-context');
+      const { buildAgentContext, buildSystemPrompt, resolveLlm } = await import('./agent-context');
+      const { callLlmResilient } = await import('./llm-fallback');
       const subCtx = await buildAgentContext(toAgentId, ws, userId, goal);
       if (!subCtx) return { ok: false, error: `Agent "${toAgentId}" not found. Use query_state with entity "agents" to list valid ids.` };
       await appendActivity(agentId, agentName, ws, userId, 'handoff', `Delegated to ${subCtx.agent.name}: "${goal}"`);
@@ -640,7 +641,7 @@ ${String(params.body)}`, author: agentName });
       for (let i = 0; i < 4; i++) {
         let subReply: string;
         try {
-          subReply = await callLlm(messages, subProvider);
+          subReply = (await callLlmResilient(messages, subProvider, { ws, userId })).text;
         } catch (e) {
           return { ok: false, error: `Sub-agent LLM call failed: ${(e as Error).message}` };
         }

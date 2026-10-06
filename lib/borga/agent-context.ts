@@ -341,7 +341,7 @@ export const MODEL_PROVIDER_PREFIX: { prefix: string; provider: string; strip: b
  *   provider has no API key configured.
  */
 /** The workspace's provider catalog (its own override, else the seed). */
-async function loadCatalog(ws?: string | null, userId?: string | null): Promise<LlmProvider[]> {
+export async function loadCatalog(ws?: string | null, userId?: string | null): Promise<LlmProvider[]> {
   if (ws) {
     const own = await getBorgaState<LlmProvider[]>(userId ? userWsKey(userId, ws, 'llmCatalog') : scopedKey(ws, 'llmCatalog'));
     if (Array.isArray(own) && own.length) return own;
@@ -386,7 +386,11 @@ export async function getConfiguredLlm(ws?: string | null, userId?: string | nul
     const llm = await getBorgaState<{ providerId?: string; model?: string }>(ws ? (userId ? userWsKey(userId, ws, 'llm') : scopedKey(ws, 'llm')) : 'llm');
     // Nothing saved yet means the company is on the same default the dashboard shows (a keyless model), not "no model".
     const chosen = llm?.providerId && !RETIRED_LLM_PROVIDERS.includes(llm.providerId) ? { providerId: llm.providerId, model: llm.model ?? '' } : { providerId: DEFAULT_LLM.providerId, model: DEFAULT_LLM.model };
-    return await buildLlm(chosen.providerId, chosen.model, ws, userId);
+    const built = await buildLlm(chosen.providerId, chosen.model, ws, userId);
+    if (built) return built;
+    // The chosen model has no key or address (removed, or never finished): use an activated one rather than none.
+    const { activatedCandidates, fallbackEnabled } = await import('./llm-fallback');
+    return (await fallbackEnabled({ ws, userId })) ? ((await activatedCandidates({ ws, userId }))[0] ?? null) : null;
   } catch {
     return null;
   }

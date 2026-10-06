@@ -1046,15 +1046,9 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     envVar: 'GROQ_API_KEY',
     freeTierNote: 'Free tier — console.groq.com',
     models: [
-      { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile', tier: 'free', contextK: 128, tag: 'powerful' },
-      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', tier: 'free', contextK: 128, tag: 'fast' },
-      { id: 'llama3-70b-8192', label: 'Llama 3 70B', tier: 'free', contextK: 8 },
-      { id: 'llama3-8b-8192', label: 'Llama 3 8B', tier: 'free', contextK: 8, tag: 'fast' },
-      { id: 'mixtral-8x7b-32768', label: 'Mixtral 8×7B', tier: 'free', contextK: 32 },
-      { id: 'gemma2-9b-it', label: 'Gemma 2 9B', tier: 'free', contextK: 8 },
-      { id: 'qwen-qwq-32b', label: 'QwQ 32B', tier: 'free', contextK: 128, tag: 'reasoning' },
-      { id: 'deepseek-r1-distill-llama-70b', label: 'DeepSeek R1 70B', tier: 'free', contextK: 128, tag: 'reasoning' },
-      { id: 'compound-beta', label: 'Compound Beta', tier: 'free', contextK: 128, tag: 'tool-use' },
+      { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B', tier: 'free', contextK: 128, tag: 'fast' },
+      { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B', tier: 'free', contextK: 128, tag: 'powerful' },
+      { id: 'allam-2-7b', label: 'ALLaM 2 7B', tier: 'free', contextK: 4 },
     ],
   },
   {
@@ -1960,6 +1954,10 @@ export interface NotificationPrefs {
 
 export interface SettingsState {
   notifications: NotificationPrefs;
+  /** When the model a request was going to use fails, use the next activated one. On unless set to false. */
+  llmFallback?: boolean;
+  /** Provider ids in the order fallback tries them (unlisted activated providers follow, in catalog order). */
+  llmFallbackOrder?: string[];
   /** Which events are handed to an agent automatically. Each defaults to on. */
   automations?: { ticketTriage?: boolean; leadFollowUp?: boolean; overdueInvoices?: boolean; agentTasks?: boolean };
   crmUrl: string; // per-company engine / CRM endpoint

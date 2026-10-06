@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ToolsTab, type ToolsSection } from '../panels/ToolsTab';
 import { ConnectionsTab } from '../panels/ConnectionsTab';
 import { SupermemoryCard } from '../panels/SupermemoryCard';
+import { LlmFallbackCard } from '../panels/LlmFallbackCard';
 import { useFeature } from '@/lib/borga/features-client';
 
 const TAB_TO_SECTION: Record<string, ToolsSection> = {
@@ -28,6 +29,7 @@ export function IntegrationsPage({ initialTab }: { initialTab?: string }) {
       {composio && <TabsContent value="toolkits"><ToolsTab section={TAB_TO_SECTION.toolkits} /></TabsContent>}
       <TabsContent value="ai-providers">
         <div className="space-y-5">
+          <LlmFallbackCard />
           <ToolsTab section={TAB_TO_SECTION['ai-providers']} />
           <SupermemoryCard />
         </div>

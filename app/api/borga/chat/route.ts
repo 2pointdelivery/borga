@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { paymentRequired } from '@/lib/borga/billing-server';
-import { fetchPublic } from '@/lib/borga/safe-url';
-import { friendlyLlmError } from '@/lib/borga/llm-errors';
+import { activatedCandidates, fallbackEnabled } from '@/lib/borga/llm-fallback';
 import { getBorgaState, scopedKey } from '@/lib/borga/persistence';
 import { resolveProviderConfig, resolveApiKey } from '@/lib/borga/llm-providers';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
@@ -79,102 +78,21 @@ export async function POST(req: NextRequest) {
 
   const lastUserText = (body.messages ?? []).filter((m) => m.role === 'user').at(-1)?.content ?? '';
 
-  // --- Muse (remote API) ---
-  // An OpenAI-compatible endpoint reached over the internet with an optional bearer key. The address must be https and public
-  // (fetchPublic refuses internal hosts and re-checks every redirect), because a server that fetches an address from a setting
-  // must never be pointed at the internal network.
-  if (providerId === 'llm-muse') {
-    if (!baseUrl) {
-      return NextResponse.json({ reply: 'Muse is not set up yet. Add its remote base URL (https://…/v1) and API key under Integrations → AI & Voice.' }, { status: 200 });
-    }
-
-    if (kb.length) {
-      const facts = await kbFactsFor(userId, ws, kb, lastUserText);
-      messages.unshift({ role: 'system', content: `Knowledge base (${companyName}):\n${facts}` });
-    }
-
-    try {
-      const upstream = await fetchPublic(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-        body: JSON.stringify({ model, messages, max_tokens: 512, temperature: 0.6 }),
-        signal: AbortSignal.timeout(45000),
-      });
-      if (!upstream.ok) {
-        const text = await upstream.text().catch(() => '');
-        return NextResponse.json({ reply: friendlyLlmError('Muse', upstream.status, text), error: 'MUSE_ERROR' }, { status: 502 });
-      }
-      const data = (await upstream.json()) as { choices?: { message?: { content?: string } }[] };
-      return NextResponse.json({ reply: data.choices?.[0]?.message?.content?.trim() ?? 'Borga received no answer.' }, { status: 200 });
-    } catch (err) {
-      const why = (err as Error).message || '';
-      const blocked = /https|private|internal|credentials|redirect/i.test(why);
-      return NextResponse.json({
-        reply: blocked
-          ? `Muse's address was refused: ${why} Use a public https address under Integrations → AI & Voice.`
-          : 'Muse could not be reached. Check its base URL and API key under Integrations → AI & Voice.',
-        error: 'MUSE_UNREACHABLE',
-      }, { status: 502 });
-    }
-  }
-
-  // --- Custom endpoint ---
-  if (providerId === 'llm-custom') {
-    const customBase = process.env.LLM_BASE_URL ?? '';
-    const customKey = process.env.LLM_API_KEY ?? '';
-    const isValidUrl = (() => {
-      try { return !!new URL(customBase) && !['example', 'xxx', 'placeholder'].includes(customBase.toLowerCase()); }
-      catch { return false; }
-    })();
-    if (!isValidUrl || !customKey || ['xxx', 'placeholder', 'your-key'].includes(customKey)) {
-      return NextResponse.json({
-        reply: 'Custom endpoint is not configured. Set LLM_BASE_URL (a valid OpenAI-compatible base URL) and LLM_API_KEY in .env.',
-        error: 'CUSTOM_ENDPOINT_NOT_CONFIGURED'
-      }, { status: 400 });
-    }
-
-    if (kb.length) {
-      const facts = await kbFactsFor(userId, ws, kb, lastUserText);
-      messages.unshift({ role: 'system', content: `Knowledge base (${companyName}):\n${facts}` });
-    }
-
-    try {
-      const upstream = await fetch(`${customBase}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${customKey}` },
-        body: JSON.stringify({ model, messages, max_tokens: 512, temperature: 0.6 }),
-        signal: AbortSignal.timeout(45000),
-      });
-      if (!upstream.ok) {
-        const text = await upstream.text().catch(() => '');
-        console.error('Custom LLM error', upstream.status, text.slice(0, 200));
-        return NextResponse.json({ 
-          reply: 'Custom LLM endpoint returned an error. Check LLM_BASE_URL and LLM_API_KEY in .env.',
-          error: 'CUSTOM_LLM_ERROR'
-        }, { status: 502 });
-      }
-      const data = (await upstream.json()) as { choices?: { message?: { content?: string } }[] };
-      return NextResponse.json({ reply: data.choices?.[0]?.message?.content?.trim() ?? 'Borga received no answer.' }, { status: 200 });
-    } catch (err) {
-      console.error('Custom LLM error', err);
-      return NextResponse.json({ 
-        reply: 'Custom LLM endpoint is unreachable. Verify LLM_BASE_URL in .env.',
-        error: 'CUSTOM_LLM_UNREACHABLE'
-      }, { status: 502 });
-    }
-  }
-
-  // --- Standard cloud providers (require API key) ---
-  if (envKeyName && !apiKey) {
+  // Can the requested model be called at all? Muse and the custom endpoint need an address; most others need a key. When it cannot,
+  // the company's other activated models answer instead (see lib/borga/llm-fallback.ts) rather than the chat just failing.
+  const needsAddress = providerId === 'llm-muse' || providerId === 'llm-custom';
+  const requestedUsable = !(needsAddress && !baseUrl) && !(envKeyName && !apiKey && !cfg.optionalKey);
+  const fallbackReady = !requestedUsable && (await fallbackEnabled({ ws, userId })) && (await activatedCandidates({ ws, userId })).length > 0;
+  if (!requestedUsable && !fallbackReady) {
     const providerLabel = providerId.replace('llm-', '');
-    return NextResponse.json(
-      { 
-        reply: `${providerLabel} isn't connected — no server-side API key is configured. Add ${envKeyName} in .env to enable this provider.`,
-        error: 'API_KEY_MISSING'
-      },
-      { status: 400 },
-    );
+    const reply = providerId === 'llm-muse'
+      ? 'Muse is not set up yet. Add its remote base URL (https://…/v1) and API key under Integrations → AI & Voice.'
+      : providerId === 'llm-custom'
+        ? 'The custom endpoint is not set up yet. Add its base URL and API key under Integrations → AI & Voice.'
+        : `${providerLabel} isn't connected: no API key is configured. Add ${envKeyName} (Integrations → AI & Voice) to enable this provider.`;
+    return NextResponse.json({ reply, error: needsAddress ? 'ENDPOINT_NOT_CONFIGURED' : 'API_KEY_MISSING' }, { status: 400 });
   }
+
 
   // Inject knowledge base into system prompt
   if (kb.length) {
@@ -184,7 +102,9 @@ export async function POST(req: NextRequest) {
 
   // Tier 1: all cloud turns flow through the unified brain seam (never the SDK directly).
   const brainMessages: BrainMessage[] = messages.map((m) => ({ role: m.role, content: m.content }));
-  const provider = { providerId, model, apiKey, baseUrl };
+  // An unusable requested model is passed as null: the fallback then starts from the company's first activated one.
+  const provider = requestedUsable ? { providerId, model, apiKey, baseUrl } : null;
+  const turnCtx = { ws, userId };
 
   const wantsStream = new URL(req.url).searchParams.get('stream') === '1';
   if (wantsStream) {
@@ -197,7 +117,7 @@ export async function POST(req: NextRequest) {
           await streamBrainTurn(brainMessages, provider, (token) => {
             full += token;
             send({ type: 'token', token });
-          });
+          }, turnCtx);
           // streamBrainTurn emits the fallback as a single token when streaming
           // is unavailable, so `full` is always the complete reply here.
           send({ type: 'complete', reply: full });
@@ -214,6 +134,6 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const reply = await sendBrainTurn(brainMessages, provider);
+  const reply = await sendBrainTurn(brainMessages, provider, turnCtx);
   return NextResponse.json({ reply }, { status: 200 });
 }
