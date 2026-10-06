@@ -1,13 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Bot, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Circle, CreditCard, Loader2, Send, Sparkles, Zap } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Bot, CalendarDays, ChevronLeft, ChevronRight, CreditCard, FolderKanban, LifeBuoy, Loader2, PanelRightClose, PanelRightOpen, Send, Sparkles, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { useBorga } from '@/lib/borga/store';
-import { normalizeOnboarding, onboardingProgress } from '@/lib/borga/data';
 import { formatUsd } from '@/lib/borga/billing';
-import { useOptionalSetup } from './use-optional-setup';
+import { ticketsApi } from '@/lib/borga/tickets-client';
+import { useFeatures } from '@/lib/borga/features-client';
+import type { TicketSummary } from '@/lib/borga/tickets';
 
 const go = (page: string, tab?: string) =>
   window.dispatchEvent(new CustomEvent('borga:nav', { detail: tab ? { page, tab } : page }));
@@ -20,54 +21,6 @@ const TITLE = 'flex items-center gap-1.5 text-xs font-semibold uppercase trackin
 
 /** YYYY-MM-DD in local time, which is how the app stores due dates. */
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-/* ------------------------------------------------------------------ Get started */
-
-/** The setup checklist. Essentials come from onboarding, optional items from the real settings. Hides itself when everything is done. */
-export function GetStartedWidget() {
-  const { activeWorkspace } = useBorga();
-  const optional = useOptionalSetup();
-  const ws = activeWorkspace();
-  const ob = ws?.onboarding;
-  if (!ws) return null;
-
-  const essentials = normalizeOnboarding(ob).steps.filter((s) => !s.optional);
-  const { done, total, pct } = onboardingProgress(ob);
-  const optItems = optional.ready ? optional.items : [];
-  const allDone = (!ob || ob.completed) && optional.ready && optional.pending.length === 0;
-  if (allDone) return null;
-
-  const rows = [
-    ...(ob && !ob.completed ? essentials.map((s) => ({ key: s.id, title: s.title, done: s.completed, run: () => { window.location.href = `/app/onboarding?step=${s.id}`; } })) : []),
-    ...optItems.map((o) => ({ key: `o-${o.id}`, title: o.title, done: o.configured, run: () => go('integrations') })),
-  ];
-  const doneN = rows.filter((r) => r.done).length;
-  const value = rows.length ? Math.round((doneN / rows.length) * 100) : pct;
-
-  return (
-    <section className={WIDGET} aria-label="Get started">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Get started</h3>
-        <span className="text-xs text-muted-foreground">{rows.length ? `${doneN} of ${rows.length}` : `${done}/${total}`}</span>
-      </div>
-      <Progress value={value} className="mt-2 h-1.5" />
-      <ul className="mt-3 space-y-1.5">
-        {rows.map((r) => (
-          <li key={r.key}>
-            <button
-              onClick={r.run}
-              disabled={r.done}
-              className={cn('flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs transition-colors', r.done ? 'text-muted-foreground' : 'hover:bg-accent')}
-            >
-              {r.done ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" /> : <Circle className="h-4 w-4 shrink-0 text-muted-foreground/60" />}
-              <span className={cn(r.done && 'line-through')}>{r.title}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
 
 /* ------------------------------------------------------------------ Calendar */
 
@@ -270,13 +223,171 @@ export function PlanWidget() {
   );
 }
 
+/* ------------------------------------------------------------------ Projects */
+
+/** Task progress across the company's projects: how much is done, what is moving, and the active projects with their own progress. */
+export function ProjectsWidget() {
+  const { tasks, projects } = useBorga();
+  const stats = useMemo(() => {
+    const done = tasks.filter((t) => t.status === 'done').length;
+    const moving = tasks.filter((t) => t.status === 'in-progress').length;
+    const todo = tasks.length - done - moving;
+    const active = projects
+      .filter((p) => p.status === 'active' || p.status === 'planning')
+      .map((p) => {
+        const own = tasks.filter((t) => t.projectId === p.id);
+        const pct = own.length ? Math.round(own.reduce((sum, t) => sum + (t.status === 'done' ? 100 : Math.max(0, Math.min(100, t.progress || 0))), 0) / own.length) : 0;
+        return { id: p.id, name: p.name, pct, tasks: own.length };
+      })
+      .slice(0, 3);
+    return { done, moving, todo, pct: tasks.length ? Math.round((done / tasks.length) * 100) : 0, active };
+  }, [tasks, projects]);
+
+  return (
+    <section className={WIDGET} aria-label="Project tasks">
+      <div className="flex items-center justify-between">
+        <h3 className={TITLE}><FolderKanban className="h-3.5 w-3.5" />Projects</h3>
+        <button onClick={() => go('projects')} className="text-[11px] text-primary hover:underline">Open</button>
+      </div>
+      {tasks.length === 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">No tasks yet. Add one under Projects and its progress shows here.</p>
+      ) : (
+        <>
+          <div className="mt-2 flex items-baseline justify-between">
+            <p className="text-2xl font-semibold leading-none">{stats.pct}%</p>
+            <p className="text-xs text-muted-foreground">{stats.done} of {tasks.length} tasks done</p>
+          </div>
+          <Progress value={stats.pct} className="mt-2 h-1.5" />
+          <div className="mt-2 grid grid-cols-3 gap-1.5 text-center text-[11px]">
+            <div className="rounded-md bg-muted/50 py-1"><p className="font-semibold">{stats.todo}</p><p className="text-muted-foreground">To do</p></div>
+            <div className="rounded-md bg-sky-500/10 py-1"><p className="font-semibold">{stats.moving}</p><p className="text-muted-foreground">In progress</p></div>
+            <div className="rounded-md bg-emerald-500/10 py-1"><p className="font-semibold">{stats.done}</p><p className="text-muted-foreground">Done</p></div>
+          </div>
+          {stats.active.length > 0 && (
+            <ul className="mt-3 space-y-2">
+              {stats.active.map((p) => (
+                <li key={p.id}>
+                  <button onClick={() => go('projects', p.id)} className="block w-full text-left">
+                    <div className="flex items-center justify-between text-xs"><span className="truncate pr-2">{p.name}</span><span className="text-muted-foreground">{p.tasks ? `${p.pct}%` : 'no tasks'}</span></div>
+                    <Progress value={p.pct} className="mt-1 h-1" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ Support tickets */
+
+const TICKET_ROWS: Array<{ key: TicketSummary['status']; label: string; dot: string }> = [
+  { key: 'open', label: 'Open', dot: 'bg-rose-500' },
+  { key: 'in-progress', label: 'In progress', dot: 'bg-sky-500' },
+  { key: 'pending', label: 'Waiting on customer', dot: 'bg-amber-500' },
+  { key: 'resolved', label: 'Resolved', dot: 'bg-emerald-500' },
+];
+
+/** Where the Support Desk stands: tickets by status and how many urgent ones are still unresolved. Hidden when the Support Desk is off. */
+export function TicketsWidget() {
+  const ws = useBorga((s) => s.activeWorkspaceId);
+  const loaded = useBorga((s) => s.loadedWorkspaceId);
+  const enabled = useFeatures((s) => s.flags.tickets);
+  const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !ws || loaded !== ws) return;
+    let alive = true;
+    const load = () => {
+      void ticketsApi.list(ws).then((r) => {
+        if (!alive) return;
+        if (r.ok) { setTickets(r.tickets); setFailed(false); } else setFailed(true);
+      });
+    };
+    load();
+    const t = setInterval(load, 120_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { alive = false; clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+  }, [enabled, ws, loaded]);
+
+  if (!enabled) return null;
+  const counts = (st: TicketSummary['status']) => (tickets ?? []).filter((t) => t.status === st).length;
+  const urgent = (tickets ?? []).filter((t) => (t.priority === 'critical' || t.priority === 'high') && t.status !== 'resolved' && t.status !== 'closed').length;
+  const unresolved = (tickets ?? []).filter((t) => t.status !== 'resolved' && t.status !== 'closed').length;
+
+  return (
+    <section className={WIDGET} aria-label="Support tickets">
+      <div className="flex items-center justify-between">
+        <h3 className={TITLE}><LifeBuoy className="h-3.5 w-3.5" />Support tickets</h3>
+        <button onClick={() => go('support')} className="text-[11px] text-primary hover:underline">Open</button>
+      </div>
+      {tickets === null ? (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          {failed ? 'Could not load tickets.' : <><Loader2 className="h-3 w-3 animate-spin" /> Loading…</>}
+        </p>
+      ) : tickets.length === 0 ? (
+        <p className="mt-2 text-xs text-muted-foreground">No tickets yet. Customer emails and new tickets appear here.</p>
+      ) : (
+        <>
+          <div className="mt-2 flex items-baseline justify-between">
+            <p className="text-2xl font-semibold leading-none">{unresolved}</p>
+            <p className="text-xs text-muted-foreground">unresolved{urgent > 0 ? ` · ${urgent} urgent` : ''}</p>
+          </div>
+          <ul className="mt-2 space-y-1">
+            {TICKET_ROWS.map((r) => (
+              <li key={r.key}>
+                <button onClick={() => go('support', 'tickets')} className="flex w-full items-center justify-between rounded px-1 py-0.5 text-xs hover:bg-accent">
+                  <span className="flex items-center gap-2"><span className={cn('h-1.5 w-1.5 rounded-full', r.dot)} />{r.label}</span>
+                  <span className="font-medium">{counts(r.key)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------------ Right rail */
 
-/** The right-hand column on wide screens. */
+const RAIL_KEY = 'borga:right-rail-collapsed';
+
+/** The right-hand column on wide screens. It folds away to a thin handle, and remembers that on this device. */
 export function RightRail() {
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try { setCollapsed(localStorage.getItem(RAIL_KEY) === '1'); } catch { /* private mode: stay open */ }
+  }, []);
+  const toggle = () => {
+    setCollapsed((c) => {
+      try { localStorage.setItem(RAIL_KEY, c ? '0' : '1'); } catch { /* ignore */ }
+      return !c;
+    });
+  };
+
+  if (collapsed) {
+    return (
+      <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem-2rem)] w-10 shrink-0 pt-6 pr-2 2xl:block" aria-label="Widgets (hidden)">
+        <button onClick={toggle} aria-label="Show widgets" title="Show widgets" className="flex h-8 w-8 items-center justify-center rounded-lg border bg-card text-muted-foreground shadow-xs hover:text-foreground">
+          <PanelRightOpen className="h-4 w-4" />
+        </button>
+      </aside>
+    );
+  }
   return (
     <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem-2rem)] w-72 shrink-0 space-y-3 overflow-y-auto pb-24 pt-6 pr-4 2xl:block" aria-label="Widgets">
-      <GetStartedWidget />
+      <div className="flex justify-end">
+        <button onClick={toggle} aria-label="Hide widgets" title="Hide widgets" className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground">
+          <PanelRightClose className="h-4 w-4" />
+        </button>
+      </div>
+      <ProjectsWidget />
+      <TicketsWidget />
       <CalendarWidget />
       <AssistantWidget />
       <PlanWidget />

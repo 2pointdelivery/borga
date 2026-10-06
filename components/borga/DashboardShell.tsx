@@ -49,7 +49,7 @@ import { DevelopersPage } from './pages/DevelopersPage';
 import { SettingsTab } from './panels/SettingsTab';
 import { OnboardingStatus } from './OnboardingStatus';
 import { UserMenu } from './UserMenu';
-import { CalendarWidget, GetStartedWidget, RightRail, StatusBar } from './SidebarWidgets';
+import { CalendarWidget, RightRail, StatusBar } from './SidebarWidgets';
 
 import { SaveConflictBanner } from './SaveConflictBanner';
 import { ConsentBanner } from './ConsentBanner';
@@ -313,7 +313,6 @@ function ShellInner() {
           })}
         </nav>
         <div className="space-y-3 px-3 pb-3 2xl:hidden">
-          <GetStartedWidget />
           <CalendarWidget />
         </div>
         <div className="border-t p-4 text-xs text-sidebar-foreground/60">
