@@ -562,7 +562,7 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
         <div className="borga-teaser-in fixed bottom-24 left-5 z-40 w-[min(320px,88vw)]">
           <Card className="overflow-hidden shadow-xl">
             <div className="flex items-start gap-2.5 p-3.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-white">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-green-600 text-white">
                 <TeaserIcon className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">

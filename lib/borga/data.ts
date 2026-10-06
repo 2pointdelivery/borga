@@ -1968,6 +1968,8 @@ export interface SettingsState {
   crmLastPull?: { at: string; customers?: { added: number; updated: number; unchanged: number }; leads?: { added: number; updated: number; unchanged: number }; skipped?: number; error?: string };
   lastAutoMatchAt?: string; // ISO timestamp of last banking end-of-day auto-reconciliation
   autonomousMode?: boolean; // when true, agents may act on the company's behalf but must route payments and outbound third-party sends through approval
+  /** True once someone switched autonomous mode on or off themselves. Until then it follows the default (on), including for companies that only ever had the old default of off. */
+  autonomousModeChosen?: boolean;
   lastAutoTrainAt?: string; // ISO timestamp of last automatic agent-memory / knowledge-base sync
   /** Tier 5 kill switch: when true, the heartbeat never fires — chat/voice still work. */
   heartbeatPaused?: boolean;
@@ -1984,8 +1986,17 @@ export interface SettingsState {
 export const DEFAULT_SETTINGS: SettingsState = {
   notifications: { tasks: true, handoffs: true, sync: false, voice: false, kpi: false },
   crmUrl: '', // Configure in Company Settings
-  autonomousMode: false,
+  autonomousMode: true,
 };
+
+/**
+ * Saved settings with the defaults filled in. Autonomous mode is on unless someone chose otherwise: a company saved before this
+ * default changed only has "off" because that used to be the default, not because anyone picked it.
+ */
+export function normalizeSettings(saved: Partial<SettingsState> | null | undefined): SettingsState {
+  const merged = { ...DEFAULT_SETTINGS, ...(saved ?? {}) } as SettingsState;
+  return { ...merged, autonomousMode: merged.autonomousModeChosen ? !!merged.autonomousMode : true };
+}
 
 // ---------------------------------------------------------------------------
 // Valuation — derived from the live financial ledger + the knowledge base

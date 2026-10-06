@@ -89,7 +89,7 @@ test('every business-data list starts empty', () => {
 
 test('voice is opt-in: the always-listening microphone and spoken greeting are off by default', () => {
   assert.equal(d.DEFAULT_SETTINGS.notifications.voice, false);
-  assert.equal(d.DEFAULT_SETTINGS.autonomousMode, false);
+  assert.equal(d.DEFAULT_SETTINGS.autonomousMode, true);
 });
 
 // ── T32: country-aware tax defaults ───────────────────────────────────────────────────────────────────────────────────

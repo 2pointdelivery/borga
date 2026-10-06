@@ -127,11 +127,11 @@ export function SettingsTab() {
                 Let agents act on the company&apos;s behalf. Outbound vendor payments of {AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD.toLocaleString()}+ and every outbound email to a customer or vendor are held in Approvals for your sign-off instead of executing immediately.
               </p>
             </div>
-            <Switch checked={!!settings.autonomousMode} onCheckedChange={(v) => setSettings({ autonomousMode: v })} />
+            <Switch checked={!!settings.autonomousMode} onCheckedChange={(v) => setSettings({ autonomousMode: v, autonomousModeChosen: true })} />
           </div>
           {settings.autonomousMode && (
             <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
-              Autonomous mode is on — check Overview → Approvals regularly, held payments and sends don&apos;t go out on their own.
+              Autonomous mode is on (the default). Check Overview → Approvals regularly: held payments and sends don&apos;t go out on their own, and turning it off lets them go out without sign-off.
             </p>
           )}
         </Card>

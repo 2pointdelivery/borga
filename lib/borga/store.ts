@@ -86,6 +86,7 @@ INITIAL_APPROVALS,
   DEFAULT_COMPOSIO,
   DEFAULT_ELEVENLABS,
   DEFAULT_SETTINGS,
+  normalizeSettings,
   INITIAL_CALLS,
   KNOWLEDGE_SEED,
   KNOWLEDGE_QUESTIONS,
@@ -3137,6 +3138,8 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       // The KPI set is completed against the best-practice baseline (missing KPIs added, unset targets filled) and saved back,
       // so every company has the full set, in the database as well as on screen.
       const kpiSet = completeKpiGroups(d.kpis as KpiGroup[] | undefined);
+      const settingsNow = normalizeSettings(d.settings as Partial<SettingsState> | undefined);
+      const settingsChanged = !!d.settings && (d.settings as SettingsState).autonomousMode !== settingsNow.autonomousMode;
       const agentsChanged = !!dbAgents && JSON.stringify(agents) !== JSON.stringify(dbAgents);
       set({
         synced: true,
@@ -3174,7 +3177,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         knowledge: d.knowledge ?? KNOWLEDGE_SEED,
         kbQuestions: d.kbquestions ?? KNOWLEDGE_QUESTIONS,
         memories: Array.isArray(d.memories) ? d.memories : INITIAL_MEMORIES,
-        settings: d.settings ?? DEFAULT_SETTINGS,
+        settings: settingsNow,
         // Once a non-empty agent list has been saved to the DB, trust it fully
         // so deletions of built-in agents persist instead of being re-inserted.
         // Nadia (fundraising) is a required built-in and is re-inserted after Zed.
@@ -3239,6 +3242,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       // Persist the corrected agent list (with Nadia) back to the cloud DB.
       if (agentsChanged) persist('agents', agents);
       if (kpiSet.changed) persist('kpis', kpiSet.groups);
+      if (settingsChanged) persist('settings', settingsNow);
     } catch {
       // Never leave the shell stuck on the loading spinner. Surface the app
       // with whatever local state we have so the user can recover.
