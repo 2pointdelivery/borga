@@ -7,6 +7,7 @@ import { userWsKey } from './keys';
 import { getApiKey, decryptSecret } from './secrets';
 import { mcpCallTool } from './mcp-client';
 import { assertPublicUrl, fetchPublic, readTextCapped } from './safe-url';
+import { composioScope, inScope } from './composio-scope';
 import type { Task, Lead, AgentMemory, Approval, KnowledgeEntry, ActivityEvent, SettingsState, McpServer, ScheduledTask } from './data';
 import { INITIAL_TASKS, INITIAL_LEADS, KNOWLEDGE_SEED, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from './data';
 import { analyzeOpportunity, draftApplication as draftFundingApplication, loadOpportunities, runFullPipeline } from './fundraising-pipeline';
@@ -738,11 +739,13 @@ ${String(params.body)}`, author: agentName });
       let matchedConnection = false;
       let connectedAppsList: string[] | null = null;
       try {
-        const accRes = await fetch(`${base}/connected_accounts?limit=50`, { headers, signal: AbortSignal.timeout(15000) });
+        const accRes = await fetch(`${base}/connected_accounts?limit=200`, { headers, signal: AbortSignal.timeout(15000) });
         if (accRes.ok) {
           const accData = (await accRes.json()) as { items?: any[] } | any[];
           const accounts: any[] = Array.isArray(accData) ? accData : accData.items ?? [];
-          const active = accounts.filter((a) => String(a.status ?? '').toUpperCase() === 'ACTIVE');
+          // only this user's own connections: the Composio project is shared by every company
+          const scope = composioScope(userId);
+          const active = accounts.filter((a) => String(a.status ?? '').toUpperCase() === 'ACTIVE' && inScope(scope, a));
           const slugOf = (a: any) => String(a.toolkit?.slug ?? a.toolkit_slug ?? a.appName ?? '').toLowerCase();
           connectedAppsList = [...new Set(active.map(slugOf).filter(Boolean))];
           const match = active.find((a) => slugOf(a) === app);

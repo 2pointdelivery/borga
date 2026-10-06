@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { composioScope, inScope, scopedEntity } from '@/lib/borga/composio-scope';
+import { NextResponse, type NextRequest } from 'next/server';
 import { getApiKey, setApiKey, isAllowedKey } from '@/lib/borga/secrets';
-import { featureGate } from '@/lib/borga/features-server';
+import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 import { composioWorkspaceSession } from '@/lib/borga/session';
 import {
   buildFacebookCommentArgs,
@@ -156,7 +157,7 @@ const itemsOf = (data: unknown): Record<string, unknown>[] => {
 /** Connection id arrives as appName (older callers) or connectionId. */
 const connectionRef = (body: Body) => (body.appName ?? body.connectionId ?? '').trim();
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const off = await featureGate('composio', null, null);
   if (off) return off;
   let body: Body = {};
@@ -201,6 +202,26 @@ export async function POST(req: Request) {
 
   const baseStr = normalizeBase(rawBase);
   const action = body.action ?? 'list';
+
+  // One Composio project (the deployment's key) serves every company, and Composio keeps connected accounts under an "entity" id.
+  // The dashboard sends ids like "workspace-inbox" that are the same for everybody, so without this one company's connected
+  // Gmail or social accounts would be used by another. While the deployment key is in use, every entity id is therefore prefixed
+  // with a hash of the signed-in user, and only accounts under that prefix are ever listed, used or changed. A company with its
+  // own Composio key has its own project and needs no prefix.
+  const callerId = await sessionUserId(req);
+  const scope = composioScope(callerId, keyFromServer && !customHost);
+  const ent = (raw?: string) => scopedEntity(scope, raw);
+  const unscope = (id: string) => (scope && id.startsWith(scope) ? id.slice(scope.length) : id);
+  /** Whether a connected-account id belongs to this caller. Always true when no scope applies. */
+  const ownsAccount = async (id: string): Promise<boolean> => {
+    if (!scope) return true;
+    if (!id) return false;
+    const r = await upstreamJson(`${baseStr}/connected_accounts/${encodeURIComponent(id)}`, effectiveApiKey);
+    if (!r.ok) return false;
+    const a = r.data as Record<string, unknown>;
+    return inScope(scope, a);
+  };
+  const notYours = () => NextResponse.json({ ok: false, error: 'That connection was not found for this company.' }, { status: 404 });
 
   // 'validate' deliberately needs no key: it reports whether the SERVER key works,
   // so UIs can enable Composio features without a per-workspace key saved.
@@ -301,9 +322,9 @@ export async function POST(req: Request) {
     }
 
     const listAccounts = async () => {
-      const upstream = await upstreamJson(`${baseStr}/connected_accounts?limit=50`, effectiveApiKey);
+      const upstream = await upstreamJson(`${baseStr}/connected_accounts?limit=200`, effectiveApiKey);
       if (!upstream.ok) return upstream;
-      const accounts = itemsOf(upstream.data).map((a) => {
+      const accounts = itemsOf(upstream.data).filter((a) => inScope(scope, a)).map((a) => {
         const toolkit = (a.toolkit ?? {}) as { slug?: string; name?: string };
         return {
           id: a.id,
@@ -323,7 +344,7 @@ export async function POST(req: Request) {
         console.error('Composio accounts error', upstream.status, upstream.text.slice(0, 200));
         return handleUpstreamError(upstream.status, upstream.text, 'Failed to fetch connected accounts.');
       }
-      return NextResponse.json({ ok: true, action: 'accounts', accounts: upstream.accounts });
+      return NextResponse.json({ ok: true, action: 'accounts', accounts: upstream.accounts.map((a) => ({ ...a, entityId: unscope(String(a.entityId ?? '')) })) });
     }
 
     if (action === 'connectionStatus') {
@@ -333,6 +354,7 @@ export async function POST(req: Request) {
         return reject('connectionStatus', 'connectionId is required for connectionStatus action.');
       }
 
+      if (!(await ownsAccount(connectionId))) return notYours();
       const upstream = await upstreamJson(`${baseStr}/connected_accounts/${encodeURIComponent(connectionId)}`, effectiveApiKey);
       if (!upstream.ok) {
         if (upstream.status === 404) {
@@ -351,6 +373,7 @@ export async function POST(req: Request) {
         return reject('refreshToken', 'connectionId is required for refreshToken action.');
       }
 
+      if (!(await ownsAccount(connectionId))) return notYours();
       const upstream = await upstreamJson(`${baseStr}/connected_accounts/${encodeURIComponent(connectionId)}/refresh`, effectiveApiKey, { method: 'POST' });
       if (!upstream.ok) {
         console.error('Composio token refresh error', upstream.status, upstream.text.slice(0, 200));
@@ -361,7 +384,7 @@ export async function POST(req: Request) {
 
     if (action === 'connect') {
       const appName = (body.appName ?? '').trim().toLowerCase();
-      const entityId = (body.entityId ?? 'default').trim() || 'default';
+      const entityId = ent(body.entityId);
       const callbackUrl = (body.callbackUrl ?? '').trim();
       if (!appName) {
         return reject('connect', 'appName is required for connect action.');
@@ -414,6 +437,7 @@ export async function POST(req: Request) {
         return reject('disconnect', 'connectionId is required for disconnect action.');
       }
 
+      if (!(await ownsAccount(connectionId))) return notYours();
       const upstream = await upstreamJson(`${baseStr}/connected_accounts/${encodeURIComponent(connectionId)}`, effectiveApiKey, { method: 'DELETE' });
       if (!upstream.ok) {
         console.error('Composio disconnect error', upstream.status);
@@ -436,13 +460,15 @@ export async function POST(req: Request) {
 
     if (action === 'execute') {
       const actionId = (body.appName ?? '').trim(); // reuse appName field for the TOOL SLUG
-      const entityId = (body.entityId ?? 'default').trim() || 'default';
+      const entityId = ent(body.entityId);
       const toolParams = (body.params ?? {}) as Record<string, unknown>;
       if (!actionId) {
         return reject('execute', 'actionId is required for execute action.');
       }
 
-      const upstream = await executeTool(actionId, toolParams, entityId, body.connectedAccountId?.trim() || undefined);
+      const chosenAccount = body.connectedAccountId?.trim() || undefined;
+      if (chosenAccount && !(await ownsAccount(chosenAccount))) return notYours();
+      const upstream = await executeTool(actionId, toolParams, entityId, chosenAccount);
       if (!upstream.ok) {
         console.error('Composio execute error', upstream.status, upstream.text.slice(0, 200));
         if (upstream.status === 404) {
@@ -464,15 +490,15 @@ export async function POST(req: Request) {
         (a) => String(a.appName ?? '').toLowerCase() === toolkit.toLowerCase()
           && String(a.entityId ?? '') === userId
           && String(a.status ?? '').toUpperCase() === 'ACTIVE',
-      ) ?? upstream.accounts.find(
+      ) ?? (scope ? null : upstream.accounts.find(
         (a) => String(a.appName ?? '').toLowerCase() === toolkit.toLowerCase()
           && String(a.status ?? '').toUpperCase() === 'ACTIVE',
-      ) ?? null;
+      )) ?? null;
     };
 
     if (action === 'socialStatus') {
       // One call for the Social tab: ACTIVE account per social toolkit for this user.
-      const userId = (body.entityId ?? 'default').trim() || 'default';
+      const userId = ent(body.entityId);
       const upstream = await listAccounts();
       if (!upstream.ok) {
         console.error('Composio socialStatus error', upstream.status, upstream.text.slice(0, 200));
@@ -497,7 +523,7 @@ export async function POST(req: Request) {
       // as a scheduled draft instead of failing.
       const channel = (body.channel ?? '').trim().toLowerCase();
       const text = (body.text ?? '').trim();
-      const userId = (body.entityId ?? 'default').trim() || 'default';
+      const userId = ent(body.entityId);
       if (!channel || !text) {
         return reject('socialPost', 'channel and text are required.');
       }
@@ -563,7 +589,7 @@ export async function POST(req: Request) {
       const channel = (body.channel ?? '').trim().toLowerCase();
       const text = (body.text ?? '').trim();
       const replyTo = (body.replyTo ?? '').trim() || (body.pageId ?? '').trim();
-      const userId = (body.entityId ?? 'default').trim() || 'default';
+      const userId = ent(body.entityId);
       if (!channel || !text || !replyTo) {
         return reject('socialReply', 'channel, text and replyTo are required.');
       }
@@ -594,7 +620,7 @@ export async function POST(req: Request) {
     if (action === 'mcpSocialSetup') {
       // One-click Composio-hosted MCP for social: managed auth configs →
       // "Borga Social" MCP server → scoped URL for this user. Idempotent.
-      const userId = (body.entityId ?? 'default').trim() || 'default';
+      const userId = ent(body.entityId);
       const managedSlugs = ['linkedin', 'facebook', 'instagram', 'youtube', 'pinterest'];
       const authConfigIds: string[] = [];
       const manual: string[] = [];

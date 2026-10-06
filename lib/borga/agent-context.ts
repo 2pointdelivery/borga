@@ -1,4 +1,5 @@
 import 'server-only';
+import { composioScope, inScope } from './composio-scope';
 import { getAllBorgaStates, getBorgaState, getBorgaStatesByPrefix, scopedKey } from './persistence';
 import { userWsKey } from './keys';
 import { resolveProviderConfig, resolveApiKey } from './llm-providers';
@@ -45,18 +46,19 @@ export interface AgentContext {
  * returns null (not "no apps") on any failure so the prompt can say "unknown"
  * rather than falsely claiming nothing is connected.
  */
-async function getConnectedComposioApps(): Promise<string[] | null> {
+async function getConnectedComposioApps(userId?: string | null): Promise<string[] | null> {
   try {
     const apiKey = await getApiKey('COMPOSIO_API_KEY');
     if (!apiKey) return [];
-    const res = await fetch('https://backend.composio.dev/api/v3/connected_accounts?limit=50', {
+    const res = await fetch('https://backend.composio.dev/api/v3/connected_accounts?limit=200', {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { items?: any[] } | any[];
     const accounts: any[] = Array.isArray(data) ? data : data.items ?? [];
-    const active = accounts.filter((a) => String(a.status ?? '').toUpperCase() === 'ACTIVE');
+    const scope = composioScope(userId);
+    const active = accounts.filter((a) => String(a.status ?? '').toUpperCase() === 'ACTIVE' && inScope(scope, a));
     const slugs = active.map((a) => String(a.toolkit?.slug ?? a.toolkit_slug ?? a.appName ?? '').toLowerCase()).filter(Boolean);
     return [...new Set(slugs)];
   } catch {
@@ -204,7 +206,7 @@ export async function buildAgentContext(agentId: string, ws?: string | null, use
     .map((i) => `- [${i.severity.toUpperCase()}][${i.area}] ${i.title} — ${i.detail} Suggested action: ${i.action}`)
     .join('\n');
 
-  const connectedApps = await getConnectedComposioApps();
+  const connectedApps = await getConnectedComposioApps(userId);
   const composioAppsSummary = connectedApps === null
     ? 'Unable to check right now — attempt composio_action normally; it will report if the app is not connected.'
     : connectedApps.length > 0
