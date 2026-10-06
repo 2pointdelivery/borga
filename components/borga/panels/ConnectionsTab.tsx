@@ -11,6 +11,7 @@ import { toast } from '@/lib/toast-bus';
 import type { ProviderDef, ProviderId } from '@/lib/borga/providers';
 import { SectionTitle } from '../bits';
 import { Field } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface Status {
   provider: ProviderId;
@@ -36,6 +37,7 @@ function copy(text: string) {
 function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: ProviderDef; status: Status; webhookUrl?: string; ws: string; onChange: () => void }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<'save' | 'test' | 'delete' | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const url = `/api/borga/connections?ws=${encodeURIComponent(ws)}`;
   const call = async (body: Record<string, unknown>) => {
     const res = await fetch(url, { method: 'POST', headers: HEADERS, body: JSON.stringify(body) });
@@ -61,7 +63,6 @@ function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: Provider
     onChange();
   };
   const remove = async () => {
-    if (!window.confirm(`Remove the saved ${def.label} credentials?`)) return;
     setBusy('delete');
     await call({ action: 'delete', provider: def.id });
     setBusy(null);
@@ -144,11 +145,20 @@ function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: Provider
           {busy === 'test' && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Test connection
         </Button>
         {status.configured && (
-          <Button size="sm" variant="ghost" onClick={remove} disabled={busy !== null} className="gap-1.5 text-rose-600">
+          <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(true)} disabled={busy !== null} className="gap-1.5 text-rose-600">
             <Trash2 className="h-3.5 w-3.5" /> Remove
           </Button>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title={`Remove the saved ${def.label} credentials?`}
+        description="Integrations using them stop working until you save new ones."
+        confirmLabel="Remove credentials"
+        onConfirm={() => { setConfirmRemove(false); void remove(); }}
+      />
     </Card>
   );
 }

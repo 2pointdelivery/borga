@@ -145,7 +145,7 @@ export function BookClosureTab() {
     } else {
       const closingEntry = {
         id: closingId,
-        date: period.end.slice(5).replace('-', '/'),
+        date: period.end.slice(0, 10),
         dateIso: period.end,
         memo: `Year/period-end closing entry — ${period.label}`,
         reference: `CLOSE-${period.label.replace(/\s/g, '-')}`,

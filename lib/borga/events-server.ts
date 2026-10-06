@@ -4,8 +4,7 @@ import { getBorgaState, setBorgaState } from './persistence';
 import { userWsKey } from './keys';
 import { encryptSecret, decryptSecret } from './secrets';
 import { WEBHOOK_AGENT_ROUTING, type ActivityEvent, type Webhook } from './data';
-import { buildAgentContext } from './agent-context';
-import { executeAgentRun, persistRun, auditRun } from './agent-runner';
+import { enqueueRun } from './run-queue';
 import { loadFeatures } from './features-server';
 
 /**
@@ -110,14 +109,12 @@ export async function ingestEvent(u: string, ws: string, source: string, event: 
     let ok = false;
     try {
       const goal = eventToGoal(source, event, payload);
-      const ctx = await buildAgentContext(agentId, ws, u, goal);
-      const startedAt = new Date().toISOString();
-      const run = await executeAgentRun(`run-${Date.now()}-${randomBytes(2).toString('hex')}`, agentId, ctx?.agent.name ?? agentId, goal, 4, ctx, 'webhook', startedAt, ws, 'the company', u);
-      await persistRun(run, ws, u);
-      await auditRun(run, ctx?.agent.model || null, null, goal.length, ws, u);
-      ok = run.status !== 'error';
+      // Runs go through the worker queue now — visible in Runs & Queue, bounded
+      // concurrency, cancellable — instead of a detached inline execution.
+      await enqueueRun({ agentId, goal, triggeredBy: 'webhook', ws, userId: u, maxSteps: 4 });
+      ok = true;
     } catch (e) {
-      console.error('[inbound-event] agent run failed', e);
+      console.error('[inbound-event] enqueue failed', e);
     }
     const latest = await listInboundEvents(u, ws);
     await setBorgaState(queueKey(u, ws), { deliveries: latest.map((x) => (x.id === entry.id ? { ...x, processed: true, taskCreated: ok } : x)) });

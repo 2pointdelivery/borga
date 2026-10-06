@@ -12,6 +12,7 @@ import {
 import { userWsKey } from './keys';
 import { encryptSecret, decryptSecret } from './secrets';
 import { sendThreadedEmail, isEmailConfigured } from '@/lib/auth/mailer';
+import { renderTicketReply } from './email-core';
 import type { ProactiveNotice } from './data';
 import {
   DEFAULT_TICKET_SETTINGS,
@@ -147,6 +148,21 @@ export function verifyInboundToken(provided: string, expected: string): boolean 
 export async function getTicket(u: string, ws: string, id: string): Promise<Ticket | null> {
   if (!/^[A-Z][A-Z0-9]{1,9}-\d{1,9}$/.test(id)) return null;
   return getBorgaState<Ticket>(ticketKey(u, ws, id));
+}
+
+/**
+ * Delete a ticket — only closed or resolved ones. Open SLA records stay
+ * auditable: their history must survive, so active tickets cannot be deleted
+ * (resolve or close them first).
+ */
+export async function deleteTicket(u: string, ws: string, id: string): Promise<{ ok: boolean; error?: string }> {
+  const ticket = await getTicket(u, ws, id);
+  if (!ticket) return { ok: false, error: 'Ticket not found' };
+  if (ticket.status !== 'closed' && ticket.status !== 'resolved') {
+    return { ok: false, error: `Only closed or resolved tickets can be deleted — ${id} is ${ticket.status}. SLA history stays auditable.` };
+  }
+  await deleteBorgaState(ticketKey(u, ws, id));
+  return { ok: true };
 }
 
 async function saveTicket(u: string, ws: string, t: Ticket): Promise<Ticket> {
@@ -323,8 +339,6 @@ function fromHeader(s: TicketSettings): string | undefined {
   return s.mailbox.address ? `${s.mailbox.displayName.replace(/[<>"\r\n]/g, '') || 'Support'} <${s.mailbox.address}>` : undefined;
 }
 
-const escapeHtml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 async function sendToRequester(
   u: string,
   ws: string,
@@ -339,8 +353,7 @@ async function sendToRequester(
   const r = await sendThreadedEmail({
     to: t.requesterEmail,
     subject: `Re: ${ticketToken(t.id)} ${normalizeSubject(t.subject)}`,
-    text: body,
-    html: `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap">${escapeHtml(body)}</div>`,
+    ...renderTicketReply({ body, companyName: settings.mailbox.displayName || 'Support', ticketRef: t.id }),
     from: fromHeader(settings),
     replyTo: settings.mailbox.address || undefined,
     inReplyTo: refs[refs.length - 1],

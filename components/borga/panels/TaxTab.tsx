@@ -5,6 +5,7 @@ import { Plus, Pencil, Trash2, Star, Check } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ import {
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface ProfileForm {
   id: string;
@@ -43,11 +45,12 @@ export function TaxTab() {
   const {
     taxProfiles, defaultTaxProfileId,
     addTaxProfile, updateTaxProfile, deleteTaxProfile, setDefaultTaxProfile,
-    log, activeWorkspace,
+    invoices, bills, log, activeWorkspace,
   } = useBorga();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<TaxProfile | null>(null);
+  const [confirmDeleteProfile, setConfirmDeleteProfile] = useState<TaxProfile | null>(null);
   const [form, setForm] = useState<ProfileForm>({
     id: '', name: '', rate: '0', category: 'vat', description: '',
   });
@@ -79,13 +82,26 @@ export function TaxTab() {
   };
 
   const handleDelete = (p: TaxProfile) => {
-    if (taxProfiles.length <= 1) return; // keep at least one profile
+    setConfirmDeleteProfile(p);
+  };
+
+  const doDeleteProfile = () => {
+    const p = confirmDeleteProfile;
+    if (!p || taxProfiles.length <= 1) return; // keep at least one profile
     deleteTaxProfile(p.id);
     if (defaultTaxProfileId === p.id && taxProfiles.length > 1) {
       const next = taxProfiles.find((t) => t.id !== p.id);
       if (next) setDefaultTaxProfile(next.id);
     }
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Tax profile removed: ${p.name}.` });
+    setConfirmDeleteProfile(null);
+  };
+
+  /** Invoices and bills still pointing at this profile (shown in the delete warning). */
+  const profileUsage = (id: string) => {
+    const inv = invoices.filter((i) => (i.taxProfileIds ?? (i.taxProfileId ? [i.taxProfileId] : [])).includes(id)).length;
+    const bill = bills.filter((b) => (b.taxProfileIds ?? (b.taxProfileId ? [b.taxProfileId] : [])).includes(id)).length;
+    return { inv, bill };
   };
 
   const defaultProfile = taxProfiles.find((t) => t.id === defaultTaxProfileId);
@@ -212,7 +228,8 @@ export function TaxTab() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Notes</label>
-              <Input
+              <Textarea
+                rows={2}
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
                 placeholder="Optional description"
@@ -228,6 +245,22 @@ export function TaxTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteProfile}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteProfile(null); }}
+        title={`Delete profile "${confirmDeleteProfile?.name ?? ''}"?`}
+        description={(() => {
+          if (!confirmDeleteProfile) return '';
+          const u = profileUsage(confirmDeleteProfile.id);
+          const refs = u.inv + u.bill;
+          return refs > 0
+            ? `Still used by ${u.inv} invoice${u.inv !== 1 ? 's' : ''} and ${u.bill} bill${u.bill !== 1 ? 's' : ''} — they keep a snapshot of the rate, but new documents can no longer pick it.`
+            : 'Not referenced by any invoice or bill. The profile is removed permanently.';
+        })()}
+        confirmLabel="Delete profile"
+        onConfirm={doDeleteProfile}
+      />
     </div>
   );
 }

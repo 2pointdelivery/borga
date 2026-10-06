@@ -99,6 +99,7 @@ import {
   type Workflow,
   type BookClosure,
   type TimeEntry,
+  type PayrollRun,
   type TeamInvite,
   type TaxProfile,
   type Budget,
@@ -112,6 +113,7 @@ import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
 import { EMPTY_FILINGS, type FilingsState } from '@/lib/borga/filing-catalog';
 import { billingInfo, paymentRequired } from '@/lib/borga/billing-server';
 import { EMPTY_FIXED_ASSETS, type FixedAssetsState } from '@/lib/borga/fixed-asset-journals';
+import { INITIAL_WAREHOUSES, type InventoryItem, type StockMovement, type PosSale, type Warehouse } from '@/lib/borga/inventory';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
 
@@ -125,8 +127,9 @@ export const WORKSPACE_ENTITIES = [
   'activity', 'memories', 'scheduledTasks', 'agentRuns', 'notices',
   'employees', 'leave', 'invoices', 'messagingChannels', 'secureChats',
   'customers', 'contacts', 'vendors', 'bills', 'coa', 'journals', 'bankAccounts', 'bankTxns',
-  'workflows', 'closures', 'timeEntries', 'invites', 'taxProfiles', 'budgets', 'revenueTracks', 'projects', 'reconciliationRules',
+  'workflows', 'closures', 'timeEntries', 'payrollRuns', 'invites', 'taxProfiles', 'budgets', 'revenueTracks', 'projects', 'reconciliationRules',
   'mcpServers', 'recurringInvoices', 'recurringBills', 'filings', 'fixedAssets',
+  'inventoryItems', 'warehouses', 'stockMovements', 'posSales',
 ] as const;
 
 const GLOBAL_ENTITIES = ['workspaces'] as const;
@@ -180,7 +183,8 @@ const DEFAULT_STATE = {
   bankTxns: INITIAL_BANK_TXNS,
   workflows: INITIAL_WORKFLOWS,
   closures: [],
-  timeEntries: [],
+    timeEntries: [],
+    payrollRuns: [],
   invites: [],
   taxProfiles: INITIAL_TAX_PROFILES,
   budgets: INITIAL_BUDGETS,
@@ -193,6 +197,10 @@ const DEFAULT_STATE = {
   filings: EMPTY_FILINGS,
   fixedAssets: EMPTY_FIXED_ASSETS,
   notices: INITIAL_NOTICES,
+  inventoryItems: [] as InventoryItem[],
+  warehouses: INITIAL_WAREHOUSES,
+  stockMovements: [] as StockMovement[],
+  posSales: [] as PosSale[],
 };
 
 /** Resolve the authenticated user id from the session cookie. */
@@ -309,6 +317,7 @@ export async function GET(req: NextRequest) {
     workflows: get<Workflow[]>('workflows') ?? DEFAULT_STATE.workflows,
     closures: get<BookClosure[]>('closures') ?? DEFAULT_STATE.closures,
     timeEntries: get<TimeEntry[]>('timeEntries') ?? DEFAULT_STATE.timeEntries,
+    payrollRuns: get<PayrollRun[]>('payrollRuns') ?? DEFAULT_STATE.payrollRuns,
     invites: get<TeamInvite[]>('invites') ?? DEFAULT_STATE.invites,
     taxProfiles: get<TaxProfile[]>('taxProfiles') ?? DEFAULT_STATE.taxProfiles,
     budgets: get<Budget[]>('budgets') ?? DEFAULT_STATE.budgets,
@@ -320,6 +329,10 @@ export async function GET(req: NextRequest) {
     recurringBills: get<RecurringBill[]>('recurringBills') ?? DEFAULT_STATE.recurringBills,
     filings: get<FilingsState>('filings') ?? DEFAULT_STATE.filings,
     fixedAssets: get<FixedAssetsState>('fixedAssets') ?? DEFAULT_STATE.fixedAssets,
+    inventoryItems: get<InventoryItem[]>('inventoryItems') ?? DEFAULT_STATE.inventoryItems,
+    warehouses: get<Warehouse[]>('warehouses') ?? DEFAULT_STATE.warehouses,
+    stockMovements: get<StockMovement[]>('stockMovements') ?? DEFAULT_STATE.stockMovements,
+    posSales: get<PosSale[]>('posSales') ?? DEFAULT_STATE.posSales,
   });
 }
 

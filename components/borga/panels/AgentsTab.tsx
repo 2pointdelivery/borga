@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Plus, BrainCircuit, Zap, Pencil, Check, X, Settings2, Phone, Sparkles, GraduationCap } from 'lucide-react';
+import { Plus, Search, BrainCircuit, Zap, Pencil, Check, X, Settings2, Phone, Sparkles, GraduationCap } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,6 +14,8 @@ import { ELEVENLABS_VOICES } from '@/lib/borga/data';
 import { deriveBusinessInsights, insightsToMemories, type InsightSeverity } from '@/lib/borga/insights';
 import { AgentAvatar, StatusPill, SectionTitle } from '../bits';
 import { AgentEditDialog } from './AgentEditDialog';
+import { SearchSelect } from '../SearchSelect';
+import { toast } from '@/lib/toast-bus';
 import { cn } from '@/lib/utils';
 
 const PALETTE = ['#6366f1', '#22d3ee', '#f472b6', '#f59e0b', '#34d399', '#a78bfa', '#fb7185', '#38bdf8'];
@@ -32,6 +34,8 @@ export function AgentsTab() {
   const [callContact, setCallContact] = useState('');
   const [callLead, setCallLead] = useState('');
   const [callLeadId, setCallLeadId] = useState('');
+  const [q, setQ] = useState('');
+  const [group, setGroup] = useState<string>('all');
   const voice = ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice) ?? ELEVENLABS_VOICES[0];
 
   const selectCallLead = (id: string) => {
@@ -45,11 +49,16 @@ export function AgentsTab() {
 
   const placeCallNow = () => {
     if (!callAgent) return;
+    const number = callContact.trim();
+    if (!number) {
+      toast({ title: 'Enter a phone number', description: 'Pick a lead with a number or type one in manually.', variant: 'warning' });
+      return;
+    }
     placeCall({
       agentId: callAgent.id,
       agentName: callAgent.name,
-      contact: callContact.trim() || '+1 555 0100',
-      leadName: callLead.trim() || 'Client',
+      contact: number,
+      leadName: callLead.trim() || number,
     });
     setCallAgent(null);
     setCallContact('');
@@ -72,7 +81,8 @@ export function AgentsTab() {
       accuracy: 0,
       brainLinked: true,
       description: 'Custom agent added by the user.',
-      instructions: instructions.trim() || 'Follow the shared brain and cooperate with the rest of the fleet.',
+      instructions: instructions.trim() || 'Delegate goals to the right specialist with delegate(toAgentId, goal); store durable observations with store_memory; check the knowledge base before answering; hold consequential actions for approval.',
+      persona: 'agents-orchestrator.md',
     };
     addAgent(a);
     log({ agentId: a.id, agentName: a.name, actor: 'user', kind: 'system', message: `Agent ${a.name} provisioned and linked to the shared brain.` });
@@ -130,6 +140,21 @@ export function AgentsTab() {
     log({ agentId: 'a-fundraising', agentName: 'Nadia', actor: 'system', kind: 'learn', message: `Trained ${agents.length} agents on ${fresh.length} new business insight${fresh.length === 1 ? '' : 's'} across finance, sales, ops and people.` });
   };
 
+  // The fleet is large (the specialist bench alone is dozens), so people find an agent by name, skill or group.
+  const groups = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of agents) { const g = a.type ?? a.department; m.set(g, (m.get(g) ?? 0) + 1); }
+    return [...m.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+  }, [agents]);
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return agents.filter((a) => {
+      if (group !== 'all' && (a.type ?? a.department) !== group) return false;
+      if (!needle) return true;
+      return [a.name, a.role, a.department, a.type ?? '', a.description ?? '', ...(a.skills ?? [])].some((t) => t.toLowerCase().includes(needle));
+    });
+  }, [agents, q, group]);
+
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -164,8 +189,27 @@ export function AgentsTab() {
         </div>
       </Card>
 
+      <div className="space-y-2">
+        <div className="relative max-w-sm">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents by name, role or skill" className="pl-8" aria-label="Search agents" />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {[['all', agents.length] as [string, number], ...groups].map(([g, n]) => (
+            <button
+              key={g}
+              onClick={() => setGroup(g)}
+              className={cn('rounded-full border px-2.5 py-1 text-xs transition-colors', group === g ? 'border-primary bg-primary text-primary-foreground' : 'hover:bg-accent')}
+            >
+              {g === 'all' ? 'All' : g} <span className="opacity-70">{n}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {shown.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No agent matches &ldquo;{q}&rdquo;{group !== 'all' ? ` in ${group}` : ''}.</p>}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {agents.map((a) => (
+        {shown.map((a) => (
           <Card
             key={a.id}
             className={cn(
@@ -196,7 +240,8 @@ export function AgentsTab() {
                         setEditingId(a.id);
                         setEditName(a.name);
                       }}
-                      className="text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                      aria-label={`Rename ${a.name}`}
+                      className="text-muted-foreground opacity-0 transition-opacity hover:text-primary focus-visible:opacity-100 group-hover:opacity-100"
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
@@ -327,20 +372,22 @@ export function AgentsTab() {
           <div className="space-y-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground">Lead / customer (auto-fills number)</label>
-              <select
+              <SearchSelect
+                options={[
+                  { value: '', label: 'Manual entry' },
+                  ...leads.filter((l) => l.stage !== 'lost').map((l) => ({ value: l.id, label: `${l.name} — ${l.company}`, detail: l.phone || 'no number' })),
+                ]}
                 value={callLeadId}
-                onChange={(e) => selectCallLead(e.target.value)}
-                className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="">Custom / manual entry—</option>
-                {leads.filter((l) => l.stage !== 'lost').map((l) => (
-                  <option key={l.id} value={l.id}>{l.name} — {l.company}</option>
-                ))}
-              </select>
+                onChange={selectCallLead}
+                placeholder="Manual entry"
+                searchPlaceholder="Search leads"
+                clearable={false}
+                className="mt-1"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Phone number to dial</label>
-              <Input value={callContact} onChange={(e) => setCallContact(e.target.value)} placeholder="+1 555 0100" className="mt-1 font-mono" />
+              <Input value={callContact} onChange={(e) => setCallContact(e.target.value)} placeholder="Phone number" className="mt-1 font-mono" />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Lead / contact name</label>

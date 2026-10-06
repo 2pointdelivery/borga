@@ -38,8 +38,8 @@ export async function resolveBrain(
 
 /** Friendly, non-crashing failure text — never a stack trace to the user. */
 export function brainUnavailableMessage(providerId?: string, detail?: string): string {
-  if (!providerId || providerId === 'llm-demo') {
-    return 'Borga is in demo mode (no AI provider connected). Add a provider key in Integrations → AI & Voice for open-ended answers.';
+  if (!providerId) {
+    return 'Borga has no AI provider connected. Add one in Integrations → AI & Voice for open-ended answers.';
   }
   const label = providerId.replace('llm-', '');
   // Free tiers (especially the no-account ones) throttle bursts with 429 or 402: say so, instead of a vague "trouble reaching".

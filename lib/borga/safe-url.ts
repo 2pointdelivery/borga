@@ -35,6 +35,15 @@ export async function assertPublicHttpsUrl(raw: string): Promise<URL> {
   return url;
 }
 
+/** Throws unless the URL is http(s) (https only unless `allowHttp`), carries no credentials and resolves only to public addresses. */
+export async function assertPublicUrl(raw: string, opts: { allowHttp?: boolean } = {}): Promise<URL> {
+  const url = new URL(raw);
+  if (url.protocol !== 'https:' && !(opts.allowHttp && url.protocol === 'http:')) throw new Error('Only https:// URLs are allowed.');
+  if (url.username || url.password) throw new Error('URLs with embedded credentials are not allowed.');
+  await assertPublicAddresses(url);
+  return url;
+}
+
 /**
  * Fetches a user-supplied URL without letting it reach internal hosts. Every hop (the first
  * request and each redirect) is re-validated, because a public page can redirect to

@@ -75,3 +75,12 @@ test('readTextCapped stops reading at the limit', async () => {
   assert.ok(text.length <= 1000 && text.length > 0);
   assert.equal(await readTextCapped(new Response('hello')), 'hello');
 });
+
+test('assertPublicUrl refuses the internal forms a hostname regex misses', async () => {
+  const { assertPublicUrl } = await import('./borga/safe-url');
+  for (const u of ['http://[::1]/', 'http://169.254.169.254/latest/meta-data/', 'http://2130706433/', 'http://user:pw@8.8.8.8/', 'ftp://8.8.8.8/']) {
+    await assert.rejects(() => assertPublicUrl(u, { allowHttp: true }), u);
+  }
+  await assert.rejects(() => assertPublicUrl('http://8.8.8.8/'), 'plain http is refused unless allowed');
+  assert.equal((await assertPublicUrl('https://8.8.8.8/')).hostname, '8.8.8.8');
+});

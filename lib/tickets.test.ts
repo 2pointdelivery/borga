@@ -9,6 +9,7 @@ import {
   isAutomatedMail,
   normalizeSubject,
   stripQuotedReply,
+  ticketInsights,
   tokenFromSubject,
   type BusinessHours,
 } from './borga/tickets';
@@ -89,4 +90,65 @@ test('automated mail is recognised', () => {
   assert.equal(isAutomatedMail({ 'list-id': '<x.list>' }, 'a@x.com'), true);
   assert.equal(isAutomatedMail({ 'auto-submitted': 'no' }, 'a@x.com'), false);
   assert.equal(isAutomatedMail({}, 'customer@x.com'), false);
+});
+
+// Per-ticket insights: every line must come from the ticket's own fields.
+
+const premium = DEFAULT_SLA_POLICIES[1]; // 24x7
+const insightTicket = (p: Record<string, unknown>) => ({
+  status: 'open' as const,
+  priority: 'medium' as const,
+  assignee: 'Amy',
+  createdAt: '2026-09-28T10:00:00Z',
+  updatedAt: '2026-09-28T11:00:00Z',
+  firstResponseAt: '2026-09-28T10:30:00Z',
+  resolvedAt: null,
+  reopenCount: 0,
+  source: 'web' as const,
+  requesterEmail: 'c@x.com',
+  comments: [],
+  ...p,
+});
+
+test('a critical unowned ticket with a breached first response leads with danger', () => {
+  const t = insightTicket({ priority: 'critical', assignee: '', firstResponseAt: null, updatedAt: '2026-09-28T11:00:00Z' });
+  const now = at('2026-09-28T12:00:00Z'); // 60m after creation vs 15m critical response target
+  const out = ticketInsights(t, computeSla({ ...t, pauses: [] }, premium, bh, now), now);
+  assert.ok(out.length > 0);
+  assert.equal(out[0].tone, 'danger');
+  assert.ok(out.some((i) => i.text.includes('unowned')), JSON.stringify(out));
+  assert.ok(out.some((i) => i.text.includes('First response breached')), JSON.stringify(out));
+});
+
+test('reopens and idle time are called out with the action they imply', () => {
+  const t = insightTicket({ reopenCount: 2, updatedAt: '2026-09-24T11:00:00Z' });
+  const now = at('2026-09-28T12:00:00Z');
+  const out = ticketInsights(t, computeSla({ ...t, pauses: [] }, premium, bh, now), now);
+  assert.ok(out.some((i) => i.text.includes('Reopened 2×')), JSON.stringify(out));
+  assert.ok(out.some((i) => i.text.includes('No movement in 4d')), JSON.stringify(out));
+});
+
+test('a resolved-over-SLA ticket suggests a retro, and pending names the wait', () => {
+  const late = insightTicket({ status: 'resolved' as const, firstResponseAt: '2026-09-28T13:00:00Z', resolvedAt: '2026-09-28T23:30:00Z', createdAt: '2026-09-28T10:00:00Z' });
+  const outLate = ticketInsights(late, computeSla({ ...late, pauses: [] }, premium, bh, at('2026-09-29T00:00:00Z')), at('2026-09-29T00:00:00Z'));
+  assert.ok(outLate.some((i) => i.text.includes('retro')), JSON.stringify(outLate));
+  const pending = insightTicket({ status: 'pending' as const, updatedAt: '2026-09-28T09:00:00Z' });
+  const outPending = ticketInsights(pending, computeSla({ ...pending, pauses: [] }, premium, bh, at('2026-09-28T12:00:00Z')), at('2026-09-28T12:00:00Z'));
+  assert.ok(outPending.some((i) => i.text.includes('Waiting on the customer')), JSON.stringify(outPending));
+});
+
+test('an email ticket without a requester address warns about delivery', () => {
+  const t = insightTicket({ source: 'email' as const, requesterEmail: '' });
+  const now = at('2026-09-28T12:00:00Z');
+  const out = ticketInsights(t, computeSla({ ...t, pauses: [] }, premium, bh, now), now);
+  assert.ok(out.some((i) => i.text.includes('cannot be delivered')), JSON.stringify(out));
+});
+
+test('insights are danger-first and capped', () => {
+  const t = insightTicket({ priority: 'critical' as const, assignee: '', firstResponseAt: null, reopenCount: 3, source: 'email' as const, requesterEmail: '', status: 'pending' as const, updatedAt: '2026-09-20T10:00:00Z' });
+  const now = at('2026-09-28T12:00:00Z');
+  const out = ticketInsights(t, computeSla({ ...t, pauses: [] }, premium, bh, now), now);
+  assert.ok(out.length <= 5);
+  const rank = { danger: 0, warn: 1, info: 2 };
+  assert.deepEqual(out.map((i) => rank[i.tone]), [...out.map((i) => rank[i.tone])].sort((a, b) => a - b));
 });

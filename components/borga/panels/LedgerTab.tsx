@@ -2,16 +2,18 @@
 
 import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
-import { Plus, Trash2, Download, Search, Ban } from 'lucide-react';
+import { Plus, Trash2, Download, Search, Ban, Pencil } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import {
   Select,
@@ -20,10 +22,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL, type FinanceKind, type PaymentMethod } from '@/lib/borga/data';
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL, type FinanceEntry, type FinanceKind, type PaymentMethod } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
+import { findFinanceRefDuplicates } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
 import { Field, ProjectSelect, AccountSelect } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 const KIND_STYLE: Record<FinanceKind, string> = {
@@ -35,9 +39,16 @@ const KIND_STYLE: Record<FinanceKind, string> = {
 
 const PAGE_SIZE = 12;
 
+let entrySeq = 0;
+/** Unique ledger-entry ids without touching the clock inside the component body. */
+const nextEntryId = () => `f-${Date.now().toString(36)}-${(entrySeq += 1)}`;
+
 export function LedgerTab() {
-  const { finance, addFinanceEntry, deleteFinanceEntry, voidFinanceEntry, log, activeWorkspace, coa } = useBorga();
+  const { finance, addFinanceEntry, updateFinanceEntry, deleteFinanceEntry, voidFinanceEntry, addApproval, log, activeWorkspace, coa } = useBorga();
   const [entryOpen, setEntryOpen] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<FinanceEntry | null>(null);
+  const [confirmDeleteEntry, setConfirmDeleteEntry] = useState<FinanceEntry | null>(null);
+  const [confirmDuplicateRef, setConfirmDuplicateRef] = useState<{ entry: FinanceEntry; matches: number } | null>(null);
   const [form, setForm] = useState({ label: '', amount: '', category: '', kind: 'expense' as FinanceKind, externalRef: '', dueDate: '', paymentMethod: 'bank-transfer' as PaymentMethod, projectId: undefined as string | undefined, accountId: undefined as string | undefined });
   const [query, setQuery] = useState('');
   const [kindFilter, setKindFilter] = useState<'all' | FinanceKind>('all');
@@ -75,25 +86,97 @@ export function LedgerTab() {
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `${filtered.length} ledger entries exported.` });
   };
 
+  const doConfirmDuplicateRef = () => {
+    const p = confirmDuplicateRef;
+    if (!p) return;
+    addFinanceEntry(p.entry);
+    addApproval({
+      id: `ap-dup-${p.entry.id}`,
+      title: `Possible duplicate posting — review ref "${p.entry.externalRef ?? ''}"`,
+      description: `Recorded despite reference "${p.entry.externalRef ?? ''}" already being posted (${p.matches} match${p.matches === 1 ? '' : 'es'}). Please confirm it is a separate posting, not a double entry.`,
+      category: 'spend',
+      amount: p.entry.amount,
+      status: 'pending',
+      submittedBy: 'Ledger',
+      createdAt: new Date().toISOString(),
+    });
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Ledger entry recorded over a duplicate-reference warning (${p.entry.externalRef ?? ''}) — routed to the approval queue for review.` });
+    setConfirmDuplicateRef(null);
+    resetForm();
+    setEntryOpen(false);
+  };
+
   const submit = () => {
     if (!form.label.trim()) return;
-    addFinanceEntry({
-      id: `f-${Date.now()}`,
-      label: form.label.trim(),
-      amount: Number(form.amount) || 0,
-      category: form.category.trim() || 'General',
-      kind: form.kind,
-      dateIso: new Date().toISOString().slice(0, 10),
-      dueDateIso: form.dueDate.trim() || undefined,
-      paymentMethod: form.paymentMethod,
-      createdAt: new Date().toISOString(),
-      externalRef: form.externalRef.trim() || undefined,
-      projectId: form.projectId,
-      accountId: form.accountId,
-    });
-    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Finance entry recorded: ${form.label.trim()} (${form.kind}, ${PAYMENT_METHOD_LABEL[form.paymentMethod]}).` });
+    if (editingEntry) {
+      const ok = updateFinanceEntry(editingEntry.id, {
+        label: form.label.trim(),
+        amount: Number(form.amount) || 0,
+        category: form.category.trim() || 'General',
+        kind: form.kind,
+        dueDateIso: form.dueDate.trim() || undefined,
+        paymentMethod: form.paymentMethod,
+        externalRef: form.externalRef.trim() || undefined,
+        projectId: form.projectId,
+        accountId: form.accountId,
+      });
+      if (ok) log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Ledger entry updated: ${form.label.trim()}.` });
+      resetForm();
+      setEntryOpen(false);
+    } else {
+      const entry: FinanceEntry = {
+        id: nextEntryId(),
+        label: form.label.trim(),
+        amount: Number(form.amount) || 0,
+        category: form.category.trim() || 'General',
+        kind: form.kind,
+        dateIso: new Date().toISOString().slice(0, 10),
+        dueDateIso: form.dueDate.trim() || undefined,
+        paymentMethod: form.paymentMethod,
+        createdAt: new Date().toISOString(),
+        externalRef: form.externalRef.trim() || undefined,
+        projectId: form.projectId,
+        accountId: form.accountId,
+      };
+      const ref = entry.externalRef?.trim() ?? '';
+      if (ref) {
+        const matches = findFinanceRefDuplicates(ref, null, finance);
+        if (matches.length) {
+          setConfirmDuplicateRef({ entry, matches: matches.length });
+          return;
+        }
+      }
+      addFinanceEntry(entry);
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Finance entry recorded: ${form.label.trim()} (${form.kind}, ${PAYMENT_METHOD_LABEL[form.paymentMethod]}).` });
+      resetForm();
+      setEntryOpen(false);
+    }
+  };
+
+  const resetForm = () => {
     setForm({ label: '', amount: '', category: '', kind: 'expense', externalRef: '', dueDate: '', paymentMethod: 'bank-transfer', projectId: undefined, accountId: undefined });
-    setEntryOpen(false);
+    setEditingEntry(null);
+  };
+
+  const openNew = () => {
+    resetForm();
+    setEntryOpen(true);
+  };
+
+  const openEdit = (entry: FinanceEntry) => {
+    setEditingEntry(entry);
+    setForm({
+      label: entry.label,
+      amount: String(entry.amount),
+      category: entry.category,
+      kind: entry.kind,
+      externalRef: entry.externalRef ?? '',
+      dueDate: entry.dueDateIso ?? '',
+      paymentMethod: entry.paymentMethod ?? 'bank-transfer',
+      projectId: entry.projectId,
+      accountId: entry.accountId,
+    });
+    setEntryOpen(true);
   };
 
   return (
@@ -104,7 +187,7 @@ export function LedgerTab() {
           <Button variant="outline" onClick={exportCsv}>
             <Download className="h-4 w-4" /> Export
           </Button>
-          <Button onClick={() => setEntryOpen(true)}>
+          <Button onClick={openNew}>
             <Plus className="h-4 w-4" /> New entry
           </Button>
         </div>
@@ -185,13 +268,22 @@ export function LedgerTab() {
                       <Ban className="h-3 w-3" />
                     </button>
                   ) : !f.voidedAt ? (
-                    <button
-                      onClick={() => { if (!deleteFinanceEntry(f.id)) voidFinanceEntry(f.id, 'Deleted via ledger'); }}
-                      className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                      title="Delete draft entry"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => openEdit(f)}
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                        title="Edit draft entry"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteEntry(f)}
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        title="Delete draft entry"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </>
                   ) : null}
                 </td>
               </tr>
@@ -203,15 +295,18 @@ export function LedgerTab() {
         </table>
       </Card>
 
-      <Dialog open={entryOpen} onOpenChange={setEntryOpen}>
+      <Dialog open={entryOpen} onOpenChange={(o) => { setEntryOpen(o); if (!o) resetForm(); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>New ledger entry</DialogTitle>
+            <DialogTitle>{editingEntry ? 'Edit ledger entry' : 'New ledger entry'}</DialogTitle>
+            <DialogDescription>
+              {editingEntry ? 'Manual drafts can be edited freely — auto-posted entries are locked and must be voided.' : undefined}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground">Transaction description *</label>
-              <Input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="e.g. Enterprise licence — Acme" className="mt-1" />
+              <Textarea rows={2} value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="e.g. Enterprise licence — Acme" className="mt-1" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -220,7 +315,12 @@ export function LedgerTab() {
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Category</label>
-                <Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Sales" className="mt-1" />
+                <Input list="ledger-categories" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Sales" className="mt-1" />
+                <datalist id="ledger-categories">
+                  {[...new Set(finance.map((f) => f.category))].filter(Boolean).sort().map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
               </div>
             </div>
             <div>
@@ -266,10 +366,33 @@ export function LedgerTab() {
             </Field>
           </div>
           <DialogFooter>
-            <Button onClick={submit} disabled={!form.label.trim()}>Save entry</Button>
+            <Button variant="outline" onClick={() => { resetForm(); setEntryOpen(false); }}>Cancel</Button>
+            <Button onClick={submit} disabled={!form.label.trim()}>{editingEntry ? 'Save changes' : 'Save entry'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteEntry}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteEntry(null); }}
+        title="Delete this draft entry?"
+        description={confirmDeleteEntry ? `"${confirmDeleteEntry.label}" (${confirmDeleteEntry.kind}) is removed from the ledger.` : ''}
+        confirmLabel="Delete entry"
+        onConfirm={() => {
+          if (!confirmDeleteEntry) return;
+          if (!deleteFinanceEntry(confirmDeleteEntry.id)) voidFinanceEntry(confirmDeleteEntry.id, 'Deleted via ledger');
+          setConfirmDeleteEntry(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDuplicateRef}
+        onOpenChange={(o) => { if (!o) setConfirmDuplicateRef(null); }}
+        title="Reference already posted — record anyway?"
+        description={confirmDuplicateRef ? `Reference "${confirmDuplicateRef.entry.externalRef ?? ''}" is already on ${confirmDuplicateRef.matches} ledger entr${confirmDuplicateRef.matches === 1 ? 'y' : 'ies'}. Recording it raises a review approval so someone confirms it is a separate posting.` : ''}
+        confirmLabel="Record + flag for review"
+        onConfirm={doConfirmDuplicateRef}
+      />
     </div>
   );
 }

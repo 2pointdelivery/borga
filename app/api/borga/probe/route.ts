@@ -9,10 +9,12 @@ export const runtime = 'nodejs';
 const PLACEHOLDER_URLS = ['example', 'placeholder', ''];
 const PLACEHOLDER_KEYS = ['xxx', 'placeholder', 'your-key', ''];
 
-async function ollamaUp(baseUrl: string): Promise<boolean> {
+/** A Muse base URL counts only when it is set and points at this machine (same localhost rule as chat). */
+function museConfigured(baseUrl: string): boolean {
   try {
-    const res = await fetch(`${baseUrl.replace(/\/v1\/?$/, '')}/api/tags`, { signal: AbortSignal.timeout(2000) });
-    return res.ok;
+    const u = new URL(baseUrl);
+    const host = u.hostname;
+    return (u.protocol === 'http:' || u.protocol === 'https:') && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local'));
   } catch {
     return false;
   }
@@ -30,11 +32,10 @@ export async function GET(req: NextRequest) {
 
   const providers = await Promise.all(
     Object.keys(DEFAULT_PROVIDER_CONFIG).map(async (id) => {
-      if (id === 'llm-demo') return { id, configured: true };
       const cfg = await resolveProviderConfig(id, ws, userId);
-      if (id === 'llm-ollama') {
-        const base = (await getApiKey('OLLAMA_BASE_URL')) || cfg.baseUrl;
-        return { id, configured: await ollamaUp(base) };
+      if (id === 'llm-muse') {
+        const base = (await getApiKey('MUSE_BASE_URL')) || cfg.baseUrl;
+        return { id, configured: museConfigured(base) };
       }
       if (id === 'llm-custom') {
         const url = (await getApiKey('LLM_BASE_URL')) || cfg.baseUrl;

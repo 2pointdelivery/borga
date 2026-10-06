@@ -17,7 +17,10 @@ import { RecurringBillsTab } from '../panels/RecurringBillsTab';
 import { useFeature } from '@/lib/borga/features-client';
 
 export function FinancePage({ initialTab }: { initialTab?: string }) {
-  const [tab, setTab] = useState(initialTab ?? 'ledger');
+  const [tab, setTab] = useState(initialTab === 'recurring-bills' ? 'vendors' : (initialTab ?? 'ledger'));
+  // "Recurring bills" lives inside Vendors & AP now; an old `recurring-bills`
+  // deep-link still lands on Vendors & AP with the Recurring sub-tab selected.
+  const [vendorsSub, setVendorsSub] = useState(initialTab === 'recurring-bills' ? 'recurring-bills' : 'vendors');
   const banking = useFeature('banking');
   const revenue = useFeature('revenueTracker');
   const closures = useFeature('bookClosure');
@@ -31,7 +34,6 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
         {assetsOn && <TabsTrigger value="assets">Fixed Assets</TabsTrigger>}
         {banking && <TabsTrigger value="banking">Banking</TabsTrigger>}
         <TabsTrigger value="vendors">Vendors &amp; AP</TabsTrigger>
-        <TabsTrigger value="recurring-bills">Recurring Bills</TabsTrigger>
         <TabsTrigger value="tax">Tax</TabsTrigger>
         <TabsTrigger value="budgeting">Budgeting</TabsTrigger>
         {revenue && <TabsTrigger value="revenue">Revenue Tracker</TabsTrigger>}
@@ -43,8 +45,16 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
       <TabsContent value="accounting"><AccountingTab /></TabsContent>
       {assetsOn && <TabsContent value="assets"><FixedAssetsTab /></TabsContent>}
       {banking && <TabsContent value="banking"><BankingTab /></TabsContent>}
-      <TabsContent value="vendors"><VendorsTab /></TabsContent>
-      <TabsContent value="recurring-bills"><RecurringBillsTab /></TabsContent>
+      <TabsContent value="vendors">
+        <Tabs value={vendorsSub} onValueChange={setVendorsSub} className="space-y-4">
+          <TabsList className="h-8">
+            <TabsTrigger value="vendors" className="text-xs">Vendors &amp; AP</TabsTrigger>
+            <TabsTrigger value="recurring-bills" className="text-xs">Recurring Bills</TabsTrigger>
+          </TabsList>
+          <TabsContent value="vendors"><VendorsTab /></TabsContent>
+          <TabsContent value="recurring-bills"><RecurringBillsTab /></TabsContent>
+        </Tabs>
+      </TabsContent>
       <TabsContent value="tax"><TaxTab /></TabsContent>
       <TabsContent value="budgeting"><BudgetTab /></TabsContent>
       {revenue && <TabsContent value="revenue"><RevenueTrackerTab /></TabsContent>}

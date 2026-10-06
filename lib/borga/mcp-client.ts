@@ -1,4 +1,5 @@
 import 'server-only';
+import { fetchPublic } from './safe-url';
 
 /**
  * Minimal MCP (Model Context Protocol) client over the Streamable HTTP
@@ -34,7 +35,14 @@ async function mcpRequest(
     Accept: 'application/json, text/event-stream',
     'MCP-Protocol-Version': PROTOCOL_VERSION,
   };
-  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+  // Bearer covers OAuth-style servers; x-api-key covers key-authenticated
+  // hosts such as Composio's hosted MCP (verified live: Bearer alone 401s,
+  // x-api-key succeeds). Unknown headers are ignored elsewhere, so sending
+  // both is safe for every server.
+  if (opts.token) {
+    headers.Authorization = `Bearer ${opts.token}`;
+    headers['x-api-key'] = opts.token;
+  }
   if (opts.sessionId) headers['Mcp-Session-Id'] = opts.sessionId;
 
   const body = opts.notification
@@ -43,7 +51,7 @@ async function mcpRequest(
 
   let res: Response;
   try {
-    res = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(20000) });
+    res = await fetchPublic(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(20000) });
   } catch (e) {
     return { error: `Could not reach ${url}: ${(e as Error).message}` };
   }
@@ -134,7 +142,7 @@ export interface McpOAuthMetadata {
 
 async function fetchJson(url: string): Promise<any | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { Accept: 'application/json' } });
+    const res = await fetchPublic(url, { signal: AbortSignal.timeout(10000), headers: { Accept: 'application/json' } });
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -182,7 +190,7 @@ export async function registerMcpOAuthClient(
   redirectUri: string,
 ): Promise<{ ok: true; clientId: string } | { ok: false; error: string }> {
   try {
-    const res = await fetch(registrationEndpoint, {
+    const res = await fetchPublic(registrationEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -218,7 +226,7 @@ export async function exchangeMcpOAuthCode(
       client_id: params.clientId,
       code_verifier: params.codeVerifier,
     });
-    const res = await fetch(tokenEndpoint, {
+    const res = await fetchPublic(tokenEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),

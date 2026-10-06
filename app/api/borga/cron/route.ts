@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
+import { paymentRequired } from '@/lib/borga/billing-server';
 import { tickWorkspace, listScheduledWorkspaces } from '@/lib/borga/heartbeat';
 import { loadFeatures } from '@/lib/borga/features-server';
 import { listTicketWorkspaces, pollMailbox, sweepSla } from '@/lib/borga/tickets-server';
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
   for (const t of targets) {
     try {
       const flags = (await loadFeatures(t.userId, t.ws)).flags;
-      results[`${t.userId}/${t.ws}`] = flags.heartbeat ? await tickWorkspace(t.ws, t.userId) : { skipped: 'feature "heartbeat" is off' };
+      results[`${t.userId}/${t.ws}`] = flags.heartbeat ? ((await paymentRequired(t.userId, t.ws)) ? { skipped: 'workspace needs an active subscription' } : await tickWorkspace(t.ws, t.userId)) : { skipped: 'feature "heartbeat" is off' };
     } catch (e) {
       results[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
     }

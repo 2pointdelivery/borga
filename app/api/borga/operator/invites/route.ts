@@ -1,5 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { operatorFromRequest } from '@/lib/auth/operator';
+import { isEmailConfigured, sendEmail } from '@/lib/auth/mailer';
+import { renderInvite } from '@/lib/auth/email-templates';
+import { getUserById } from '@/lib/auth/queries';
 import { getBorgaState, setBorgaState, insertBorgaStateIfAbsent, listBorgaKeys } from '@/lib/borga/persistence';
 import { INVITE_TTL_MS, hashInviteCode, inviteKey, inviteUsedKey, newInviteCode, type InviteRecord } from '@/lib/auth/signup-policy';
 
@@ -20,8 +23,13 @@ export async function GET(req: NextRequest) {
   const items = await Promise.all(
     keys.map(async (k) => {
       const hash = k.slice('invite::'.length);
-      const [rec, used] = await Promise.all([getBorgaState<InviteRecord>(k), getBorgaState<unknown>(inviteUsedKey(hash))]);
-      return rec ? { id: hash.slice(0, 12), email: rec.email, createdAt: rec.createdAt, expiresAt: rec.expiresAt, used: used !== null } : null;
+      const [rec, used] = await Promise.all([getBorgaState<InviteRecord>(k), getBorgaState<Record<string, unknown>>(inviteUsedKey(hash))]);
+      if (!rec) return null;
+      return {
+        id: hash.slice(0, 12), email: rec.email, createdAt: rec.createdAt, expiresAt: rec.expiresAt,
+        used: used !== null,
+        revoked: used !== null && 'revokedBy' in (used ?? {}),
+      };
     }),
   );
   const invites = items.filter((i): i is NonNullable<typeof i> => i !== null).sort((a, b) => b.createdAt - a.createdAt);
@@ -52,5 +60,12 @@ export async function POST(req: NextRequest) {
   if (!stored) return NextResponse.json({ ok: false, error: 'Could not create the invite. Try again.' }, { status: 503 });
 
   const link = `${origin(req)}/signup?invite=${encodeURIComponent(code)}&email=${encodeURIComponent(email)}`;
-  return NextResponse.json({ ok: true, code, link, email, expiresAt: rec.expiresAt });
+  // Send it when a mail server is set up, so the operator does not have to pass the link along by hand.
+  let emailed = false;
+  if (await isEmailConfigured()) {
+    const inviter = await getUserById(op.userId).catch(() => null);
+    const mail = renderInvite({ inviteeEmail: email, inviterName: inviter?.name, signupUrl: link, expiresDays: Math.round(INVITE_TTL_MS / 86_400_000) });
+    emailed = await sendEmail({ to: email, subject: mail.subject, html: mail.html, text: mail.text });
+  }
+  return NextResponse.json({ ok: true, code, link, email, expiresAt: rec.expiresAt, emailed });
 }

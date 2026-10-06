@@ -246,6 +246,43 @@ html[data-theme='forest'] {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* Business advisor avatar: gentle hover-bob so the widget feels alive. */
+@keyframes borga-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}
+/* Short attention shake when something new needs the owner. */
+@keyframes borga-wiggle {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-9deg); }
+  45% { transform: rotate(7deg); }
+  70% { transform: rotate(-4deg); }
+  90% { transform: rotate(2deg); }
+}
+/* Popup teaser entrance. */
+@keyframes borga-teaser-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.borga-float {
+  animation: borga-float 4s ease-in-out infinite;
+}
+.borga-wiggle {
+  animation: borga-wiggle 0.6s ease-in-out;
+}
+.borga-teaser-in {
+  animation: borga-teaser-in 0.25s ease-out both;
+}
+/* Advisor talking mouth: opens and closes while it speaks. */
+@keyframes borga-talk {
+  0%, 100% { transform: scaleY(0.45); }
+  50% { transform: scaleY(1); }
+}
+.borga-talk-mouth {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: borga-talk 0.45s ease-in-out infinite;
+}
 .borga-eq {
   transform-origin: bottom;
   animation: borga-eq 1s ease-in-out infinite;

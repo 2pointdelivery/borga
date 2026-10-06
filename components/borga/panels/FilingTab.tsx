@@ -1,10 +1,11 @@
 'use client';
 
 import { useMemo, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, CalendarClock, CheckCircle2, Download, ExternalLink, Info, Plus, Settings2, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CheckCircle2, Download, ExternalLink, Info, Plus, Settings2, Trash2, Pencil } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -20,6 +21,7 @@ import { buildFilingSheets, exportFileName, toCsv, toExcelSheets, type ExportArg
 import { fillTemplate, templateFor } from '@/lib/borga/filing-templates';
 import { SectionTitle } from '../bits';
 import { DateInput, Field } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const newCustomId = (name: string) => `custom-${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -56,6 +58,8 @@ export function FilingTab() {
   const ws = activeWorkspace();
   const [setupOpen, setSetupOpen] = useState(false);
   const [customOpen, setCustomOpen] = useState(false);
+  const [editCustom, setEditCustom] = useState<CustomObligation | null>(null);
+  const [confirmDeleteCustom, setConfirmDeleteCustom] = useState<CustomObligation | null>(null);
   const [open, setOpen] = useState<PlanRow | null>(null);
   const [showFiled, setShowFiled] = useState(false);
 
@@ -220,7 +224,10 @@ export function FilingTab() {
                   <span className="font-medium">{c.name}</span>
                   <span className="ml-2 text-xs text-muted-foreground">{c.authority} · {FREQUENCY_LABEL[c.frequency].toLowerCase()} · {c.day === 'end' ? 'last day' : `day ${c.day}`} of month {c.monthsAfter} after the period</span>
                 </span>
-                <button className="text-muted-foreground hover:text-destructive" title="Remove" onClick={() => customRemove(c.id)}><Trash2 className="h-3.5 w-3.5" /></button>
+                <span className="flex shrink-0 items-center gap-0.5">
+                  <button className="rounded p-1.5 text-muted-foreground hover:bg-primary/10 hover:text-primary" title="Edit" onClick={() => setEditCustom(c)}><Pencil className="h-3.5 w-3.5" /></button>
+                  <button className="rounded p-1.5 text-muted-foreground hover:text-destructive" title="Remove" onClick={() => setConfirmDeleteCustom(c)}><Trash2 className="h-3.5 w-3.5" /></button>
+                </span>
               </li>
             ))}
           </ul>
@@ -244,6 +251,26 @@ export function FilingTab() {
           onSave={(c) => { setFilingProfile({ custom: [...profile.custom, c] }); setCustomOpen(false); }}
         />
       )}
+      {editCustom && (
+        <CustomDialog
+          key={editCustom.id}
+          initial={editCustom}
+          onClose={() => setEditCustom(null)}
+          onSave={(c) => { setFilingProfile({ custom: profile.custom.map((x) => (x.id === c.id ? c : x)) }); setEditCustom(null); }}
+        />
+      )}
+      <ConfirmDialog
+        open={!!confirmDeleteCustom}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteCustom(null); }}
+        title={`Remove "${confirmDeleteCustom?.name ?? 'filing'}"?`}
+        description="The custom filing obligation stops being tracked. Filed records for it are kept."
+        confirmLabel="Remove filing"
+        onConfirm={() => {
+          if (!confirmDeleteCustom) return;
+          customRemove(confirmDeleteCustom.id);
+          setConfirmDeleteCustom(null);
+        }}
+      />
       {open && (
         <FilingDialog
           key={`${open.ob.id}|${open.filing.key}`} row={open} today={today} currency={currency} legal={ws.legalName || ws.name} company={ws} jurisdiction={jurisdiction}
@@ -417,7 +444,7 @@ function FilingDialog({ row, today, currency, legal, company, jurisdiction, data
             >
               <DateInput value={dueOverride} onChange={setDueOverride} />
             </Field>
-            <Field label="Note"><Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" /></Field>
+            <Field label="Note"><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" /></Field>
           </div>
         </div>
 
@@ -503,15 +530,15 @@ function SetupDialog({ profile, country, detected, joined, onClose, onSave }: {
 
 // ── a filing of the user's own ────────────────────────────────────────────────────────────────────────────────────────
 
-function CustomDialog({ onClose, onSave }: { onClose: () => void; onSave: (c: CustomObligation) => void }) {
-  const [name, setName] = useState('');
-  const [authority, setAuthority] = useState('');
-  const [level, setLevel] = useState<FilingLevel>('federal');
-  const [frequency, setFrequency] = useState<Frequency>('annual');
-  const [basis, setBasis] = useState<'fiscal' | 'calendar'>('fiscal');
-  const [months, setMonths] = useState('1');
-  const [lastDay, setLastDay] = useState(true);
-  const [day, setDay] = useState('15');
+function CustomDialog({ initial, onClose, onSave }: { initial?: CustomObligation; onClose: () => void; onSave: (c: CustomObligation) => void }) {
+  const [name, setName] = useState(initial?.name ?? '');
+  const [authority, setAuthority] = useState(initial?.authority ?? '');
+  const [level, setLevel] = useState<FilingLevel>(initial?.level ?? 'federal');
+  const [frequency, setFrequency] = useState<Frequency>(initial?.frequency ?? 'annual');
+  const [basis, setBasis] = useState<'fiscal' | 'calendar'>(initial?.periodBasis ?? 'fiscal');
+  const [months, setMonths] = useState(String(initial?.monthsAfter ?? 1));
+  const [lastDay, setLastDay] = useState((initial?.day ?? 'end') === 'end');
+  const [day, setDay] = useState(initial?.day === 'end' || !initial ? '15' : String(initial.day));
   const m = Number(months);
   const d = Number(day);
   const valid = name.trim() !== '' && Number.isInteger(m) && m >= 0 && m <= 24 && (lastDay || (Number.isInteger(d) && d >= 1 && d <= 31));
@@ -519,7 +546,7 @@ function CustomDialog({ onClose, onSave }: { onClose: () => void; onSave: (c: Cu
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add a filing</DialogTitle>
+          <DialogTitle>{initial ? `Edit ${initial.name}` : 'Add a filing'}</DialogTitle>
           <DialogDescription>Describe how the due date follows from the end of each period.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -558,15 +585,17 @@ function CustomDialog({ onClose, onSave }: { onClose: () => void; onSave: (c: Cu
             </Field>
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button
-            disabled={!valid}
-            onClick={() => onSave({ id: newCustomId(name), name: name.trim(), authority: authority.trim(), level, frequency, periodBasis: basis, monthsAfter: m, day: lastDay ? 'end' : d })}
-          >
-            Add
-          </Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button
+              disabled={!valid}
+              onClick={() => onSave(initial
+                ? { ...initial, name: name.trim(), authority: authority.trim(), level, frequency, periodBasis: basis, monthsAfter: m, day: lastDay ? 'end' : d }
+                : { id: newCustomId(name), name: name.trim(), authority: authority.trim(), level, frequency, periodBasis: basis, monthsAfter: m, day: lastDay ? 'end' : d })}
+            >
+              {initial ? 'Save changes' : 'Add'}
+            </Button>
+          </DialogFooter>
       </DialogContent>
     </Dialog>
   );

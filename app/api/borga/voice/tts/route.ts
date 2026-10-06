@@ -1,21 +1,26 @@
-import { NextResponse } from 'next/server';
-import { getApiKey } from '@/lib/borga/secrets';
-import { featureGate } from '@/lib/borga/features-server';
+import { NextResponse, NextRequest } from 'next/server';
+import { paymentRequired } from '@/lib/borga/billing-server';
+import { elevenLabsKey } from '@/lib/borga/provider-keys';
+import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL';
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const userId = await sessionUserId(req);
+  if (!userId) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const off = await featureGate('voice', null, null);
   if (off) return off;
   let text = '';
   let voiceId = DEFAULT_VOICE_ID;
+  let ws: string | null = null;
   try {
-    const body = (await req.json()) as { text?: string; voiceId?: string };
+    const body = (await req.json()) as { text?: string; voiceId?: string; ws?: string };
     text = (body.text ?? '').trim();
     voiceId = (body.voiceId ?? '').trim() || DEFAULT_VOICE_ID;
+    ws = typeof body.ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(body.ws) ? body.ws : null;
   } catch {
     return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 });
   }
@@ -23,8 +28,17 @@ export async function POST(req: Request) {
   if (!text) {
     return NextResponse.json({ error: 'text is required.' }, { status: 400 });
   }
+  // The voice id goes into the upstream URL path, so it must be a plain id (no "../" or query), and the text is capped (it is billed per character).
+  if (!/^[A-Za-z0-9]{8,40}$/.test(voiceId)) {
+    return NextResponse.json({ error: 'Invalid voice id.' }, { status: 400 });
+  }
+  text = text.slice(0, 2500);
 
-  const apiKey = await getApiKey('ELEVENLABS_API_KEY');
+  if (ws) {
+    const unpaid = await paymentRequired(userId, ws);
+    if (unpaid) return NextResponse.json({ error: unpaid.error }, { status: 402 });
+  }
+  const apiKey = await elevenLabsKey(userId, ws);
   if (!apiKey) {
     return NextResponse.json({ error: 'ELEVENLABS not configured' }, { status: 501 });
   }
@@ -70,15 +84,18 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   const off = await featureGate('voice', null, null);
   if (off) return off;
   const url = new URL(req.url);
   const text = (url.searchParams.get('text') ?? '').trim();
   const voiceId = (url.searchParams.get('voiceId') ?? '').trim() || DEFAULT_VOICE_ID;
-  const fakeReq = new Request(req.url, {
+  const headers = new Headers(req.headers);
+  headers.set('Content-Type', 'application/json');
+  headers.delete('content-length');
+  const fakeReq = new NextRequest(req.url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ text, voiceId }),
   });
   return POST(fakeReq);

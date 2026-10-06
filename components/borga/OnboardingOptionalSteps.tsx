@@ -125,7 +125,14 @@ export function AiStep({ onChosen }: { onChosen: () => void }) {
     void fetch('/api/borga/config', { cache: 'no-store' }).then((r) => r.json()).then((j: { keys?: KeyStatus[] }) => setKeys(j.keys ?? [])).catch(() => setKeys([]));
   }, []);
 
-  const ready = useMemo(() => llmCatalog.filter((p) => p.id === 'llm-demo' || presetFor(p.id)?.keyless || (p.envVar && keys?.some((k) => k.envVar === p.envVar && k.configured))), [llmCatalog, keys]);
+  // Keyless providers are ready immediately; keyed ones need their key. Local
+  // CLI providers (Muse) are only ready once their endpoint exists — either a
+  // base URL edited into the catalog or the configured MUSE_BASE_URL.
+  const ready = useMemo(() => llmCatalog.filter((p) => {
+    const preset = presetFor(p.id);
+    if (preset?.local) return !!p.baseUrl || !!keys?.some((k) => k.envVar === 'MUSE_BASE_URL' && k.configured);
+    return preset?.keyless || (p.envVar && keys?.some((k) => k.envVar === p.envVar && k.configured));
+  }), [llmCatalog, keys]);
   const needKey = llmCatalog.filter((p) => !ready.includes(p));
   const current = llmCatalog.find((p) => p.id === llm.providerId);
   const firstOf = (p: (typeof llmCatalog)[number]) => (p.models.find((m) => m.tier === 'free') ?? p.models[0])?.id ?? '';
@@ -149,14 +156,12 @@ export function AiStep({ onChosen }: { onChosen: () => void }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2.5 text-sm">
-        <span>Agents use <strong>{current?.label ?? llm.providerId}</strong>{llm.providerId !== 'llm-demo' && <> · <code className="text-xs">{llm.model}</code></>}</span>
+        <span>Agents use <strong>{current?.label ?? llm.providerId}</strong> · <code className="text-xs">{llm.model}</code></span>
         <Button size="sm" variant="outline" onClick={() => void runTest()} disabled={testing}>{testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Test it</Button>
       </div>
       {test && <p className={`text-xs ${test.ok ? 'text-emerald-600' : 'text-rose-600'}`}>{test.ok ? 'Works: ' : 'Did not work: '}{test.text}</p>}
-      {llm.providerId === 'llm-demo' && <p className="text-xs text-muted-foreground">The built-in demo gives canned answers. Pick a real model below for agents that actually think; a free one needs no account.</p>}
-
       <div className="grid gap-3 sm:grid-cols-2">
-        {ready.filter((p) => p.id !== 'llm-demo').map((p) => {
+        {ready.map((p) => {
           const isCurrent = llm.providerId === p.id;
           const loaded = p.models.length > 0;
           return (
@@ -179,12 +184,9 @@ export function AiStep({ onChosen }: { onChosen: () => void }) {
           );
         })}
       </div>
-      {llm.providerId !== 'llm-demo' && (
-        <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => choose('llm-demo', llmCatalog.find((p) => p.id === 'llm-demo')?.models[0]?.id ?? 'demo')}>Go back to the built-in demo</Button>
-      )}
       {needKey.length > 0 && (
         <p className="text-[11px] text-muted-foreground">
-          Not ready (need an API key): {needKey.map((p) => p.label).join(', ')}. Keys are set once for the whole deployment by its administrator, under Integrations → AI &amp; Voice.
+          Not ready yet: {needKey.map((p) => p.label).join(', ')}. API keys are set once for the whole deployment by its administrator, under Integrations → AI &amp; Voice; local providers need their endpoint instead.
         </p>
       )}
     </div>

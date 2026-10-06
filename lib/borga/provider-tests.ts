@@ -143,6 +143,20 @@ async function testSaltEdge(v: Record<string, string>, f: Fetch): Promise<TestRe
   return { ok: true, message: 'Connected to Salt Edge.', details: [pem ? 'Requests are signed (Live client).' : 'Requests are not signed: fine for a test client.'] };
 }
 
+async function testElevenLabs(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, 'https://api.elevenlabs.io/v1/user', { headers: { 'xi-api-key': v.apiKey } });
+  if (r.status === 401 || r.status === 403) return { ok: false, message: 'ElevenLabs rejected the API key.' };
+  if (r.status >= 400) return { ok: false, message: `ElevenLabs answered ${r.status}.` };
+  return { ok: true, message: 'Connected to ElevenLabs.' };
+}
+
+async function testDeepgram(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, 'https://api.deepgram.com/v1/auth/token', { headers: { Authorization: `Token ${v.apiKey}` } });
+  if (r.status === 401 || r.status === 403) return { ok: false, message: 'Deepgram rejected the API key.' };
+  if (r.status >= 400) return { ok: false, message: `Deepgram answered ${r.status}.` };
+  return { ok: true, message: 'Connected to Deepgram.' };
+}
+
 export async function runProviderTest(id: ProviderId, values: Record<string, string>, f: Fetch = fetch): Promise<TestResult> {
   try {
     switch (id) {
@@ -153,6 +167,8 @@ export async function runProviderTest(id: ProviderId, values: Record<string, str
       case 'supermemory': return await testSupermemory(values, f);
       case 'saltedge': return await testSaltEdge(values, f);
       case 'smtp': return await testSmtp(values);
+      case 'elevenlabs': return await testElevenLabs(values, f);
+      case 'deepgram': return await testDeepgram(values, f);
       case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
       case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
     }

@@ -333,6 +333,62 @@ export function fmtDuration(min: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Per-ticket insights: rule-based readouts derived only from the ticket's own
+// fields and its live SLA clocks. Nothing is invented — every line names a
+// fact (owner, clock state, reopen count, idle time) and the action it implies.
+
+export interface TicketInsight {
+  tone: 'danger' | 'warn' | 'info';
+  text: string;
+}
+
+type InsightInput = Pick<
+  Ticket,
+  'status' | 'priority' | 'assignee' | 'createdAt' | 'updatedAt' | 'firstResponseAt' | 'resolvedAt' | 'reopenCount' | 'source' | 'requesterEmail' | 'comments'
+>;
+
+export function ticketInsights(t: InsightInput, sla: SlaStatus, nowMs: number): TicketInsight[] {
+  const out: TicketInsight[] = [];
+  const done = isDoneStatus(t.status);
+  const idleMin = Math.max(0, (nowMs - new Date(t.updatedAt).getTime()) / MIN);
+
+  if (!done && !t.assignee) {
+    out.push(
+      t.priority === 'critical'
+        ? { tone: 'danger', text: 'Critical and unowned — assign an owner now.' }
+        : { tone: 'warn', text: 'No owner yet — assign someone so it does not sit.' },
+    );
+  }
+  if (!done && !t.firstResponseAt) {
+    const c = sla.response;
+    if (c.state === 'breached') out.push({ tone: 'danger', text: `First response breached by ${fmtDuration(c.elapsedMin - c.targetMin)}.` });
+    else if (c.state === 'at-risk') out.push({ tone: 'warn', text: `First response at risk — ${fmtDuration(Math.max(0, c.targetMin - c.elapsedMin))} of SLA time left.` });
+  }
+  if (!done) {
+    const c = sla.resolution;
+    if (c.state === 'breached') out.push({ tone: 'danger', text: `Resolution breached by ${fmtDuration(c.elapsedMin - c.targetMin)}.` });
+    else if (c.state === 'at-risk') out.push({ tone: 'warn', text: `Resolution at risk — ${fmtDuration(Math.max(0, c.targetMin - c.elapsedMin))} of SLA time left.` });
+  }
+  if (t.reopenCount > 0) {
+    out.push({ tone: 'warn', text: `Reopened ${t.reopenCount}× — fix the root cause, not just the symptom.` });
+  }
+  if (!done && t.status === 'pending') {
+    out.push({ tone: 'info', text: `Waiting on the customer since ${new Date(t.updatedAt).toLocaleDateString()}.` });
+  }
+  if (!done && idleMin >= 3 * 24 * 60) {
+    out.push({ tone: 'warn', text: `No movement in ${fmtDuration(idleMin)} — nudge it forward.` });
+  }
+  if (t.source === 'email' && !t.requesterEmail) {
+    out.push({ tone: 'warn', text: 'No requester email — replies are saved but cannot be delivered.' });
+  }
+  if (done && sla.resolution.state === 'met-late') {
+    out.push({ tone: 'info', text: `Resolved over SLA (${fmtDuration(sla.resolution.elapsedMin)} vs ${fmtDuration(sla.resolution.targetMin)} target) — worth a retro.` });
+  }
+  const order: Record<TicketInsight['tone'], number> = { danger: 0, warn: 1, info: 2 };
+  return out.sort((a, b) => order[a.tone] - order[b.tone]).slice(0, 5);
+}
+
+// ---------------------------------------------------------------------------
 // Email ↔ ticket helpers
 
 export function ticketToken(id: string): string {

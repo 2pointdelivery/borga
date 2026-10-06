@@ -16,6 +16,7 @@ import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { SectionTitle } from '../bits';
 import { AccountSelect, DateInput, Field, ProjectSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { SearchSelect } from '../SearchSelect';
 
 const NONE = '__none__';
 type EndMode = 'never' | 'date' | 'count';
@@ -214,26 +215,38 @@ export function RecurringInvoicesTab() {
           <div className="grid gap-3">
             {!editingId && invoices.length > 0 && (
               <Field label="Copy from an existing invoice (optional)">
-                <Select value={NONE} onValueChange={(v) => v !== NONE && copyFrom(v)}>
-                  <SelectTrigger><SelectValue placeholder="Choose an invoice to copy client, lines and tax" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>Start blank</SelectItem>
-                    {invoices.filter((i) => !i.voidedAt).slice(0, 50).map((i) => <SelectItem key={i.id} value={i.id}>{i.number} · {i.client} · {money(i.amount)}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={[
+                    { value: NONE, label: 'Start blank' },
+                    ...invoices.filter((i) => !i.voidedAt).map((i) => ({ value: i.id, label: `${i.number} · ${i.client}`, detail: money(i.amount) })),
+                  ]}
+                  value={NONE}
+                  onChange={(v) => { if (v !== NONE) copyFrom(v); }}
+                  placeholder="Choose an invoice to copy client, lines and tax"
+                  searchPlaceholder="Search invoices"
+                  clearable={false}
+                />
               </Field>
             )}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Schedule name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Monthly hosting — Acme" /></Field>
-              <Field label="Client">
-                <Select value={form.customerId ?? NONE} onValueChange={(v) => { const c = customers.find((x) => x.id === v); setForm({ ...form, customerId: c?.id, client: c?.name ?? form.client }); }}>
-                  <SelectTrigger><SelectValue placeholder="Pick a customer or type below" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>Type a name…</SelectItem>
-                    {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Input className="mt-1.5" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value, customerId: undefined })} placeholder="Client name on the invoice" />
+              <Field label="Customer">
+                <SearchSelect
+                  options={[
+                    { value: NONE, label: 'Type a name…' },
+                    ...customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry })),
+                  ]}
+                  value={form.customerId && customers.some((c) => c.id === form.customerId) ? form.customerId : NONE}
+                  onChange={(v) => {
+                    const c = customers.find((x) => x.id === v);
+                    if (c) setForm({ ...form, customerId: c.id, client: c.name });
+                    else setForm({ ...form, customerId: undefined });
+                  }}
+                  placeholder="Pick a customer or type below"
+                  searchPlaceholder="Search customers"
+                  clearable={false}
+                />
+                <Input className="mt-1.5" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value, customerId: undefined })} placeholder="Customer name on the invoice" />
               </Field>
             </div>
             <div className="grid grid-cols-3 gap-3">
@@ -290,6 +303,9 @@ export function RecurringInvoicesTab() {
               <Field label="Project"><ProjectSelect value={form.projectId} onChange={(v) => setForm({ ...form, projectId: v })} /></Field>
               <Field label="Revenue account"><AccountSelect value={form.accountId} onChange={(v) => setForm({ ...form, accountId: v })} types={['revenue']} /></Field>
             </div>
+            <Field label="Description on each invoice" hint="Copied onto every generated invoice.">
+              <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. Monthly hosting — production support" />
+            </Field>
             <Field label="Notes on each invoice"><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           </div>
           <DialogFooter>

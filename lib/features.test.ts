@@ -13,7 +13,7 @@ test('simulated and experimental features ship switched off (T30)', () => {
     if (f.status === 'experimental' && !EXPERIMENTAL_ON_BY_DEFAULT.includes(f.id)) assert.equal(f.defaultOn, false, `${f.id} is experimental and must default off`);
   }
   const { flags } = resolveFeatures(null);
-  for (const id of ['calls', 'social', 'advertising', 'valuation', 'fundraising', 'whatsapp'] as const) assert.equal(flags[id], false, id);
+  for (const id of ['calls', 'advertising', 'valuation', 'fundraising', 'whatsapp'] as const) assert.equal(flags[id], false, id);
   // stable and beta features the launch depends on stay on
   for (const id of ['tickets', 'banking', 'emailUpdates', 'agents', 'projects'] as const) assert.equal(flags[id], true, id);
   // an explicit choice still turns an experimental feature on

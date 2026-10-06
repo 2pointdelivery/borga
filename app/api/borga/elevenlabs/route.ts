@@ -1,8 +1,19 @@
-import { NextResponse } from 'next/server';
-import { getApiKey } from '@/lib/borga/secrets';
+import { NextResponse, type NextRequest } from 'next/server';
+import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
+import { isValidUserId } from '@/lib/borga/keys';
+import { elevenLabsKey } from '@/lib/borga/provider-keys';
 import { featureGate } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
+
+// TTS is billed on the owner's ElevenLabs key, so this route takes the
+// dashboard session instead of being callable anonymously.
+async function getUserId(req: NextRequest): Promise<string | null> {
+  const c = req.cookies.get(sessionCookieName());
+  const token = typeof c === 'string' ? c : c?.value;
+  const uid = await verifySessionToken(token);
+  return uid && isValidUserId(uid) ? uid : null;
+}
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
@@ -71,7 +82,9 @@ async function fetchAvailableVoices(apiKey: string): Promise<Record<string, stri
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const off = await featureGate('voice', null, null);
   if (off) return off;
   let body: {
@@ -83,6 +96,7 @@ export async function POST(req: Request) {
     note?: string;
     companyName?: string;
     action?: string;
+    ws?: string;
   } = {};
   try {
     body = await req.json();
@@ -93,7 +107,8 @@ export async function POST(req: Request) {
   const action = body.action ?? 'tts';
   const voice = body.voice ?? 'rachel';
   const companyName = (body.companyName ?? 'the company').slice(0, 80);
-  const apiKey = await getApiKey('ELEVENLABS_API_KEY');
+  const wsForKey = typeof body.ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(body.ws) ? body.ws : null;
+  const apiKey = await elevenLabsKey(userId, wsForKey);
 
   if (action === 'script') {
     // Generate a call script without audio (works without API key)
@@ -139,6 +154,9 @@ export async function POST(req: Request) {
     }
 
     const voiceId = resolveVoiceId(voice);
+    if (!/^[A-Za-z0-9]{8,40}$/.test(voiceId)) {
+      return NextResponse.json({ ok: false, action: 'tts', error: 'Invalid voice id.' }, { status: 400 });
+    }
 
     try {
       const upstream = await fetch(`${ELEVENLABS_BASE}/text-to-speech/${voiceId}`, {

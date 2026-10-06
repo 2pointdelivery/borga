@@ -1,6 +1,6 @@
 'use client';
 
-import { fmtMoney } from '@/lib/borga/currencies';
+import { fmtMoney, currencyDigits } from '@/lib/borga/currencies';
 import { Fragment, useMemo, useState } from 'react';
 import {
   Download,
@@ -14,6 +14,7 @@ import {
   ArrowLeftRight,
   Layers,
   FileText,
+  FileSpreadsheet,
   Sparkles,
   Target,
 } from 'lucide-react';
@@ -29,11 +30,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ACCOUNT_TYPE_STYLE, type GlAccount } from '@/lib/borga/data';
+import { ACCOUNT_SIDE_HINT, DR_CR_LEGEND, NORMAL_SIDE_SHORT, isDebitNormal, splitDrCr } from '@/lib/borga/accounting-labels';
 import { computeAccountMonthlyActuals, getAccountingStandard, computeProjectActualSpend, PROJECT_STATUS_LABEL, deriveValuation } from '@/lib/borga/data';
 import { deriveBusinessInsights } from '@/lib/borga/insights';
-import { brandedDocHtml, openPrintWindow } from '@/lib/borga/report-template';
+import { brandedDocHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { AccountSelect } from '../form-widgets';
+import { SearchSelect } from '../SearchSelect';
 import { cn } from '@/lib/utils';
 
 type ReportId = 'pl' | 'bs' | 'cf' | 'equity' | 'ratios' | 'tb' | 'acct-txn' | 'acct-bal' | 'budget-actual';
@@ -42,15 +46,15 @@ const REPORTS: { id: ReportId; label: string; icon: typeof FileText; blurb: stri
   { id: 'pl', label: 'Profit & Loss', icon: TrendingUp, blurb: 'Revenue, expenses and net income for the period' },
   { id: 'bs', label: 'Balance Sheet', icon: Scale, blurb: 'Assets, liabilities and equity as of a date' },
   { id: 'cf', label: 'Cash Flow', icon: Waves, blurb: 'Direct-method cash movements by activity' },
-  { id: 'equity', label: 'Equity Statement', icon: Landmark, blurb: 'Movements in owners— equity for the period' },
+  { id: 'equity', label: 'Equity Statement', icon: Landmark, blurb: "Movements in owners' equity for the period." },
   { id: 'ratios', label: 'Financial Ratios', icon: Gauge, blurb: 'Liquidity, leverage, profitability and efficiency' },
-  { id: 'tb', label: 'Trial Balance', icon: Table2, blurb: 'Increase / decrease totals per account as of a date' },
+  { id: 'tb', label: 'Trial Balance', icon: Table2, blurb: 'Debit and credit balances per account as of a date' },
   { id: 'acct-txn', label: 'Account Transactions', icon: ArrowLeftRight, blurb: 'Ledger activity and running balance per account' },
   { id: 'acct-bal', label: 'Account Balances', icon: Layers, blurb: 'Opening → movement → closing for every account' },
   { id: 'budget-actual', label: 'Budget vs. Actuals', icon: Target, blurb: 'Annual comparison of budgeted and actual by account, with variance' },
 ];
 
-const DEBIT_NORMAL = new Set(['asset', 'expense']);
+/** Normal balance side lives in accounting-labels (IFRS double-entry: Dr normal = asset | cost | expense). */
 
 function isoAddDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -136,7 +140,7 @@ export function ReportsCenter() {
     const acct = accountById.get(accountId);
     if (!acct) return 0;
     const raw = deltas.get(accountId) ?? 0;
-    return DEBIT_NORMAL.has(acct.type) ? raw : -raw;
+    return isDebitNormal(acct.type) ? raw : -raw;
   };
 
   const sumType = (type: GlAccount['type'], deltas: Map<string, number>) =>
@@ -167,7 +171,7 @@ export function ReportsCenter() {
     posted
       .filter((j) => j.dateIso >= pFrom && j.dateIso <= pTo)
       .forEach((j) => j.lines.forEach((l) => map.set(l.accountId, (map.get(l.accountId) ?? 0) + l.debit - l.credit)));
-    const rev = coa.filter((a) => a.type === 'revenue').reduce((s, a) => s + Math.max(0, DEBIT_NORMAL.has('revenue') ? 0 : -(map.get(a.id) ?? 0)), 0);
+    const rev = coa.filter((a) => a.type === 'revenue').reduce((s, a) => s + Math.max(0, -(map.get(a.id) ?? 0)), 0);
     const cost = coa.filter((a) => a.type === 'cost').reduce((s, a) => s + Math.max(0, map.get(a.id) ?? 0), 0);
     const exp = coa.filter((a) => a.type === 'expense').reduce((s, a) => s + Math.max(0, map.get(a.id) ?? 0), 0);
     return { revenue: rev, cost, expenses: exp, net: rev - cost - exp };
@@ -189,8 +193,9 @@ export function ReportsCenter() {
         j.lines.forEach((l) => {
           const acct = accountById.get(l.accountId);
           if (!acct) return;
+          // Earnings = credits to revenue (Cr normal) minus debits to costs/expenses (Dr normal).
           if (acct.type === 'revenue') currentEarnings += -l.debit + l.credit;
-          if (acct.type === 'expense') currentEarnings += l.debit - l.credit;
+          if (acct.type === 'cost' || acct.type === 'expense') currentEarnings -= l.debit - l.credit;
         }),
       );
     // Closing entries already moved prior earnings into retained earnings.
@@ -293,9 +298,9 @@ export function ReportsCenter() {
       <table>
         ${pl.revenueRows.map((r) => row(r.account.name, r.amount)).join('')}
         <tr class="total-row"><td>Total revenue</td><td class="num">${money(pl.totalRevenue)}</td></tr>
-        ${pl.costRows.map((r) => row(r.account.name, -r.amount)).join('')}
+        ${pl.costRows.map((r) => row(r.account.name, r.amount)).join('')}
         ${row('Gross profit', pl.grossProfit, 'total-row')}
-        ${pl.expenseRows.map((r) => row(r.account.name, -r.amount)).join('')}
+        ${pl.expenseRows.map((r) => row(r.account.name, r.amount)).join('')}
         <tr class="grand"><td>Net income</td><td class="num">${money(pl.netIncome)}</td></tr>
       </table>
       <div class="section-title">Balance sheet — as of ${esc(effTo)}</div>
@@ -345,7 +350,7 @@ export function ReportsCenter() {
       const expBudgeted = sumBudgeted(expLines), expActual = sumActual(expLines);
       budgetSection = `<table>
         <tr><th>Line</th><th class="num">Budgeted</th><th class="num">Actual</th><th class="num">Variance</th></tr>
-        ${row('Revenue', revBudgeted)}${`<tr><td></td><td class="num">${money(revBudgeted)}</td><td class="num">${money(revActual)}</td><td class="num">${money(revActual - revBudgeted)}</td></tr>`}
+        <tr><td>Revenue</td><td class="num">${money(revBudgeted)}</td><td class="num">${money(revActual)}</td><td class="num">${money(revActual - revBudgeted)}</td></tr>
         <tr><td>Operating expense</td><td class="num">${money(expBudgeted)}</td><td class="num">${money(expActual)}</td><td class="num">${money(expActual - expBudgeted)}</td></tr>
       </table>`;
     }
@@ -396,7 +401,10 @@ export function ReportsCenter() {
       <table>
         ${pl.revenueRows.map((r) => row(r.account.name, r.amount)).join('')}
         <tr class="total-row"><td>Total revenue</td><td class="num">${money(pl.totalRevenue)}</td></tr>
-        ${pl.expenseRows.map((r) => row(r.account.name, -r.amount)).join('')}
+        ${pl.costRows.map((r) => row(r.account.name, r.amount)).join('')}
+        ${row('Gross profit', pl.grossProfit, 'total-row')}
+        ${pl.expenseRows.map((r) => row(r.account.name, r.amount)).join('')}
+        ${row('Total operating expenses', pl.totalExpenses, 'total-row')}
         <tr class="grand"><td>Net income</td><td class="num">${money(pl.netIncome)}</td></tr>
       </table>
 
@@ -460,7 +468,7 @@ export function ReportsCenter() {
         ${row('Fair market value (blended)', val.fmv)}
         ${row('Revenue multiple applied', `${val.multiple}×`)}
         ${row('Implied growth', `${val.growthPct}% (${val.growthSource === 'trailing-actuals' ? "from the company's own trailing revenue" : 'industry-proxy estimate — not enough ledger history yet'})`)}
-        ${row('Range (bear – bull)', `${money(val.floor)} – ${money(val.ceiling)}`)}
+        ${row('Range (bear – bull)', `${money(val.floor)}  –  ${money(val.ceiling)}`)}
       </table>
       <div class="notes">This is a comparable-multiple estimate grounded in the company's own ledger and industry revenue-multiple bands, not a live market data feed — see Company → Valuation for methodology and to override with a current comparable-transaction multiple.</div>
 
@@ -512,33 +520,33 @@ export function ReportsCenter() {
   }, [coa, cumulativeDeltas, pl, bs, from, to]);
 
   // ── Trial balance report ──────────────────────────────────────────────────
+  // Double-entry (IFRS): the balance's *sign* decides the column — net debits
+  // go to Dr, net credits to Cr — so total Dr always equals total Cr.
   const tbRows = useMemo(
     () =>
       coa
         .map((a) => {
-          const delta = cumulativeDeltas.get(a.id) ?? 0;
-          const debitNormal = DEBIT_NORMAL.has(a.type);
-          const balance = debitNormal ? delta : -delta;
-          return { account: a, debits: balance > 0 ? balance : 0, credits: balance < 0 ? -balance : 0 };
+          const { dr, cr } = splitDrCr(cumulativeDeltas.get(a.id) ?? 0);
+          return { account: a, debits: dr, credits: cr };
         })
         .filter((r) => r.debits || r.credits),
     [coa, cumulativeDeltas],
   );
 
   // ── Account transactions ──────────────────────────────────────────────────
+  // Dr / Cr columns are the actual posted amounts; the running balance is the
+  // true balance (debit-positive — a negative running balance is a credit balance).
   const acctTxn = useMemo(() => {
     const acct = accountById.get(safeTxnAccount);
     if (!acct) return null;
-    const starting = bal(txnAccount, openingDeltas);
+    const starting = openingDeltas.get(safeTxnAccount) ?? 0;
     let running = starting;
     const rows = posted
       .filter((j) => j.dateIso >= from && j.dateIso <= to && j.lines.some((l) => l.accountId === txnAccount))
       .sort((a, b) => (a.dateIso < b.dateIso ? -1 : 1))
       .map((j) => {
         const line = j.lines.find((l) => l.accountId === safeTxnAccount)!;
-        const delta = line.debit - line.credit;
-        const signed = DEBIT_NORMAL.has(acct.type) ? delta : -delta;
-        running += signed;
+        running += line.debit - line.credit;
         return { date: j.dateIso, memo: j.memo, reference: j.reference, debit: line.debit, credit: line.credit, running };
       });
     return { acct, starting, rows };
@@ -546,18 +554,33 @@ export function ReportsCenter() {
   }, [txnAccount, accountById, openingDeltas, posted, from, to]);
 
   // ── Account balances ──────────────────────────────────────────────────────
+  /** Gross posted debits / credits per account for from ≤ dateIso ≤ to. */
+  const periodDrCr = useMemo(() => {
+    const map = new Map<string, { dr: number; cr: number }>();
+    posted
+      .filter((j) => j.dateIso >= effFrom && j.dateIso <= effTo)
+      .forEach((j) =>
+        j.lines.forEach((l) => {
+          const cur = map.get(l.accountId) ?? { dr: 0, cr: 0 };
+          cur.dr += l.debit;
+          cur.cr += l.credit;
+          map.set(l.accountId, cur);
+        }),
+      );
+    return map;
+  }, [posted, effFrom, effTo]);
+
+  // True double-entry balances: starting/ending are actual balances
+  // (debit-positive — negative is a credit balance); Dr / Cr are what was posted.
   const acctBal = useMemo(
     () =>
       coa.map((a) => {
-        const starting = bal(a.id, openingDeltas);
-        const delta = periodDeltas.get(a.id) ?? 0;
-        const signed = DEBIT_NORMAL.has(a.type) ? delta : -delta;
-        const debit = Math.max(0, signed);
-        const credit = Math.max(0, -signed);
-        return { account: a, starting, debit, credit, movement: signed, ending: starting + signed };
+        const starting = openingDeltas.get(a.id) ?? 0;
+        const move = periodDrCr.get(a.id) ?? { dr: 0, cr: 0 };
+        const movement = move.dr - move.cr;
+        return { account: a, starting, debit: move.dr, credit: move.cr, movement, ending: starting + movement };
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [coa, openingDeltas, periodDeltas],
+    [coa, openingDeltas, periodDrCr],
   );
 
   // ── Budget vs. Actuals ────────────────────────────────────────────────────
@@ -606,73 +629,193 @@ export function ReportsCenter() {
     }
   };
 
-  /** CSV export of the active report. */
-  const exportCsv = () => {
-    const rows: string[][] = [];
-    const head = [`${REPORTS.find((r) => r.id === report)?.label} — ${activeWorkspace()?.name ?? ''}`, `${effFrom} → ${effTo}`];
-    rows.push(head, []);
+  const reportFileSlug = () => {
+    const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'company';
+    return `${slug(activeWorkspace()?.name ?? 'report')}-${report}-${effFrom}-to-${effTo}`;
+  };
+
+  /** Company identity block shared by the CSV and Excel exports (mirrors csvWithHeader). */
+  const csvCompanyLines = (ws: NonNullable<ReturnType<typeof activeWorkspace>>, docTitle: string): string[] => [
+    ws.legalName || ws.name,
+    docTitle,
+    `${effFrom} → ${effTo}`,
+    [ws.addressLine ?? '', ws.city ?? '', ws.state ?? '', ws.country ?? ''].filter(Boolean).join(', '),
+    [ws.businessNumber && `Business No: ${ws.businessNumber}`, ws.taxNumber && `Tax No: ${ws.taxNumber}`]
+      .filter(Boolean).join('  |  '),
+    [ws.email ?? '', ws.website ?? ''].filter(Boolean).join('  | '),
+    `Generated ${new Date().toLocaleString()}`,
+  ];
+
+  /**
+   * One grid per report — headers plus rows with real numbers so Excel can
+   * add them. CSV, Excel and Print all derive from it, so the three exports
+   * can never disagree with each other.
+   */
+  const buildReportGrid = (): { title: string; columns: string[]; rows: Array<Array<string | number>> } => {
+    const title = reportLabel(report);
+    const amt = `Amount (${currency})`;
+    type Row = Array<string | number>;
     if (report === 'pl') {
-      rows.push(['Section', 'Account', `Amount (${currency})`]);
-      pl.revenueRows.forEach((r) => rows.push(['Revenue', r.account.name, String(r.amount)]));
-      rows.push(['Revenue', 'Total revenue', String(pl.totalRevenue)]);
-      pl.costRows.forEach((r) => rows.push(['Cost of sales', r.account.name, String(r.amount)]));
-      rows.push(['Cost of sales', 'Total cost of sales', String(pl.totalCost)]);
-      rows.push(['', 'Gross profit', String(pl.grossProfit)]);
-      pl.expenseRows.forEach((r) => rows.push(['Expenses', r.account.name, String(r.amount)]));
-      rows.push(['Expenses', 'Total operating expenses', String(pl.totalExpenses)]);
-      rows.push(['', 'NET INCOME', String(pl.netIncome)]);
-    } else if (report === 'bs') {
-      rows.push(['Section', 'Account', `Amount (${currency})`]);
-      bs.assets.forEach((r) => rows.push(['Assets', r.account.name, String(r.amount)]));
-      rows.push(['Assets', 'Total assets', String(bs.totalAssets)]);
-      bs.liabilities.forEach((r) => rows.push(['Liabilities', r.account.name, String(r.amount)]));
-      rows.push(['Liabilities', 'Total liabilities', String(bs.totalLiabilities)]);
-      bs.equityAccounts.forEach((r) => rows.push(['Equity', r.account.name, String(r.amount)]));
-      rows.push(['Equity', 'Current earnings', String(bs.currentEarnings)]);
-      rows.push(['Equity', 'Total equity', String(bs.totalEquity)]);
-    } else if (report === 'cf') {
-      rows.push(['Activity', 'Memo', `Amount (${currency})`]);
-      (['operating', 'investing', 'financing'] as const).forEach((k) => {
-        cf.byActivity(k).forEach((r) => rows.push([k, r.label, String(r.amount)]));
-      });
-      rows.push(['', 'Opening cash', String(cf.openingCash)]);
-      rows.push(['', 'Net change', String(cf.net)]);
-      rows.push(['', 'Closing cash', String(cf.closingCash)]);
-    } else if (report === 'equity') {
-      rows.push(['Line', `Amount (${currency})`]);
-      rows.push(['Opening equity', String(equityStmt.opening)]);
-      equityStmt.rows.forEach((r) => rows.push([r.account.name, String(r.movement)]));
-      rows.push(['Net income', String(equityStmt.netIncome)]);
-      rows.push(['Closing equity', String(equityStmt.closing)]);
-    } else if (report === 'ratios') {
-      rows.push(['Ratio', 'Value', 'Formula']);
-      ratios.forEach((r) => rows.push([r.name, r.value === null ? '' : String(r.value), r.formula]));
-    } else if (report === 'tb') {
-      rows.push(['Code', 'Account', 'Type', 'Increase', 'Decrease']);
-      tbRows.forEach((r) => rows.push([r.account.code, r.account.name, r.account.type, String(r.debits), String(r.credits)]));
-    } else if (report === 'acct-txn' && acctTxn) {
-      rows.push(['Date', 'Memo', 'Increase', 'Decrease', 'Running balance']);
-      rows.push(['', 'Starting balance', '', '', String(acctTxn.starting)]);
-      acctTxn.rows.forEach((r) => rows.push([r.date, r.memo, String(r.debit), String(r.credit), String(r.running)]));
-    } else if (report === 'acct-bal') {
-      rows.push(['Code', 'Account', 'Starting', 'Increase', 'Decrease', 'Net movement', 'Ending']);
-      acctBal.forEach((r) => rows.push([r.account.code, r.account.name, String(r.starting), String(r.debit), String(r.credit), String(r.movement), String(r.ending)]));
-    } else if (report === 'budget-actual' && budgetActual && activeBudget) {
-      rows.push([`Budget: ${activeBudget.name} (FY${activeBudget.fiscalYear})`]);
-      rows.push(['Account', 'Type', 'Budgeted', 'Actual', 'Variance', 'Variance %']);
-      budgetActual.rows.forEach((r) =>
-        rows.push([r.account.name, r.account.type, String(r.budgeted), String(r.actual), String(r.variance), r.variancePct === null ? '' : r.variancePct.toFixed(1)]),
-      );
+      return {
+        title,
+        columns: ['Section', 'Account', amt],
+        rows: [
+          ...pl.revenueRows.map((r): Row => ['Revenue', r.account.name, r.amount]),
+          ['Revenue', 'Total revenue', pl.totalRevenue],
+          ...pl.costRows.map((r): Row => ['Cost of sales', r.account.name, r.amount]),
+          ['Cost of sales', 'Total cost of sales', pl.totalCost],
+          ['', 'Gross profit', pl.grossProfit],
+          ...pl.expenseRows.map((r): Row => ['Expenses', r.account.name, r.amount]),
+          ['Expenses', 'Total operating expenses', pl.totalExpenses],
+          ['', 'NET INCOME', pl.netIncome],
+        ],
+      };
     }
-    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
+    if (report === 'bs') {
+      return {
+        title,
+        columns: ['Section', 'Account', amt],
+        rows: [
+          ...bs.assets.map((r): Row => ['Assets', r.account.name, r.amount]),
+          ['Assets', 'Total assets', bs.totalAssets],
+          ...bs.liabilities.map((r): Row => ['Liabilities', r.account.name, r.amount]),
+          ['Liabilities', 'Total liabilities', bs.totalLiabilities],
+          ...bs.equityAccounts.map((r): Row => ['Equity', r.account.name, r.amount]),
+          ['Equity', 'Current earnings', bs.currentEarnings],
+          ['Equity', 'Total equity', bs.totalEquity],
+        ],
+      };
+    }
+    if (report === 'cf') {
+      return {
+        title,
+        columns: ['Activity', 'Memo', amt],
+        rows: [
+          ...(['operating', 'investing', 'financing'] as const).flatMap((k): Row[] =>
+            cf.byActivity(k).map((r): Row => [k, r.label, r.amount]),
+          ),
+          ['', 'Opening cash', cf.openingCash],
+          ['', 'Net change', cf.net],
+          ['', 'Closing cash', cf.closingCash],
+        ],
+      };
+    }
+    if (report === 'equity') {
+      return {
+        title,
+        columns: ['Line', amt],
+        rows: [
+          ['Opening equity', equityStmt.opening],
+          ...equityStmt.rows.map((r): Row => [r.account.name, r.movement]),
+          ['Net income', equityStmt.netIncome],
+          ['Closing equity', equityStmt.closing],
+        ],
+      };
+    }
+    if (report === 'ratios') {
+      return {
+        title,
+        columns: ['Ratio', 'Value', 'Formula'],
+        rows: ratios.map((r): Row => [r.name, r.value === null ? '' : fmtRatio(r), r.formula]),
+      };
+    }
+    if (report === 'tb') {
+      return {
+        title,
+        columns: ['Code', 'Account', 'Type', 'Dr', 'Cr'],
+        rows: tbRows.map((r): Row => [r.account.code, r.account.name, r.account.type, r.debits, r.credits]),
+      };
+    }
+    if (report === 'acct-txn' && acctTxn) {
+      return {
+        title,
+        columns: ['Date', 'Memo', 'Dr', 'Cr', 'Running balance'],
+        rows: [
+          ['', 'Starting balance', '', '', acctTxn.starting],
+          ...acctTxn.rows.map((r): Row => [r.date, r.memo, r.debit, r.credit, r.running]),
+        ],
+      };
+    }
+    if (report === 'acct-bal') {
+      return {
+        title,
+        columns: ['Code', 'Account', 'Starting balance', 'Dr', 'Cr', 'Net movement', 'Ending balance'],
+        rows: acctBal.map((r): Row => [r.account.code, r.account.name, r.starting, r.debit, r.credit, r.movement, r.ending]),
+      };
+    }
+    if (report === 'budget-actual' && budgetActual && activeBudget) {
+      return {
+        title: `Budget vs Actuals — ${activeBudget.name} (FY${activeBudget.fiscalYear})`,
+        columns: ['Account', 'Type', 'Budgeted', 'Actual', 'Variance', 'Variance %'],
+        rows: budgetActual.rows.map((r): Row => [
+          r.account.name, r.account.type, r.budgeted, r.actual, r.variance,
+          r.variancePct === null ? '' : `${r.variancePct.toFixed(1)}%`,
+        ]),
+      };
+    }
+    return { title, columns: [], rows: [] };
+  };
+
+  /** Branded CSV export: the company identity block plus the active report. */
+  const exportCsv = () => {
+    const ws = activeWorkspace();
+    if (!ws) return;
+    const grid = buildReportGrid();
+    const body = [grid.columns, ...grid.rows].map((r) => r.map((c) => String(c)));
+    // Byte order mark so Excel reads accents correctly.
+    const csv = '﻿' + csvWithHeader(ws, grid.title, `${effFrom} → ${effTo}`, body);
+    downloadTextFile(`${reportFileSlug()}.csv`, csv, 'text/csv');
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `${grid.title} exported as CSV (${effFrom} → ${effTo}).` });
+  };
+
+  /** Branded Excel export (.xlsx): company block on top, amounts as real numbers. */
+  const exportExcel = async () => {
+    const ws = activeWorkspace();
+    if (!ws) return;
+    const grid = buildReportGrid();
+    const digits = currencyDigits(currency);
+    const numFormat = `#,##0${digits > 0 ? '.' + '0'.repeat(digits) : ''}`;
+    const numCell = (v: number) => ({ value: v, format: numFormat, align: 'right' as const });
+    const txtCell = (v: string, bold = false) => (bold ? { value: v, fontWeight: 'bold' as const } : { value: v });
+    const data = [
+      ...csvCompanyLines(ws, grid.title).map((l) => [txtCell(l, true)]),
+      [],
+      grid.columns.map((c) => txtCell(c, true)),
+      ...grid.rows.map((r) => r.map((c) => (c === '' ? null : typeof c === 'number' ? numCell(c) : txtCell(c)))),
+    ];
+    // Loaded on demand: the spreadsheet writer is only needed when someone exports.
+    const { default: writeExcelFile } = await import('write-excel-file/browser');
+    const blob = await writeExcelFile([{
+      sheet: grid.title.slice(0, 31) || 'Report',
+      columns: grid.columns.map((_, i) => ({ width: grid.columns.length > 4 ? 20 : i === 1 ? 44 : i === 0 ? 26 : 22 })),
+      data,
+    }] as never).toBlob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${report}-${effFrom}-to-${effTo}.csv`;
+    a.download = `${reportFileSlug()}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
-    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `${REPORTS.find((r) => r.id === report)?.label} exported (${from} → ${to}).` });
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `${grid.title} exported as Excel (${effFrom} → ${effTo}).` });
+  };
+
+  /** Print the active report through the company-branded template (Save as PDF). */
+  const printReport = () => {
+    const ws = activeWorkspace();
+    if (!ws) return;
+    const grid = buildReportGrid();
+    const esc = (s: string) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const cell = (c: string | number) =>
+      typeof c === 'number' ? `<td class="num">${money(c)}</td>` : `<td>${esc(c)}</td>`;
+    const body = `
+      <table>
+        <thead><tr>${grid.columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+        <tbody>${grid.rows.map((r) => `<tr>${r.map(cell).join('')}</tr>`).join('')}</tbody>
+      </table>
+      <div class="notes">Prepared from the posted general ledger of ${esc(ws.legalName || ws.name)} — ${esc(effFrom)} → ${esc(effTo)}. Figures in ${esc(currency)}.</div>
+    `;
+    openPrintWindow(brandedDocHtml({ ws, title: grid.title, subtitle: `${effFrom} → ${effTo}`, bodyHtml: body }), grid.title);
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `${grid.title} sent to print (${effFrom} → ${effTo}).` });
   };
 
   const fmtRatio = (r: { value: number | null; fmt: 'x' | '%' | 'd' | 'money' }): string => {
@@ -704,10 +847,13 @@ export function ReportsCenter() {
           <Button variant="outline" onClick={openBoardPack} title="Branded PDF: exec summary, P&L, balance sheet, cash flow and agent commentary">
             <Sparkles className="h-4 w-4" /> Board pack
           </Button>
-          <Button variant="outline" onClick={exportCsv}>
+          <Button variant="outline" onClick={exportCsv} title="Branded CSV of the active report with the company header">
             <Download className="h-4 w-4" /> Export CSV
           </Button>
-          <Button variant="outline" onClick={() => window.print()}>
+          <Button variant="outline" onClick={exportExcel} title="Branded Excel workbook (.xlsx) of the active report with the company header">
+            <FileSpreadsheet className="h-4 w-4" /> Export Excel
+          </Button>
+          <Button variant="outline" onClick={printReport} title="Print the active report through the company-branded template (Save as PDF)">
             <Printer className="h-4 w-4" /> Print
           </Button>
         </div>
@@ -958,13 +1104,16 @@ export function ReportsCenter() {
             <p className="text-sm font-semibold">Trial Balance — as of {effTo}</p>
             <Badge variant="outline" className="text-[10px]">post-closing entries included</Badge>
           </div>
+          <p className="border-b bg-muted/20 px-4 py-1.5 text-[11px] text-muted-foreground" title={DR_CR_LEGEND}>
+            Double-entry (IFRS): net debit balances → Dr, net credit balances → Cr. {DR_CR_LEGEND}
+          </p>
           <table className="w-full text-sm">
             <thead className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <tr><th className="px-4 py-2 font-medium">Account</th><th className="px-4 py-2 font-medium">Type</th><th className="px-4 py-2 text-right font-medium">Increase</th><th className="px-4 py-2 text-right font-medium">Decrease</th></tr>
+              <tr><th className="px-4 py-2 font-medium">Account</th><th className="px-4 py-2 font-medium">Type</th><th className="px-4 py-2 text-right font-medium" title="Debit balance">Dr</th><th className="px-4 py-2 text-right font-medium" title="Credit balance">Cr</th></tr>
             </thead>
             <tbody>
               {tbRows.map((r) => (
-                <tr key={r.account.id} className="border-b last:border-0 hover:bg-muted/20">
+                <tr key={r.account.id} className="border-b last:border-0 hover:bg-muted/20" title={ACCOUNT_SIDE_HINT[r.account.type]}>
                   <td className="px-4 py-2"><span className="mr-2 font-mono text-xs text-muted-foreground">{r.account.code}</span>{r.account.name}</td>
                   <td className="px-4 py-2"><span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold capitalize ring-1', ACCOUNT_TYPE_STYLE[r.account.type])}>{r.account.type}</span></td>
                   <td className="px-4 py-2 text-right font-mono text-xs">{r.debits ? money(r.debits) : '…'}</td>
@@ -987,17 +1136,15 @@ export function ReportsCenter() {
           <div className="flex flex-wrap items-end gap-3 border-b bg-muted/40 px-4 py-3">
             <div>
               <p className="text-[11px] font-medium text-muted-foreground">Account</p>
-              <Select value={safeTxnAccount} onValueChange={setTxnAccount}>
-                <SelectTrigger className="mt-1 w-64"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {coa.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <AccountSelect
+                value={acctTxn?.acct?.id ?? safeTxnAccount}
+                onChange={(v) => setTxnAccount(v ?? safeTxnAccount)}
+                placeholder="Select account…"
+              />
             </div>
             {acctTxn && (
-              <p className="ml-auto text-xs text-muted-foreground">
+              <p className="ml-auto text-xs text-muted-foreground" title={acctTxn.acct ? ACCOUNT_SIDE_HINT[acctTxn.acct.type] : undefined}>
+                {acctTxn.acct ? `${acctTxn.acct.name} — ${NORMAL_SIDE_SHORT[acctTxn.acct.type]} · ` : ''}
                 Starting balance <span className="font-mono">{money(acctTxn.starting)}</span> — {acctTxn.rows.length} entries
               </p>
             )}
@@ -1005,7 +1152,7 @@ export function ReportsCenter() {
           {acctTxn && (
             <table className="w-full text-sm">
               <thead className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr><th className="px-4 py-2 font-medium">Date</th><th className="px-4 py-2 font-medium">Description</th><th className="px-4 py-2 text-right font-medium">Increase</th><th className="px-4 py-2 text-right font-medium">Decrease</th><th className="px-4 py-2 text-right font-medium">Running balance</th></tr>
+                <tr><th className="px-4 py-2 font-medium">Date</th><th className="px-4 py-2 font-medium">Description</th><th className="px-4 py-2 text-right font-medium" title="Debits posted">Dr</th><th className="px-4 py-2 text-right font-medium" title="Credits posted">Cr</th><th className="px-4 py-2 text-right font-medium" title="True balance (debit-positive; negative = credit balance)">Running balance</th></tr>
               </thead>
               <tbody>
                 {acctTxn.rows.map((r, i) => (
@@ -1014,7 +1161,7 @@ export function ReportsCenter() {
                     <td className="px-4 py-2">{r.memo}{r.reference && <span className="ml-2 text-[11px] text-muted-foreground">ref {r.reference}</span>}</td>
                     <td className="px-4 py-2 text-right font-mono text-xs">{r.debit ? money(r.debit) : '…'}</td>
                     <td className="px-4 py-2 text-right font-mono text-xs">{r.credit ? money(r.credit) : '…'}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs font-medium">{money(r.running)}</td>
+                    <td className="px-4 py-2 text-right font-mono text-xs font-medium" title={r.running < 0 ? 'Credit balance' : 'Debit balance'}>{money(r.running)}{r.running !== 0 ? <span className="ml-1 text-[10px] font-normal text-muted-foreground">{r.running < 0 ? 'Cr' : 'Dr'}</span> : null}</td>
                   </tr>
                 ))}
                 {acctTxn.rows.length === 0 && (
@@ -1029,19 +1176,22 @@ export function ReportsCenter() {
       {/* ── Account balances ────────────────────────────────────────────────── */}
       {report === 'acct-bal' && (
         <Card className="overflow-x-auto">
+          <p className="border-b bg-muted/20 px-4 py-1.5 text-[11px] text-muted-foreground" title={DR_CR_LEGEND}>
+            Double-entry (IFRS): Dr and Cr are what was posted; negative starting / ending / net = credit balance. {DR_CR_LEGEND}
+          </p>
           <table className="w-full min-w-[720px] text-sm">
             <thead className="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-2 font-medium">Account</th>
-                <th className="px-4 py-2 text-right font-medium">Starting</th>
-                <th className="px-4 py-2 text-right font-medium">Increase</th>
-                <th className="px-4 py-2 text-right font-medium">Decrease</th>
-                <th className="px-4 py-2 text-right font-medium">Net movement</th>
-                <th className="px-4 py-2 text-right font-medium">Ending</th>
+                <th className="px-4 py-2 text-right font-medium" title="Balance at the start of the period (negative = credit balance)">Starting</th>
+                <th className="px-4 py-2 text-right font-medium" title="Debits posted in the period">Dr</th>
+                <th className="px-4 py-2 text-right font-medium" title="Credits posted in the period">Cr</th>
+                <th className="px-4 py-2 text-right font-medium" title="Dr minus Cr for the period">Net movement</th>
+                <th className="px-4 py-2 text-right font-medium" title="Balance at the end of the period (negative = credit balance)">Ending</th>
               </tr>
             </thead>
             <tbody>
-              {(['asset', 'liability', 'equity', 'revenue', 'expense'] as const).map((type) => {
+              {(['asset', 'liability', 'equity', 'revenue', 'cost', 'expense'] as const).map((type) => {
                 const allRows = acctBal.filter((r) => r.account.type === type && (r.starting || r.debit || r.credit || r.ending));
                 if (allRows.length === 0) return null;
                 const rows = detail === 'summary'
@@ -1057,16 +1207,16 @@ export function ReportsCenter() {
                 return (
                   <Fragment key={`h-${type}`}>
                     <tr className="bg-muted/20">
-                      <td colSpan={6} className="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{type}s</td>
+                      <td colSpan={6} className="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" title={ACCOUNT_SIDE_HINT[type]}>{type}s · {NORMAL_SIDE_SHORT[type]}</td>
                     </tr>
                     {rows.map((r) => (
-                      <tr key={r.account.id} className="border-b last:border-0 hover:bg-muted/20">
+                      <tr key={r.account.id} className="border-b last:border-0 hover:bg-muted/20" title={ACCOUNT_SIDE_HINT[r.account.type as keyof typeof ACCOUNT_SIDE_HINT]}>
                         <td className="px-4 py-2"><span className="mr-2 font-mono text-xs text-muted-foreground">{r.account.code}</span>{r.account.name}</td>
-                        <td className="px-4 py-2 text-right font-mono text-xs">{money(r.starting)}</td>
+                        <td className="px-4 py-2 text-right font-mono text-xs" title={r.starting < 0 ? 'Credit balance' : 'Debit balance'}>{money(r.starting)}{r.starting !== 0 ? <span className="ml-1 text-[10px] font-normal text-muted-foreground">{r.starting < 0 ? 'Cr' : 'Dr'}</span> : null}</td>
                         <td className="px-4 py-2 text-right font-mono text-xs">{r.debit ? money(r.debit) : '…'}</td>
                         <td className="px-4 py-2 text-right font-mono text-xs">{r.credit ? money(r.credit) : '…'}</td>
                         <td className={cn('px-4 py-2 text-right font-mono text-xs', r.movement < 0 && 'text-rose-500')}>{money(r.movement)}</td>
-                        <td className="px-4 py-2 text-right font-mono text-xs font-medium">{money(r.ending)}</td>
+                        <td className="px-4 py-2 text-right font-mono text-xs font-medium" title={r.ending < 0 ? 'Credit balance' : 'Debit balance'}>{money(r.ending)}{r.ending !== 0 ? <span className="ml-1 text-[10px] font-normal text-muted-foreground">{r.ending < 0 ? 'Cr' : 'Dr'}</span> : null}</td>
                       </tr>
                     ))}
                   </Fragment>
@@ -1082,14 +1232,15 @@ export function ReportsCenter() {
         <Card className="overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/40 px-4 py-3">
             <p className="text-sm font-semibold">Budget vs. Actuals — annual</p>
-            <Select value={activeBudget?.id ?? ''} onValueChange={setBudgetActualId}>
-              <SelectTrigger className="w-64"><SelectValue placeholder="Select a budget" /></SelectTrigger>
-              <SelectContent>
-                {budgets.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>{b.name} — FY{b.fiscalYear}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <SearchSelect
+              options={budgets.map((b) => ({ value: b.id, label: b.name, detail: `FY${b.fiscalYear} · ${b.status}` }))}
+              value={activeBudget?.id ?? ''}
+              onChange={(v) => setBudgetActualId(v)}
+              placeholder="Select a budget"
+              searchPlaceholder="Search budgets"
+              clearable={false}
+              className="w-64"
+            />
           </div>
           {!activeBudget && (
             <p className="px-4 py-8 text-center text-xs text-muted-foreground">No budgets yet — create one in Finance → Budgeting.</p>

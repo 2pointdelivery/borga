@@ -5,7 +5,7 @@ import { getApiKey, realEnv } from './secrets';
 import { presetFor } from './model-catalog';
 
 // Providers whose base URL the user may set in the dashboard (stored in the secret store), not only in process.env.
-const URL_KEY: Record<string, string> = { 'llm-custom': 'LLM_BASE_URL', 'llm-ollama': 'OLLAMA_BASE_URL' };
+const URL_KEY: Record<string, string> = { 'llm-custom': 'LLM_BASE_URL', 'llm-muse': 'MUSE_BASE_URL' };
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -20,9 +20,8 @@ export interface ProviderConfig {
  * provider in its DB-backed `llmCatalog`. Mirrors the seed in `lib/borga/data`.
  */
 export const DEFAULT_PROVIDER_CONFIG: Record<string, ProviderConfig> = {
-  'llm-demo': { baseUrl: '', envVar: '' },
+  'llm-muse': { baseUrl: realEnv('MUSE_BASE_URL') || '', envVar: '' },
   'llm-groq': { baseUrl: 'https://api.groq.com/openai/v1', envVar: 'GROQ_API_KEY' },
-  'llm-ollama': { baseUrl: realEnv('OLLAMA_BASE_URL') || 'http://127.0.0.1:11434/v1', envVar: '' },
   'llm-gemini': { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', envVar: 'GEMINI_API_KEY' },
   'llm-claude': { baseUrl: 'https://api.anthropic.com/v1', envVar: 'ANTHROPIC_API_KEY' },
   'llm-openai': { baseUrl: 'https://api.openai.com/v1', envVar: 'OPENAI_API_KEY' },
@@ -73,7 +72,7 @@ export async function resolveProviderConfig(
       const entry = catalog?.find((p) => p.id === providerId);
       if (entry) {
         return {
-          // A URL saved on the provider card (custom endpoint / Ollama) wins: the seeded catalog entry would otherwise shadow it.
+          // A URL saved on the provider card (custom endpoint / Muse) wins: the seeded catalog entry would otherwise shadow it.
           baseUrl: savedUrl || fixGeminiUrl(providerId, entry.baseUrl && entry.baseUrl.length > 0 ? entry.baseUrl : fallback.baseUrl),
           envVar: keyless ? '' : entry.envVar && entry.envVar.length > 0 ? entry.envVar : fallback.envVar,
           anonymousKey: fallback.anonymousKey,

@@ -1,18 +1,19 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Save, Mail, Timer, RefreshCw, Copy, KeyRound } from 'lucide-react';
+import { Loader2, Save, Mail, Timer, RefreshCw, Copy, KeyRound, Plus, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { ticketsApi, type ClientSettings } from '@/lib/borga/tickets-client';
 import { TICKET_PRIORITIES, fmtDuration, type SlaPolicy, type TicketPriority } from '@/lib/borga/tickets';
 import { SectionTitle } from '../bits';
 import { Field } from '../form-widgets';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -27,6 +28,7 @@ export function TicketSettingsTab() {
   const [imapPassword, setImapPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [confirmDeletePolicy, setConfirmDeletePolicy] = useState<SlaPolicy | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -46,6 +48,24 @@ export function TicketSettingsTab() {
 
   const setMailbox = (patch: Partial<ClientSettings['mailbox']>) => setS({ ...s, mailbox: { ...s.mailbox, ...patch } });
   const setPolicy = (id: string, fn: (p: SlaPolicy) => SlaPolicy) => setS({ ...s, slaPolicies: s.slaPolicies.map((p) => (p.id === id ? fn(p) : p)) });
+
+  const addPolicy = () => {
+    const base = s.slaPolicies[0];
+    const targets = Object.fromEntries(
+      (['critical', 'high', 'medium', 'low'] as TicketPriority[]).map((pr) => [
+        pr,
+        { ...(base?.targets[pr] ?? { firstResponseMin: 240, resolutionMin: 2880 }) },
+      ]),
+    ) as SlaPolicy['targets'];
+    const id = `sla-${Date.now().toString(36)}`;
+    setS({
+      ...s,
+      slaPolicies: [...s.slaPolicies, { id, name: `Policy ${s.slaPolicies.length + 1}`, businessHoursOnly: false, targets }],
+    });
+    toast({ title: 'Policy added — press Save all to keep it', variant: 'success' });
+  };
+
+  const canDeletePolicy = (p: SlaPolicy) => s.slaPolicies.length > 1 && p.id !== s.defaultSlaPolicyId;
 
   const save = async (opts: { regenerateToken?: boolean } = {}) => {
     setSaving(true);
@@ -77,14 +97,23 @@ export function TicketSettingsTab() {
       </div>
 
       <Card className="space-y-4 p-5">
-        <div className="flex items-center gap-2 text-sm font-semibold"><Timer className="h-4 w-4 text-primary" /> SLA policies</div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm font-semibold"><Timer className="h-4 w-4 text-primary" /> SLA policies</div>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={addPolicy}>
+            <Plus className="h-3.5 w-3.5" /> Add policy
+          </Button>
+        </div>
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="Ticket key prefix" hint="Appears in subjects as [SUP-12]"><Input value={s.keyPrefix} onChange={(e) => setS({ ...s, keyPrefix: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })} /></Field>
           <Field label="Default policy">
-            <Select value={s.defaultSlaPolicyId} onValueChange={(v) => setS({ ...s, defaultSlaPolicyId: v })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{s.slaPolicies.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-            </Select>
+            <SearchSelect
+              options={s.slaPolicies.map((p) => ({ value: p.id, label: p.name }))}
+              value={s.defaultSlaPolicyId}
+              onChange={(v) => setS({ ...s, defaultSlaPolicyId: v || s.defaultSlaPolicyId })}
+              placeholder="Default policy…"
+              searchPlaceholder="Search policies"
+              clearable={false}
+            />
           </Field>
           <Field label="Escalation email" hint="Emailed when a ticket breaches"><Input type="email" value={s.escalationEmail} onChange={(e) => setS({ ...s, escalationEmail: e.target.value })} placeholder="oncall@yourco.com" /></Field>
         </div>
@@ -93,9 +122,19 @@ export function TicketSettingsTab() {
           <div key={p.id} className="rounded-lg border p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Input value={p.name} onChange={(e) => setPolicy(p.id, (x) => ({ ...x, name: e.target.value }))} className="h-8 max-w-64 font-medium" />
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Switch checked={p.businessHoursOnly} onCheckedChange={(v) => setPolicy(p.id, (x) => ({ ...x, businessHoursOnly: v }))} /> Business hours only
-              </label>
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Switch checked={p.businessHoursOnly} onCheckedChange={(v) => setPolicy(p.id, (x) => ({ ...x, businessHoursOnly: v }))} /> Business hours only
+                </label>
+                <Button
+                  size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-rose-500"
+                  title={canDeletePolicy(p) ? 'Delete policy' : 'The default or last policy cannot be deleted'}
+                  disabled={!canDeletePolicy(p)}
+                  onClick={() => setConfirmDeletePolicy(p)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
             <div className="mt-3 grid grid-cols-[90px_1fr_1fr] items-center gap-2 text-xs">
               <span />
@@ -144,6 +183,19 @@ export function TicketSettingsTab() {
           </div>
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={!!confirmDeletePolicy}
+        onOpenChange={(o) => { if (!o) setConfirmDeletePolicy(null); }}
+        title={`Delete policy "${confirmDeletePolicy?.name ?? ''}"?`}
+        description="The policy is removed from the saved settings. Tickets currently using it fall back to the default policy on next save."
+        confirmLabel="Delete policy"
+        onConfirm={() => {
+          if (!confirmDeletePolicy || !canDeletePolicy(confirmDeletePolicy)) return;
+          setS({ ...s, slaPolicies: s.slaPolicies.filter((p) => p.id !== confirmDeletePolicy.id) });
+          setConfirmDeletePolicy(null);
+        }}
+      />
 
       <Card className="space-y-4 p-5">
         <div className="flex items-center justify-between">

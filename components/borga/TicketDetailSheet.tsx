@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, Send, Lock, Mail, Bot, AlertTriangle } from 'lucide-react';
+import { Loader2, Send, Lock, Mail, Bot, AlertTriangle, Trash2 } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { ticketsApi, type ClientSettings } from '@/lib/borga/tickets-client';
+import { SearchSelect } from './SearchSelect';
+import { ConfirmDialog } from './ConfirmDialog';
 import {
   STATUS_LABEL,
   TICKET_PRIORITIES,
@@ -22,10 +24,9 @@ import {
 } from '@/lib/borga/tickets';
 import { cn } from '@/lib/utils';
 import { Field } from './form-widgets';
-import { PriorityPill, SlaPanel, StatusPill } from './ticket-bits';
+import { PriorityPill, SlaPanel, StatusPill, TicketInsightBox } from './ticket-bits';
 
 const NONE = '__none__';
-const ACTOR = 'Agent';
 
 function CommentView({ c }: { c: TicketComment }) {
   if (c.kind === 'system') {
@@ -67,13 +68,15 @@ export function TicketDetailSheet({
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const { employees, projects } = useBorga();
+  const { employees, projects, userName } = useBorga();
+  const actor = userName?.trim() ? userName.trim() : 'Agent';
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [loading, setLoading] = useState(false);
   const [body, setBody] = useState('');
   const [mode, setMode] = useState<'public' | 'internal'>('public');
   const [after, setAfter] = useState<string>(NONE);
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [similar, setSimilar] = useState<Array<{ ticketId: string; title: string; excerpt: string }> | null>(null);
 
   const load = useCallback(async () => {
@@ -110,7 +113,7 @@ export function TicketDetailSheet({
 
   const patch = async (p: Record<string, unknown>) => {
     if (!ticket) return;
-    const r = await ticketsApi.update(ws, ticket.id, p, ACTOR);
+    const r = await ticketsApi.update(ws, ticket.id, p, actor);
     if (!r.ok) return toast({ title: 'Update failed', description: r.error, variant: 'error' });
     setTicket(r.ticket);
     onChanged();
@@ -119,7 +122,7 @@ export function TicketDetailSheet({
   const send = async () => {
     if (!ticket || !body.trim()) return;
     setBusy(true);
-    const r = await ticketsApi.comment(ws, ticket.id, mode, body, ACTOR, after === NONE ? undefined : after);
+    const r = await ticketsApi.comment(ws, ticket.id, mode, body, actor, after === NONE ? undefined : after);
     setBusy(false);
     if (!r.ok) return toast({ title: 'Could not post', description: r.error, variant: 'error' });
     setTicket(r.ticket);
@@ -224,29 +227,43 @@ export function TicketDetailSheet({
                 </Select>
               </Field>
               <Field label="Assignee">
-                <Select value={ticket.assignee || NONE} onValueChange={(v) => patch({ assignee: v === NONE ? '' : v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>Unassigned</SelectItem>
-                    {ticket.assignee && !employees.some((e) => e.name === ticket.assignee) && <SelectItem value={ticket.assignee}>{ticket.assignee}</SelectItem>}
-                    {employees.map((e) => <SelectItem key={e.id} value={e.name}>{e.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={[
+                    { value: NONE, label: 'Unassigned' },
+                    ...(ticket.assignee && !employees.some((e) => e.name === ticket.assignee)
+                      ? [{ value: ticket.assignee, label: ticket.assignee }]
+                      : []),
+                    ...employees.map((e) => ({ value: e.name, label: e.name })),
+                  ]}
+                  value={ticket.assignee || NONE}
+                  onChange={(v) => patch({ assignee: v === NONE ? '' : v })}
+                  placeholder="Unassigned"
+                  searchPlaceholder="Search team"
+                  clearable={false}
+                />
               </Field>
               <Field label="Project">
-                <Select value={ticket.projectId ?? NONE} onValueChange={(v) => patch({ projectId: v === NONE ? null : v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>No project</SelectItem>
-                    {projects.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={[
+                    { value: NONE, label: 'No project' },
+                    ...projects.map((p) => ({ value: p.id, label: p.name, detail: p.status })),
+                  ]}
+                  value={ticket.projectId ?? NONE}
+                  onChange={(v) => patch({ projectId: v === NONE ? null : v })}
+                  placeholder="No project"
+                  searchPlaceholder="Search projects"
+                  clearable={false}
+                />
               </Field>
               <Field label="SLA policy">
-                <Select value={ticket.slaPolicyId} onValueChange={(v) => patch({ slaPolicyId: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{settings.slaPolicies.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-                </Select>
+                <SearchSelect
+                  options={settings.slaPolicies.map((p) => ({ value: p.id, label: p.name }))}
+                  value={ticket.slaPolicyId}
+                  onChange={(v) => patch({ slaPolicyId: v || ticket.slaPolicyId })}
+                  placeholder="SLA policy…"
+                  searchPlaceholder="Search policies"
+                  clearable={false}
+                />
               </Field>
               <Field label="Log time (minutes)" hint={`Total: ${fmtDuration(ticket.timeSpentMin)}`}>
                 <Input
@@ -264,11 +281,39 @@ export function TicketDetailSheet({
                 />
               </Field>
               <div className="border-t pt-3"><SlaPanel t={ticket} settings={settings} nowMs={nowMs} /></div>
+              <TicketInsightBox t={ticket} settings={settings} nowMs={nowMs} />
               <p className="flex items-center gap-1 text-[11px] text-muted-foreground"><Bot className="h-3 w-3" /> Reopened {ticket.reopenCount}×</p>
+              {(ticket.status === 'closed' || ticket.status === 'resolved') && (
+                <Button
+                  size="sm" variant="ghost"
+                  className="h-7 gap-1 px-2 text-[11px] text-muted-foreground hover:text-rose-500"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <Trash2 className="h-3 w-3" /> Delete ticket
+                </Button>
+              )}
             </aside>
           </div>
         )}
       </SheetContent>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${ticket?.id ?? 'ticket'}?`}
+        description="Only closed or resolved tickets can be deleted — open SLA records stay auditable. The ticket and its history are removed permanently."
+        confirmLabel="Delete ticket"
+        onConfirm={async () => {
+          if (!ticket) return;
+          const r = await ticketsApi.remove(ws, ticket.id, actor);
+          if (!r.ok) {
+            toast({ title: 'Could not delete', description: r.error, variant: 'error' });
+            return;
+          }
+          setConfirmDelete(false);
+          onChanged();
+          onClose();
+        }}
+      />
     </Sheet>
   );
 }

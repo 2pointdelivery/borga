@@ -1,3 +1,6 @@
+import { isEmailConfigured, sendEmail } from '@/lib/auth/mailer';
+import { renderWelcome } from '@/lib/auth/email-templates';
+import { appOrigin } from '@/lib/auth/app-url';
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { createSessionToken, sessionCookieName, sessionMaxAge, isSecureContext } from '@/lib/auth/session';
@@ -27,6 +30,9 @@ export async function POST(req: Request) {
 
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return NextResponse.json({ ok: false, error: 'A valid email is required.' }, { status: 400 });
+    }
+    if (password.length > 200) {
+      return NextResponse.json({ ok: false, error: 'Password must be at most 200 characters.' }, { status: 400 });
     }
     if (password.length < 8) {
       return NextResponse.json({ ok: false, error: 'Password must be at least 8 characters.' }, { status: 400 });
@@ -80,6 +86,16 @@ export async function POST(req: Request) {
       onboarding: makeOnboarding(),
     };
     await setBorgaState(userWorkspacesKey(user.id), [ws]);
+
+    // A short welcome, in the background: a mail server being slow or absent must never hold up or fail signup.
+    const appUrl = appOrigin(req);
+    if (appUrl) {
+      void (async () => {
+        if (!(await isEmailConfigured())) return;
+        const mail = renderWelcome({ name: user.name, companyName: ws.name, appUrl: `${appUrl}/app` });
+        await sendEmail({ to: user.email, subject: mail.subject, html: mail.html, text: mail.text });
+      })().catch(() => undefined);
+    }
 
     const token = await createSessionToken(user.id);
     const res = NextResponse.json({

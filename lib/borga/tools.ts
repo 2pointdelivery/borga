@@ -6,8 +6,12 @@ import { getBorgaState, setBorgaState, getAllBorgaStates, scopedKey } from './pe
 import { userWsKey } from './keys';
 import { getApiKey, decryptSecret } from './secrets';
 import { mcpCallTool } from './mcp-client';
+import { assertPublicUrl, fetchPublic, readTextCapped } from './safe-url';
 import type { Task, Lead, AgentMemory, Approval, KnowledgeEntry, ActivityEvent, SettingsState, McpServer, ScheduledTask } from './data';
 import { INITIAL_TASKS, INITIAL_LEADS, KNOWLEDGE_SEED, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from './data';
+import { analyzeOpportunity, draftApplication as draftFundingApplication, loadOpportunities, runFullPipeline } from './fundraising-pipeline';
+import { TOOL_NAMES as TOOL_NAMES_CLIENT } from './tool-names';
+import { recomputeCosting, stockByWarehouse, stockStatus, valuation, type InventoryItem, type StockMovement, type Warehouse } from './inventory';
 
 /**
  * Tier 2 tool registry — single source of truth for every capability.
@@ -36,13 +40,16 @@ export const TOOL_DEFS: ToolDef[] = [
   { name: 'web_search', description: 'Use this for real multi-engine web search via wigolo (requires wigolo running).', schema: z.object({ query: z.string().min(1), max_results: z.number().int().min(1).max(20).optional(), q: z.string().optional() }).passthrough(), needsConfirm: false },
   { name: 'web_crawl', description: 'Use this to crawl a site up to max_pages/max_depth via wigolo.', schema: z.object({ url: z.string().min(1), max_pages: z.number().int().min(1).max(200).optional(), max_depth: z.number().int().min(0).max(5).optional() }).passthrough(), needsConfirm: false },
   { name: 'web_research', description: 'Use this to synthesize a cited research report on a question via wigolo.', schema: z.object({ question: z.string().min(1), query: z.string().optional() }).passthrough(), needsConfirm: false },
+  { name: 'analyze_funding', description: 'Use this to browse a funding program website (or every open one) and summarize requirements, what the funder expects, documents needed and the fit score. Saves everything onto the opportunity.', schema: z.object({ opportunityId: z.string().max(80).optional(), analyzeAll: z.boolean().optional() }).passthrough(), needsConfirm: false },
+  { name: 'draft_application', description: 'Use this to draft the application for one funding opportunity from the company profile plus its analyzed requirements. Analyzes the site first when needed; moves the opportunity to applying.', schema: z.object({ opportunityId: z.string().min(1).max(80) }).passthrough(), needsConfirm: false },
+  { name: 'run_funding_pipeline', description: 'Use this for the full autonomous fundraising pass: browse every open program site, summarize requirements, draft all applications, auto-apply at 85%+ fit. Prefer this for grant scans and weekly checks.', schema: z.object({ opportunityId: z.string().max(80).optional() }).passthrough(), needsConfirm: false },
   { name: 'list_tickets', description: 'Use this to read support tickets (Support Desk). Optional filter on status/priority/text; returns key, subject, status, priority, assignee and SLA-relevant timestamps.', schema: z.object({ status: z.enum(['open', 'in-progress', 'pending', 'resolved', 'closed', 'active']).optional(), priority: z.enum(['critical', 'high', 'medium', 'low']).optional(), query: z.string().max(200).optional() }).passthrough(), needsConfirm: false },
   { name: 'find_similar_tickets', description: 'Use this to find resolved support tickets similar to a ticket (id) or a described problem (query), to reuse what worked. Requires the Supermemory feature with ticket indexing on.', schema: z.object({ id: z.string().max(40).optional(), query: z.string().max(500).optional() }).passthrough(), needsConfirm: false },
   { name: 'create_ticket', description: 'Use this to open a support ticket (e.g. a customer problem found while working). Does not email anyone.', schema: z.object({ subject: z.string().min(1).max(200), description: z.string().max(5000).optional(), priority: z.enum(['critical', 'high', 'medium', 'low']).optional(), type: z.enum(['incident', 'request', 'bug', 'task', 'question']).optional(), requesterEmail: z.string().max(254).optional(), requesterName: z.string().max(120).optional() }).passthrough(), needsConfirm: false },
   { name: 'update_ticket', description: 'Use this to triage a ticket by key (e.g. SUP-12): status, priority, assignee, plus an optional internal note. Never contacts the customer.', schema: z.object({ id: z.string().min(1).max(40), status: z.enum(['open', 'in-progress', 'pending', 'resolved', 'closed']).optional(), priority: z.enum(['critical', 'high', 'medium', 'low']).optional(), assignee: z.string().max(120).optional(), note: z.string().max(5000).optional() }).passthrough(), needsConfirm: false },
   { name: 'draft_ticket_reply', description: 'Use this to prepare a reply to a ticket requester. It is saved as an internal DRAFT note; a human reviews and sends it from the Support Desk. The agent cannot email customers.', schema: z.object({ id: z.string().min(1).max(40), body: z.string().min(1).max(5000) }).passthrough(), needsConfirm: false },
   { name: 'run_workflow', description: 'Use this to trigger a named company workflow on the engine.', schema: z.object({ workflowName: z.string().min(1).max(100) }).passthrough(), needsConfirm: true },
-  { name: 'query_state', description: 'Use this to read live workspace state (tasks, leads, agents, finance, memories, ops, goals, kpis, fundraising, mcpServers, notices, scheduledTasks) with an optional filter.', schema: z.object({ entity: z.enum(['tasks', 'leads', 'agents', 'finance', 'memories', 'ops', 'goals', 'kpis', 'fundraising', 'mcpServers', 'notices', 'scheduledTasks']), filter: z.string().optional() }).passthrough(), needsConfirm: false },
+  { name: 'query_state', description: 'Use this to read live workspace state (tasks, leads, customers, agents, finance, memories, ops, goals, kpis, fundraising, mcpServers, notices, scheduledTasks, posts, inventory) with an optional filter. "customers" returns CRM-pulled accounts; "inventory" returns the product/service catalog with live stock per location, costs and valuation.', schema: z.object({ entity: z.enum(['tasks', 'leads', 'customers', 'agents', 'finance', 'memories', 'ops', 'goals', 'kpis', 'fundraising', 'mcpServers', 'notices', 'scheduledTasks', 'posts', 'inventory']), filter: z.string().optional() }).passthrough(), needsConfirm: false },
   { name: 'schedule_check', description: 'Use this when the user asks to be reminded or checked on later ("remind me", "watch this", "check daily"). Creates a heartbeat check that runs on its own and holds a notice for them. Check scheduledTasks first to avoid duplicates.', schema: z.object({ name: z.string().min(1).max(100), goal: z.string().min(1).max(1000), interval: z.enum(['hourly', 'daily', 'weekly', 'monthly']), urgent: z.boolean().optional() }).passthrough(), needsConfirm: false },
   { name: 'log_activity', description: 'Use this to leave a visible note in the activity feed about what was done.', schema: z.object({ message: z.string().min(1).max(500), kind: z.enum(['task', 'handoff', 'learn', 'sync', 'voice', 'system']).optional() }).passthrough(), needsConfirm: false },
   { name: 'create_approval', description: 'Use this to request human sign-off for budget/spend/hire/policy instead of acting directly. Safe to run freely.', schema: z.object({ title: z.string().min(1).max(200), description: z.string().max(1000).optional(), category: z.enum(['budget', 'spend', 'hire', 'policy', 'other']).optional(), amount: z.number().nonnegative().optional() }).passthrough(), needsConfirm: false },
@@ -54,6 +61,17 @@ export const TOOL_DEFS: ToolDef[] = [
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
+
+// The client-safe mirror in tool-names.ts must list every registered tool:
+// the Planner's step editor offers exactly these. A mismatch means someone
+// added a tool without mirroring it — loud at module load, not silent in the UI.
+const MIRROR = new Set(TOOL_NAMES_CLIENT);
+for (const name of TOOL_NAMES) {
+  if (!MIRROR.has(name)) console.error(`[tools] "${name}" is registered but missing from tool-names.ts — the Planner editor cannot offer it.`);
+}
+for (const name of MIRROR) {
+  if (!TOOL_NAMES.includes(name)) console.error(`[tools] "${name}" is listed in tool-names.ts but not registered in TOOL_DEFS.`);
+}
 
 export function getToolDef(name: string): ToolDef | undefined {
   return TOOL_DEFS.find((d) => d.name === name);
@@ -293,10 +311,9 @@ export async function executeTool(
           return { ok: false, error: 'Only http/https URLs are allowed' };
         }
         const h = u.hostname;
-        // SSRF guard: block internal IPs and localhost
-        if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1$|localhost$|0\.0\.0\.0$)/.test(h)) {
-          return { ok: false, error: 'Internal network URLs are blocked' };
-        }
+        // SSRF guard: the name is resolved and every address (and every redirect hop) must be public. A pattern match on the
+        // hostname alone misses numeric forms, [::1], 169.254.169.254 and DNS names that point inside.
+        try { await assertPublicUrl(u.href, { allowHttp: true }); } catch { return { ok: false, error: 'Internal network URLs are blocked' }; }
         // Prefer wigolo's fetch when configured — it auto-escalates to a headless
         // browser on SPAs/anti-bot challenges and returns clean markdown, vs. this
         // route's plain HTTP GET + tag-strip fallback below.
@@ -309,11 +326,11 @@ export async function executeTool(
             return { ok: true, data: { url: u.toString(), title: d?.title, content, source: 'wigolo' } };
           }
         }
-        const res = await fetch(u.toString(), {
+        const res = await fetchPublic(u.toString(), {
           headers: { 'User-Agent': 'Borga/1.0 (autonomous business agent)' },
           signal: AbortSignal.timeout(15000),
-        });
-        const text = await res.text();
+        }, { allowHttp: true });
+        const text = await readTextCapped(res, 1_000_000);
         // Strip HTML tags, collapse whitespace, truncate
         const plain = text
           .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -365,6 +382,46 @@ export async function executeTool(
         await appendActivity(agentId, agentName, ws, userId, 'learn', `Researched via wigolo: "${String(question).slice(0, 120)}"`);
       }
       return result;
+    }
+
+    case 'analyze_funding': {
+      const id = typeof params.opportunityId === 'string' && params.opportunityId ? params.opportunityId : null;
+      if (id) {
+        const r = await analyzeOpportunity(id, ws, userId, { id: agentId, name: agentName });
+        if (!r.ok) return { ok: false, error: r.error ?? 'Analysis failed' };
+        return { ok: true, data: { id: r.id, program: r.program, matchScore: r.matchScore, requirements: r.requirements, expectations: r.expectations, documentsNeeded: r.documentsNeeded } };
+      }
+      const open = (await loadOpportunities(ws, userId)).filter((o) => !['applied', 'won', 'rejected'].includes(o.stage));
+      if (!open.length) return { ok: true, data: 'No open funding opportunities to analyze.' };
+      const results = [];
+      for (const o of open) {
+        const r = await analyzeOpportunity(o.id, ws, userId, { id: agentId, name: agentName });
+        results.push({ id: o.id, program: o.program, ok: r.ok, matchScore: r.matchScore, error: r.error });
+      }
+      const done = results.filter((r) => r.ok).length;
+      return { ok: true, data: { analyzed: `${done}/${open.length}`, results } };
+    }
+
+    case 'draft_application': {
+      const id = String(params.opportunityId ?? '');
+      if (!id) return { ok: false, error: 'opportunityId is required for draft_application' };
+      const r = await draftFundingApplication(id, ws, userId, { id: agentId, name: agentName });
+      if (!r.ok) return { ok: false, error: r.error ?? 'Draft failed' };
+      return { ok: true, data: { id: r.id, program: r.program, stage: r.stage, draft: r.draft } };
+    }
+
+    case 'run_funding_pipeline': {
+      const id = typeof params.opportunityId === 'string' && params.opportunityId ? params.opportunityId : undefined;
+      const report = await runFullPipeline(ws, userId, { id: agentId, name: agentName }, id);
+      return {
+        ok: true,
+        data: {
+          analyzed: report.analyzed.map((a) => ({ program: a.program, ok: a.ok, matchScore: a.matchScore, error: a.error })),
+          drafted: report.drafted.length,
+          autoApplied: report.autoApplied,
+          needsReview: report.needsReview,
+        },
+      };
     }
 
     case 'find_similar_tickets':
@@ -451,10 +508,39 @@ ${String(params.body)}`, author: agentName });
     case 'query_state': {
       const entity = String(params.entity ?? '');
       const filter = String(params.filter ?? '').toLowerCase();
-      const ALLOWED = new Set(['tasks', 'leads', 'agents', 'finance', 'memories', 'ops', 'goals', 'kpis', 'fundraising', 'mcpServers', 'notices', 'scheduledTasks']);
+      const ALLOWED = new Set(['tasks', 'leads', 'customers', 'agents', 'finance', 'memories', 'ops', 'goals', 'kpis', 'fundraising', 'mcpServers', 'notices', 'scheduledTasks', 'posts', 'inventory']);
       if (!ALLOWED.has(entity)) {
         return { ok: false, error: `Unknown entity "${entity}". Valid: ${[...ALLOWED].join(', ')}` };
       }
+
+      // "inventory" is a composed view, not a raw entity: the catalog with
+      // live on-hand per location, costing and valuation the agent needs.
+      if (entity === 'inventory') {
+        const items = (await getBorgaState<InventoryItem[]>(key('inventoryItems'))) ?? [];
+        const movements = (await getBorgaState<StockMovement[]>(key('stockMovements'))) ?? [];
+        const warehouses = (await getBorgaState<Warehouse[]>(key('warehouses'))) ?? [];
+        const byName = new Map(warehouses.map((w) => [w.id, w.name]));
+        const data2 = items
+          .filter((i) => !filter || `${i.name} ${i.sku} ${i.barcode} ${i.category} ${i.type}`.toLowerCase().includes(filter))
+          .slice(0, 30)
+          .map((i) => {
+            const costing = recomputeCosting(movements, i.id);
+            return {
+              name: i.name, type: i.type, sku: i.sku, barcode: i.barcode || undefined,
+              category: i.category || undefined, price: i.price, taxRate: i.taxRate,
+              onHand: i.trackStock ? costing.qtyOnHand : undefined,
+              avgCost: i.trackStock && costing.qtyOnHand > 0 ? costing.avgCost : undefined,
+              reorderPoint: i.trackStock ? i.reorderPoint : undefined,
+              low: i.trackStock ? stockStatus(i, costing.qtyOnHand) !== 'ok' : undefined,
+              byWarehouse: i.trackStock
+                ? Object.entries(stockByWarehouse(movements, i.id)).map(([id, qty]) => `${byName.get(id) ?? id}: ${qty}`)
+                : undefined,
+            };
+          });
+        const value = valuation(movements, items);
+        return { ok: true, data: { items: data2, totalStockValue: value.total, warehouses: warehouses.map((w) => ({ name: w.name, kind: w.kind })) } };
+      }
+
       const all = ws
         ? await getBorgaState<Record<string, unknown>>(key(entity))
         : (await getAllBorgaStates())[entity];
@@ -614,7 +700,7 @@ ${String(params.body)}`, author: agentName });
       if (!apiKey) return { ok: false, error: 'Composio is not configured. Add COMPOSIO_API_KEY in Integrations → Composio.' };
       try {
         const res = await fetch(
-          `https://backend.composio.dev/api/v3/tools?toolkits[]=${encodeURIComponent(app.toUpperCase())}&limit=30`,
+          `https://backend.composio.dev/api/v3/tools?toolkit_slug=${encodeURIComponent(app)}&limit=30`,
           { headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }, signal: AbortSignal.timeout(15000) },
         );
         if (!res.ok) return { ok: false, error: `Could not list actions for "${app}" (${res.status}).` };
@@ -622,7 +708,7 @@ ${String(params.body)}`, author: agentName });
         const tools: any[] = Array.isArray(data) ? data : data.items ?? [];
         return {
           ok: true,
-          data: tools.slice(0, 30).map((t) => ({ action: t.name ?? t.slug ?? t.id, description: t.description ?? '' })),
+          data: tools.slice(0, 30).map((t) => ({ action: t.slug ?? t.name ?? t.id, description: t.description ?? '' })),
         };
       } catch (e) {
         return { ok: false, error: `Could not reach Composio: ${(e as Error).message}` };
@@ -642,23 +728,28 @@ ${String(params.body)}`, author: agentName });
       }
       const base = 'https://backend.composio.dev/api/v3';
       const headers: Record<string, string> = { 'Content-Type': 'application/json', 'x-api-key': apiKey };
-      // Resolve the entity for an ACTIVE connection to this app — and, critically,
-      // reject the call up front if the app isn't actually connected, instead of
-      // letting the agent blindly guess and burn a step on an opaque 4xx from
-      // Composio. This is real tool *selection*, not just execution.
-      let entityId = 'default';
+      // Resolve the Composio user for an ACTIVE connection to this app — and,
+      // critically, reject the call up front if the app isn't actually
+      // connected, instead of letting the agent blindly guess and burn a step
+      // on an opaque 4xx from Composio. This is real tool *selection*, not just
+      // execution. (Named composioUserId: the outer `userId` is the app user
+      // and must keep flowing to approvals/activity scoping.)
+      let composioUserId = 'default';
       let matchedConnection = false;
       let connectedAppsList: string[] | null = null;
       try {
-        const accRes = await fetch(`${base}/connectedAccounts?limit=50`, { headers, signal: AbortSignal.timeout(15000) });
+        const accRes = await fetch(`${base}/connected_accounts?limit=50`, { headers, signal: AbortSignal.timeout(15000) });
         if (accRes.ok) {
           const accData = (await accRes.json()) as { items?: any[] } | any[];
           const accounts: any[] = Array.isArray(accData) ? accData : accData.items ?? [];
-          const active = accounts.filter((a) => a.status === 'ACTIVE' || a.status === 'connected');
-          connectedAppsList = [...new Set(active.map((a) => String(a.appName ?? '').toLowerCase()).filter(Boolean))];
-          const match = active.find((a) => String(a.appName ?? '').toLowerCase() === app);
-          if (match?.entityId) {
-            entityId = match.entityId;
+          const active = accounts.filter((a) => String(a.status ?? '').toUpperCase() === 'ACTIVE');
+          const slugOf = (a: any) => String(a.toolkit?.slug ?? a.toolkit_slug ?? a.appName ?? '').toLowerCase();
+          connectedAppsList = [...new Set(active.map(slugOf).filter(Boolean))];
+          const match = active.find((a) => slugOf(a) === app);
+          if (match?.user_id ?? match?.userId) {
+            composioUserId = String(match.user_id ?? match.userId);
+            matchedConnection = true;
+          } else if (match) {
             matchedConnection = true;
           }
         }
@@ -687,24 +778,27 @@ ${String(params.body)}`, author: agentName });
           `Agent ${agentName} wants to run "${action}" on ${app} with ${JSON.stringify(parameters).slice(0, 300)}, which sends information or moves money to a third party. Approve to run it exactly once; rejecting runs nothing.`,
           'spend',
           Number((parameters as { amount?: unknown }).amount) || 0,
-          { pendingComposio: { app, action, parameters, entityId } },
+          { pendingComposio: { app, action, parameters, entityId: composioUserId } },
           agentId, agentName, ws, userId,
         );
       }
 
-      const res = await fetch(`${base}/actions/${encodeURIComponent(action)}/execute`, {
+      const res = await fetch(`${base}/tools/execute/${encodeURIComponent(action)}`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ entityId, parameters }),
+        body: JSON.stringify({ user_id: composioUserId, arguments: parameters }),
         signal: AbortSignal.timeout(45000),
       });
       if (!res.ok) {
         const t = await res.text().catch(() => '');
         return { ok: false, error: `Composio action "${action}" on ${app} failed (${res.status}): ${t.slice(0, 300)}` };
       }
-      const data = await res.json();
+      const data = (await res.json()) as { data?: unknown; error?: string | null; successful?: boolean };
+      if (data && data.successful === false) {
+        return { ok: false, error: `Composio action "${action}" on ${app} reported failure: ${(data.error ?? 'unknown error').slice(0, 300)}` };
+      }
       await appendActivity(agentId, agentName, ws, userId, 'task', `Executed Composio action ${action} on ${app}`);
-      return { ok: true, data };
+      return { ok: true, data: data?.data ?? data };
     }
 
     case 'mcp_call': {

@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { fmtMoneyFull } from '@/lib/borga/currencies';
 import { lineKey, type DateOrder, type StatementParse } from '@/lib/borga/statement-parse';
 import type { BankAccount, BankTxn } from '@/lib/borga/data';
+import { SearchSelect } from '../SearchSelect';
 
 interface Row {
   include: boolean;
@@ -91,10 +92,14 @@ export function PdfStatementDialog({ ws, accounts, activeId, existing, currency,
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <p className="mb-1 text-xs font-medium text-muted-foreground">Into which account</p>
-            <Select value={accountId} onValueChange={setAccountId}>
-              <SelectTrigger><SelectValue placeholder="Choose an account" /></SelectTrigger>
-              <SelectContent>{accounts.map((a) => <SelectItem key={a.id} value={a.id}>{a.name} — {a.institution}</SelectItem>)}</SelectContent>
-            </Select>
+            <SearchSelect
+              options={accounts.map((a) => ({ value: a.id, label: a.name, detail: `${a.institution} ··${a.last4}` }))}
+              value={accountId}
+              onChange={setAccountId}
+              placeholder="Choose an account"
+              searchPlaceholder="Search accounts"
+              clearable={false}
+            />
           </div>
           <div>
             <p className="mb-1 text-xs font-medium text-muted-foreground">Statement file</p>

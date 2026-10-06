@@ -92,6 +92,7 @@ export function Landing() {
         <nav className="hidden items-center gap-8 text-sm text-muted-foreground md:flex">
           <a href="#features" className="transition-colors hover:text-foreground">Product</a>
           <a href="#stats" className="transition-colors hover:text-foreground">Why Borga</a>
+          <Link href="/developers" className="transition-colors hover:text-foreground">Developers</Link>
           <Link href="/login" className="transition-colors hover:text-foreground">Sign in</Link>
         </nav>
         <Link href="/signup" className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow transition hover:opacity-90">
@@ -172,6 +173,8 @@ export function Landing() {
 
       <footer className="border-t border-border py-8 text-center text-xs text-muted-foreground">
         Borga — AI Company OS. Built for operators who want their whole business in one place.
+        <span className="mx-2">·</span>
+        <Link href="/developers" className="transition-colors hover:text-foreground">API & Developers</Link>
       </footer>
     </main>
   );

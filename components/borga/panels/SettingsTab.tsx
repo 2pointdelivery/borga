@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Bell, Palette, User, Mic, Server, Globe, ShieldCheck, Phone, BrainCircuit } from 'lucide-react';
+import { Save, Bell, Palette, User, Mic, Server, Globe, ShieldCheck, Phone, BrainCircuit, Cookie } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +12,7 @@ import { useTheme } from '../theme-provider';
 import type { ThemeMode } from '@/lib/borga/store';
 import { ELEVENLABS_VOICES, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
 import { ValuationConfigEditor } from './ValuationConfigEditor';
 import { FeaturesCard } from './FeaturesCard';
 import { EmailUpdatesCard } from './EmailUpdatesCard';
@@ -38,8 +39,10 @@ export function SettingsTab() {
   };
 
   const save = () => {
-    setUserName(name.trim() || 'Lawrence');
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'system', message: `Preferences saved. Welcome back, ${name.trim() || 'Lawrence'}.` });
+    const next = name.trim();
+    if (!next) return; // an empty name never resets the identity
+    setUserName(next);
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `Preferences saved. Welcome back, ${next}.` });
   };
 
   return (
@@ -148,15 +151,18 @@ export function SettingsTab() {
               <code className="text-xs font-mono">
                 {elevenlabs.connected
                   ? `${ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice)?.label ?? elevenlabs.voice} — ${ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice)?.tag ?? 'ElevenLabs'}`
-                  : 'Browser voice — rate 1.02 — pitch 0.72'}
+                  : 'Browser voice — rate 0.98 — pitch 0.85'}
               </code>
             </div>
             <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-medium">Always listening</p>
-                <p className="text-xs text-muted-foreground">Mic stays on app-wide; Borga only acts once you say &quot;Borga&quot; first</p>
+                <p className="text-xs text-muted-foreground">Mic stays on app-wide; Borga only acts once you say &ldquo;Borga&rdquo; first. Separate from voice replies in notifications.</p>
               </div>
-              <Switch checked={settings.notifications.voice} onCheckedChange={(v) => setNotif('voice', v)} />
+              <Switch
+                checked={settings.alwaysListening ?? settings.notifications.voice}
+                onCheckedChange={(v) => setSettings({ ...settings, alwaysListening: v })}
+              />
             </div>
           </div>
         </Card>
@@ -171,15 +177,15 @@ export function SettingsTab() {
           </p>
           <div className="mt-3 max-w-sm">
             <label className="text-xs font-medium text-muted-foreground">Agent voice</label>
-            <select
+            <SearchSelect
+              options={ELEVENLABS_VOICES.map((v) => ({ value: v.id, label: v.label, detail: v.tag }))}
               value={elevenlabs.voice}
-              onChange={(e) => setElevenlabs({ voice: e.target.value })}
-              className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {ELEVENLABS_VOICES.map((v) => (
-                <option key={v.id} value={v.id}>{v.label} — {v.tag}</option>
-              ))}
-            </select>
+              onChange={(v) => { if (v) setElevenlabs({ voice: v }); }}
+              placeholder="Select a voice"
+              searchPlaceholder="Search voices"
+              clearable={false}
+              className="mt-1"
+            />
           </div>
         </Card>
 
@@ -227,6 +233,27 @@ export function SettingsTab() {
 
       <EmailUpdatesCard />
       <InvitesCard />
+
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Cookie className="h-4 w-4 text-primary" /> Cookie settings
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Review, change or withdraw your cookie choice at any time — the banner opens with your saved preferences pre-selected. The choice is stored as a signed cookie and recorded server-side.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => window.dispatchEvent(new CustomEvent('borga:consent-reopen'))}
+          >
+            <Cookie className="h-3.5 w-3.5" /> Manage cookies
+          </Button>
+        </div>
+      </Card>
 
       <FeaturesCard />
 

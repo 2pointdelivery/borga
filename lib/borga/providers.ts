@@ -3,7 +3,7 @@
  * (bring-your-own app/token). Shared by client (forms) and server (validation).
  */
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp';
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram';
 
 export interface FieldDef {
   key: string;
@@ -185,6 +185,24 @@ export const PROVIDERS: ProviderDef[] = [
       'A Live client also needs request signing: set SALTEDGE_PRIVATE_KEY on the server and upload the matching public key in the Salt Edge dashboard.',
     ],
     docsUrl: 'https://docs.saltedge.com/v6/',
+    testable: true,
+  },
+  {
+    id: 'elevenlabs',
+    label: 'ElevenLabs (voices)',
+    description: "Gives this company's agents a spoken voice, in the dashboard and on phone calls. Bring your own key: the usage is billed to your ElevenLabs account.",
+    fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
+    steps: ['Open elevenlabs.io/app/api-key and create an API key.', 'Paste it here and press Test connection.'],
+    docsUrl: 'https://elevenlabs.io/docs/api-reference',
+    testable: true,
+  },
+  {
+    id: 'deepgram',
+    label: 'Deepgram (speech to text)',
+    description: 'Turns push-to-talk recordings into text. Without it the browser built-in recognition is used. Bring your own key.',
+    fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
+    steps: ['Open console.deepgram.com and create an API key.', 'Paste it here and press Test connection.'],
+    docsUrl: 'https://developers.deepgram.com/docs',
     testable: true,
   },
   {

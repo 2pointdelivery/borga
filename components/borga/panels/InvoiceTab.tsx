@@ -36,13 +36,19 @@ import {
 } from '@/lib/borga/data';
 import { invoiceHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
+import { toast } from '@/lib/toast-bus';
+import { findInvoiceDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
 import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 interface InvoiceForm {
   number: string;
   client: string;
+  /** Linked customer account id (set when a known customer is picked in the search picker). */
+  customerId?: string;
   status: InvoiceStatus;
   issued: string;
   due: string;
@@ -59,6 +65,13 @@ interface InvoiceForm {
 // Module-scope helper keeps impure clock access out of component render.
 function dueSoonCutoff(): number {
   return Date.now() + 30 * 86400000;
+}
+
+/** Parses both invoice date shapes: ISO "YYYY-MM-DD" (dialogs, recurring) and "Oct 03" style. */
+function parseDue(due: string): number {
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec((due ?? '').trim());
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime();
+  return new Date(`${due} ${new Date().getFullYear()}`).getTime();
 }
 
 let idSeq = 0;
@@ -93,9 +106,9 @@ export function InvoiceTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Invoice | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Invoice | null>(null);
-  const [payTarget, setPayTarget] = useState<Invoice | null>(null);
+    const [payTarget, setPayTarget] = useState<Invoice | null>(null);
   const [payMethod, setPayMethod] = useState<PaymentMethod>('bank-transfer');
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [confirmDuplicateInvoice, setConfirmDuplicateInvoice] = useState<{ data: Invoice; flags: DuplicateFlag[] } | null>(null);  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payExternalRef, setPayExternalRef] = useState('');
   const [emailTarget, setEmailTarget] = useState<Invoice | null>(null);
   const [emailForm, setEmailForm] = useState({ to: '', subject: '', body: '' });
@@ -107,6 +120,7 @@ export function InvoiceTab() {
       setForm({
         number: editing.number,
         client: editing.client,
+        customerId: editing.customerId,
         status: editing.status,
         issued: editing.issued,
         due: editing.due,
@@ -167,7 +181,7 @@ export function InvoiceTab() {
       taxProfileName: profileNames || undefined,
       externalRef: form.externalRef?.trim() || undefined,
       paymentMethod: form.paymentMethod,
-      customerId: editing?.customerId,
+      customerId: form.customerId ?? editing?.customerId,
       projectId: form.projectId,
       accountId: form.accountId,
     };
@@ -175,9 +189,41 @@ export function InvoiceTab() {
       updateInvoice(editing.id, base);
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Invoice ${base.number} updated — ${lines.length} line(s), total ${money(base.amount)}.` });
     } else {
+      const flags = findInvoiceDuplicates({ id: '', number: base.number, client: base.client, amount: base.amount, issued: base.issued }, invoices);
+      const exact = flags.find((f) => f.level === 'exact');
+      if (exact) {
+        toast({ title: 'Duplicate invoice blocked', description: exact.message, variant: 'error' });
+        log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `Duplicate invoice blocked: ${base.number} for ${base.client} — ${exact.message}` });
+        return;
+      }
+      const likely = flags.filter((f) => f.level === 'likely');
+      if (likely.length) {
+        setConfirmDuplicateInvoice({ data: base, flags: likely });
+        return;
+      }
       addInvoice(base);
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Invoice ${base.number} created for ${base.client} — ${lines.length} line(s), total ${money(base.amount)}, settlement via ${PAYMENT_METHOD_LABEL[base.paymentMethod ?? 'bank-transfer']}.` });
     }
+    setCreateOpen(false);
+    setEditing(null);
+  };
+
+  const doConfirmDuplicateInvoice = () => {
+    const p = confirmDuplicateInvoice;
+    if (!p) return;
+    addInvoice(p.data);
+    addApproval({
+      id: `ap-${Date.now().toString(36)}`,
+      title: `Possible duplicate invoice — review ${p.data.number} (${p.data.client})`,
+      description: `Recorded despite matching ${p.flags.map((f) => f.matchLabel).join('; ')} for ${money(p.data.amount)}. Please confirm it is a separate invoice, not a double bill.`,
+      category: 'spend',
+      amount: p.data.amount,
+      status: 'pending',
+      submittedBy: 'Atlas',
+      createdAt: new Date().toISOString(),
+    });
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Invoice ${p.data.number} recorded over a duplicate warning — routed to the approval queue for review.` });
+    setConfirmDuplicateInvoice(null);
     setCreateOpen(false);
     setEditing(null);
   };
@@ -270,12 +316,16 @@ export function InvoiceTab() {
     if (!ws) return;
     const rows = [
       ['number', 'client', 'issued', 'due', 'subtotal', 'tax_rate', 'tax_profile', 'total', 'external_ref', 'status', 'payment_method', 'paid_at'],
-      ...filteredInvoices.map((i) => [
-        i.number, i.client, i.issued, i.due,
-        String(i.amount), String(i.taxRate ?? 0), i.taxProfileName ?? '', String(i.amount),
-        i.externalRef ?? '',
-        i.status, PAYMENT_METHOD_LABEL[i.paidMethod ?? i.paymentMethod ?? 'bank-transfer'], i.paidAt ?? '',
-      ]),
+      ...filteredInvoices.map((i) => {
+        const rate = i.taxRate ?? 0;
+        const subtotal = rate > 0 ? i.amount / (1 + rate / 100) : i.amount;
+        return [
+          i.number, i.client, i.issued, i.due,
+          subtotal.toFixed(2), String(rate), i.taxProfileName ?? '', String(i.amount),
+          i.externalRef ?? '',
+          i.status, PAYMENT_METHOD_LABEL[i.paidMethod ?? i.paymentMethod ?? 'bank-transfer'], i.paidAt ?? '',
+        ];
+      }),
     ];
     downloadTextFile(`invoices-${new Date().toISOString().slice(0, 10)}.csv`, csvWithHeader(ws, 'Invoice register', `${filteredInvoices.length} invoices`, rows));
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `${filteredInvoices.length} invoices exported with company header.` });
@@ -283,7 +333,7 @@ export function InvoiceTab() {
 
   // ── Advanced: stats, search, filters ──────────────────────────────────────
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'draft' | 'paid'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'overdue' | 'draft' | 'paid'>('all');
 
   const stats = useMemo(() => {
     const unpaid = invoices.filter((i) => i.status === 'sent' || i.status === 'overdue');
@@ -294,8 +344,8 @@ export function InvoiceTab() {
     const avgTotal = nonDraft.length ? nonDraft.reduce((s, i) => s + i.amount, 0) / nonDraft.length : 0;
     const soonCutoff = dueSoonCutoff();
     const dueSoon = unpaid.filter((i) => {
-      const d = new Date(`${i.due} ${new Date().getFullYear()}`);
-      return !Number.isNaN(d.getTime()) && d.getTime() <= soonCutoff;
+      const d = parseDue(i.due);
+      return !Number.isNaN(d) && d <= soonCutoff;
     });
     return {
       totalUnpaid,
@@ -311,6 +361,7 @@ export function InvoiceTab() {
     () =>
       invoices.filter((i) => {
         if (statusFilter === 'open' && !(i.status === 'sent' || i.status === 'overdue')) return false;
+        if (statusFilter === 'overdue' && i.status !== 'overdue') return false;
         if (statusFilter === 'draft' && i.status !== 'draft') return false;
         if (statusFilter === 'paid' && i.status !== 'paid') return false;
         if (query && !`${i.number} ${i.client} ${i.issued} ${i.due}`.toLowerCase().includes(query.toLowerCase())) return false;
@@ -371,7 +422,7 @@ export function InvoiceTab() {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-lg bg-muted p-1 text-xs">
-          {(['all', 'open', 'draft', 'paid'] as const).map((f) => (
+          {(['all', 'open', 'overdue', 'draft', 'paid'] as const).map((f) => (
             <button key={f} onClick={() => setStatusFilter(f)} className={cn('rounded-md px-4 py-1.5 font-medium capitalize', statusFilter === f ? 'bg-background shadow-sm' : 'text-muted-foreground')}>
               {f}
             </button>
@@ -388,7 +439,7 @@ export function InvoiceTab() {
           <thead className="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-4 py-2.5 font-medium">Invoice</th>
-              <th className="hidden px-4 py-2.5 font-medium sm:table-cell">Client</th>
+              <th className="hidden px-4 py-2.5 font-medium sm:table-cell">Customer</th>
               <th className="hidden px-4 py-2.5 font-medium md:table-cell">Issued → Due</th>
               <th className="hidden px-4 py-2.5 font-medium lg:table-cell">Method</th>
               <th className="px-4 py-2.5 text-right font-medium">Amount</th>
@@ -481,13 +532,27 @@ export function InvoiceTab() {
               <Field label="Number">
                 <Input value={form.number} onChange={(e) => setForm({ ...form, number: e.target.value })} placeholder="#2223" />
               </Field>
-              <Field label="Client *" className="col-span-2">
-                <Input list="invoice-customers" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} placeholder="Acme Industries" />
-                <datalist id="invoice-customers">
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.name} />
-                  ))}
-                </datalist>
+              <Field label="Customer *" className="col-span-2">
+                <SearchSelect
+                  options={customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry }))}
+                  value={form.customerId && customers.some((c) => c.id === form.customerId) ? form.customerId : form.client}
+                  onChange={(v, option) => {
+                    const picked = customers.find((c) => c.id === v);
+                    if (picked) {
+                      setForm({ ...form, customerId: picked.id, client: picked.name });
+                    } else if (option) {
+                      // picked an option not resolved above — fall back to its label
+                      setForm({ ...form, customerId: undefined, client: option.label });
+                    } else {
+                      // custom typed name or cleared
+                      const match = customers.find((c) => c.name.toLowerCase() === v.toLowerCase());
+                      setForm({ ...form, customerId: match?.id, client: v });
+                    }
+                  }}
+                  placeholder="Acme Industries"
+                  searchPlaceholder="Search customers"
+                  allowCustom
+                />
               </Field>
             </div>
 
@@ -684,6 +749,15 @@ export function InvoiceTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDuplicateInvoice}
+        onOpenChange={(o) => { if (!o) setConfirmDuplicateInvoice(null); }}
+        title="Possible duplicate invoice — record anyway?"
+        description={confirmDuplicateInvoice ? `This looks like ${confirmDuplicateInvoice.flags.map((f) => f.matchLabel).join('; ')} for ${money(confirmDuplicateInvoice.data.amount)}. Recording it raises a review approval so someone confirms it is a separate invoice.` : ''}
+        confirmLabel="Record + flag for review"
+        onConfirm={doConfirmDuplicateInvoice}
+      />
     </div>
   );
 }

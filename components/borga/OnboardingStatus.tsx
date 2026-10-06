@@ -1,7 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { Sparkles, ArrowRight, CheckCircle2, SlidersHorizontal } from 'lucide-react';
+import { Sparkles, ArrowRight, CheckCircle2, SlidersHorizontal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useBorga } from '@/lib/borga/store';
@@ -9,6 +10,20 @@ import { onboardingProgress, normalizeOnboarding } from '@/lib/borga/data';
 import { useOptionalSetup } from './use-optional-setup';
 
 const CHIP = 'inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:border-primary/40 hover:bg-card/80';
+
+/** Quiet companies can snooze the strip — it stays hidden for 7 days, per company. */
+const SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+const snoozeKey = (wsId: string) => `borga:setup-strip-dismissed:${wsId}`;
+
+function isSnoozed(wsId: string): boolean {
+  try {
+    const raw = localStorage.getItem(snoozeKey(wsId));
+    if (!raw) return false;
+    return Date.now() - Number(raw) < SNOOZE_MS;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The strip under the header. While the essential steps are not done it shows progress and what is left. After that it stays, more
@@ -19,6 +34,7 @@ export function OnboardingStatus() {
   const { activeWorkspace } = useBorga();
   const ws = activeWorkspace();
   const optional = useOptionalSetup();
+  const [snoozedId, setSnoozedId] = useState<string | null>(null);
   if (!ws) return null;
 
   const ob = ws.onboarding;
@@ -55,8 +71,19 @@ export function OnboardingStatus() {
     );
   }
 
-  // essentials are done: remind about what is still not configured, until it is
+  // essentials are done: remind about what is still not configured, until it is.
+  // Quiet companies can dismiss the strip — it stays hidden for a week, then
+  // comes back only if something is still unconfigured.
   if (!optional.ready || optional.pending.length === 0) return null;
+  if (snoozedId === ws.id || isSnoozed(ws.id)) return null;
+  const snooze = () => {
+    try {
+      localStorage.setItem(snoozeKey(ws.id), String(Date.now()));
+    } catch {
+      // storage unavailable — hide for this session only
+    }
+    setSnoozedId(ws.id);
+  };
   const done = optional.items.length - optional.pending.length;
   return (
     <div className="border-b border-border bg-muted/30 px-4 py-2.5 lg:px-8">
@@ -72,6 +99,14 @@ export function OnboardingStatus() {
           {optional.pending.map((i) => (
             <Link key={i.id} href={`/app/onboarding?step=${i.id}`} className={CHIP} title={i.hint}>{i.title} <ArrowRight className="h-3 w-3" /></Link>
           ))}
+          <button
+            type="button"
+            onClick={snooze}
+            title="Hide this reminder for a week"
+            className="inline-flex items-center gap-1 rounded-full px-2 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" /> Dismiss for a week
+          </button>
         </div>
       </div>
     </div>

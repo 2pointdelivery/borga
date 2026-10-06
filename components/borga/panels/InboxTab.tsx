@@ -12,6 +12,8 @@ import {
   CircleCheck,
   Unplug,
   Search,
+  RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,7 +34,10 @@ import {
   type CommsMessage,
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
+import { useComposioReady } from '../use-composio-ready';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 const CHANNEL_ICON: Record<CommsChannel, typeof Mail> = {
@@ -54,13 +59,23 @@ type ChannelStatus = Record<CommsChannel, 'connected' | 'connecting' | 'off' | '
 
 export function InboxTab() {
   const {
-    messages, sendMessage, leads, log,
-    composio, messagingChannels, setChannelConnected, activeWorkspace,
+    messages, sendMessage, deleteMessage, leads, log,
+    composio, messagingChannels, setChannelConnected, activeWorkspace, syncToolkitConnection,
   } = useBorga();
 
   const [channelFilter, setChannelFilter] = useState<'all' | CommsChannel>('all');
   const [query, setQuery] = useState('');
+  // A server-side COMPOSIO_API_KEY counts too, so env-configured keys work here as well.
+  const { ready: composioReady } = useComposioReady();
+  const hasComposioKey = !!composio.apiKey || composioReady;
   const [composeOpen, setComposeOpen] = useState(false);
+  const [retrySeed, setRetrySeed] = useState<{ key: number; to: string; subject: string; body: string; channel: CommsChannel } | null>(null);
+  const [confirmDeleteMessage, setConfirmDeleteMessage] = useState<CommsMessage | null>(null);
+
+  const retryMessage = (m: CommsMessage) => {
+    setRetrySeed({ key: Date.now(), to: m.recipients[0] ?? m.to, subject: m.subject, body: m.body, channel: m.channel });
+    setComposeOpen(true);
+  };
   const [status, setStatus] = useState<ChannelStatus>({
     email: messagingChannels.find((c) => c.channel === 'email')?.connected ? 'connected' : 'off',
     sms: messagingChannels.find((c) => c.channel === 'sms')?.connected ? 'connected' : 'off',
@@ -129,7 +144,7 @@ export function InboxTab() {
               headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
               body: JSON.stringify({ action: 'accounts', apiKey: composio.apiKey }),
             });
-            const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { appName?: string; status?: string }[] };
+            const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { id?: string; appName?: string; status?: string }[] };
             if (!pd.ok) {
               clearInterval(timer);
               setStatus((s) => ({ ...s, [channel]: 'error' }));
@@ -142,6 +157,8 @@ export function InboxTab() {
             clearInterval(timer);
             setStatus((s) => ({ ...s, [channel]: 'connected' }));
             setChannelConnected(channel, { connected: true, account: 'OAuth authorized' });
+            // Single mirror-sync: connection card + composio record light up too.
+            syncToolkitConnection(app, true, found.id);
             log({
               agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync',
               message: `${COMMS_CHANNEL_LABEL[channel]} inbox linked via composio.dev OAuth.`,
@@ -156,7 +173,7 @@ export function InboxTab() {
       setChannelConnected(channel, { connected: false, account: '' });
       log({
         agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system',
-        message: composio.apiKey
+        message: hasComposioKey
           ? `Could not link ${COMMS_CHANNEL_LABEL[channel]} — no Composio auth config found for this toolkit yet. Create one at composio.dev/dashboard → Auth Configs.`
           : `Could not link ${COMMS_CHANNEL_LABEL[channel]} — add a Composio API key in Integrations first.`,
       });
@@ -202,7 +219,7 @@ export function InboxTab() {
               <div className="mt-2.5 flex items-center gap-1.5">
                 {st === 'connecting' ? (
                   <Button size="sm" variant="outline" className="h-7 flex-1 gap-1" disabled>
-                    <RefreshCw className="h-3 w-3 animate-spin" /> Waiting for OAuth—
+                    <RefreshCw className="h-3 w-3 animate-spin" /> Waiting for OAuth…
                   </Button>
                 ) : st === 'connected' ? (
                   <>
@@ -227,7 +244,7 @@ export function InboxTab() {
           );
         })}
       </div>
-      {!composio.apiKey && (
+      {!hasComposioKey && (
         <p className="rounded-lg border border-dashed bg-muted/20 p-2.5 text-[11px] text-muted-foreground">
           Tip — add your composio.dev API key in Tools &amp; Integrations to complete real OAuth handshakes for Gmail, Twilio SMS and Telegram.
         </p>
@@ -236,11 +253,14 @@ export function InboxTab() {
       {/* Composer */}
       {composeOpen && (
         <ComposeCard
+          key={retrySeed?.key ?? 'new'}
           onSend={(m) => {
             sendMessage(m);
+            setRetrySeed(null);
             setComposeOpen(false);
           }}
           leads={leads.map((l) => ({ id: l.id, name: l.name, email: l.email }))}
+          initial={retrySeed ?? undefined}
         />
       )}
 
@@ -303,6 +323,14 @@ export function InboxTab() {
                     </span>
                     {m.mode === 'bulk' && <span className="text-[10px] text-muted-foreground">bulk — {m.count} recipients</span>}
                     <Badge variant={m.status === 'sent' ? 'secondary' : 'outline'} className="text-[9px] capitalize">{m.status}</Badge>
+                    {m.status === 'failed' && (
+                      <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-[10px]" onClick={() => retryMessage(m)}>
+                        <RotateCcw className="h-3 w-3" /> Retry
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-muted-foreground hover:text-rose-500" title="Delete row" onClick={() => setConfirmDeleteMessage(m)}>
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -310,6 +338,19 @@ export function InboxTab() {
           })
         )}
       </Card>
+
+      <ConfirmDialog
+        open={!!confirmDeleteMessage}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteMessage(null); }}
+        title="Delete this message row?"
+        description={confirmDeleteMessage ? `The "${confirmDeleteMessage.subject || confirmDeleteMessage.body.slice(0, 60)}" record is removed from the inbox list. Already-delivered messages stay delivered.` : ''}
+        confirmLabel="Delete row"
+        onConfirm={() => {
+          if (!confirmDeleteMessage) return;
+          deleteMessage(confirmDeleteMessage.id);
+          setConfirmDeleteMessage(null);
+        }}
+      />
     </div>
   );
 }
@@ -317,15 +358,17 @@ export function InboxTab() {
 function ComposeCard({
   onSend,
   leads,
+  initial,
 }: {
   onSend: (m: CommsMessage) => void;
   leads: { id: string; name: string; email: string }[];
+  initial?: { to: string; subject: string; body: string; channel: CommsChannel };
 }) {
   const { log, composio, activeWorkspaceId } = useBorga();
-  const [channel, setChannel] = useState<CommsChannel>('email');
-  const [to, setTo] = useState('');
-  const [subject, setSubject] = useState('');
-  const [body, setBody] = useState('');
+  const [channel, setChannel] = useState<CommsChannel>(initial?.channel ?? 'email');
+  const [to, setTo] = useState(initial?.to ?? '');
+  const [subject, setSubject] = useState(initial?.subject ?? '');
+  const [body, setBody] = useState(initial?.body ?? '');
   const [sending, setSending] = useState(false);
 
   /** Actually attempts delivery through a real provider — email via Composio Gmail,
@@ -407,12 +450,15 @@ function ComposeCard({
         </div>
         <div className="sm:col-span-2">
           <label className="text-xs font-medium text-muted-foreground">Recipient</label>
-          <Input list="inbox-leads" value={to} onChange={(e) => setTo(e.target.value)} placeholder="name@company.com or +1 555 …" className="mt-1" />
-          <datalist id="inbox-leads">
-            {leads.map((l) => (
-              <option key={l.id} value={l.email || l.name}>{l.name}</option>
-            ))}
-          </datalist>
+          <SearchSelect
+            options={leads.map((l) => ({ value: l.email || l.name, label: l.name, detail: l.email }))}
+            value={to}
+            onChange={setTo}
+            placeholder="name@company.com or +1 555 …"
+            searchPlaceholder="Search leads"
+            allowCustom
+            className="mt-1"
+          />
         </div>
       </div>
       {channel === 'email' && (

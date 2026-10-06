@@ -1,4 +1,4 @@
-import type { LlmModelInfo, LlmModelTier, LlmProvider } from './data';
+import { RETIRED_LLM_PROVIDERS, type LlmModelInfo, type LlmModelTier, type LlmProvider } from './data';
 
 /**
  * Free-tier LLM providers and the logic that turns a provider's live /models response into catalog entries.
@@ -13,7 +13,8 @@ export const FREELLM_DIRECTORY_URL = 'https://freellm.net/free-llm-api-keys';
 export interface FreeProviderPreset {
   id: string;
   label: string;
-  signupUrl: string;
+  /** Signup page. Absent for local tools that have no signup (e.g. a CLI you install). */
+  signupUrl?: string;
   /**
    * all: every listed model can be used on the free tier (rate limited). priced: free ones are marked by price (OpenRouter).
    * credits: free starter credits. flagged: the provider marks which models need an account (LLM7 `usage_based_only`).
@@ -23,7 +24,7 @@ export interface FreeProviderPreset {
   keyOptional?: boolean;
   /** Works with no account and no API key at all, for the list and for chat. */
   keyless?: boolean;
-  /** Runs on the user's own machine (Ollama): listed from the local server, never through the public-URL guard. */
+  /** Runs on the user's own machine: listed from the local server, never through the public-URL guard. */
   local?: boolean;
   /** Shown on the card: what the user is trading for "free". */
   warning?: string;
@@ -35,7 +36,7 @@ const COMMUNITY_WARNING = 'Community-run free service with no account: your prom
 export const FREE_LLM_PROVIDERS: FreeProviderPreset[] = [
   { id: 'llm-pollinations', label: 'Pollinations', signupUrl: 'https://pollinations.ai', free: 'all', keyOptional: true, keyless: true, warning: COMMUNITY_WARNING, note: 'No key needed. Anonymous tier, rate limited' },
   { id: 'llm-llm7', label: 'LLM7', signupUrl: 'https://llm7.io', free: 'flagged', keyOptional: true, keyless: true, warning: COMMUNITY_WARNING, note: 'No key needed for the models marked free; the rest need an account' },
-  { id: 'llm-ollama', label: 'Ollama (local)', signupUrl: 'https://ollama.com/download', free: 'all', keyOptional: true, keyless: true, local: true, note: 'Runs on your own computer: free and private. Install Ollama and pull a model first' },
+  { id: 'llm-muse', label: 'Muse', free: 'all', keyOptional: true, keyless: true, local: true, note: 'Runs on your own computer via the Muse CLI: free and private. Install it first: /bin/bash -c "$(curl -fsSL https://dev.meta.ai/cli/install-opencode.sh)"' },
   { id: 'llm-openrouter', label: 'OpenRouter', signupUrl: 'https://openrouter.ai/keys', free: 'priced', keyOptional: true, note: 'List is public; only models priced at zero (":free") are free. A free key is needed to chat' },
   { id: 'llm-nvidia', label: 'NVIDIA NIM', signupUrl: 'https://build.nvidia.com', free: 'credits', keyOptional: true, note: 'List is public; a free key with starter credits is needed to chat' },
   { id: 'llm-sambanova', label: 'SambaNova', signupUrl: 'https://cloud.sambanova.ai', free: 'all', keyOptional: true, note: 'List is public; a free key is needed to chat. Rate limited' },
@@ -163,12 +164,15 @@ export function mergeLoadedModels(existing: LlmModelInfo[], loaded: LlmModelInfo
 }
 
 /**
- * Brings a stored (per-workspace) catalog up to date with the seed: adds providers that did not exist when the
- * workspace saved its catalog, and repairs the Gemini base URL (chat completions need the /openai compatibility path).
+ * Brings a stored (per-workspace) catalog up to date with the seed: drops
+ * retired providers, adds providers that did not exist when the workspace
+ * saved its catalog, and repairs the Gemini base URL (chat completions need
+ * the /openai compatibility path).
  */
 export function repairCatalog(stored: LlmProvider[], seed: LlmProvider[]): LlmProvider[] {
-  const have = new Set(stored.map((p) => p.id));
-  const fixed = stored.map((p) => (p.id === 'llm-gemini' && /\/v1beta\/?$/.test(p.baseUrl) ? { ...p, baseUrl: p.baseUrl.replace(/\/?$/, '/openai') } : p));
+  const live = stored.filter((p) => !RETIRED_LLM_PROVIDERS.includes(p.id));
+  const have = new Set(live.map((p) => p.id));
+  const fixed = live.map((p) => (p.id === 'llm-gemini' && /\/v1beta\/?$/.test(p.baseUrl) ? { ...p, baseUrl: p.baseUrl.replace(/\/?$/, '/openai') } : p));
   const missing = seed.filter((p) => !have.has(p.id));
   if (!missing.length) return fixed;
   const customAt = fixed.findIndex((p) => p.id === 'llm-custom');

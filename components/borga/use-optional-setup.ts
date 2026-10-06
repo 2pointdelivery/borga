@@ -39,7 +39,7 @@ export function useOptionalSetup(): { items: OptionalSetupItem[]; pending: Optio
   const websiteStep = activeWorkspace()?.onboarding?.steps.find((s) => s.id === 'website');
   const items = useMemo<OptionalSetupItem[]>(() => [
     { id: 'website', title: 'Website knowledge', hint: 'Entries read from your website', configured: knowledge.some((k) => /^Website/i.test(k.source)) || !!websiteStep?.completed },
-    { id: 'ai', title: 'AI model', hint: 'A real model instead of the built-in demo', configured: llm.providerId !== 'llm-demo' },
+    { id: 'ai', title: 'AI model', hint: 'Pollinations works out of the box — pick another any time', configured: !!llm.providerId },
     { id: 'email', title: 'Email (SMTP)', hint: 'Your own mail server', configured: smtp === true },
     { id: 'voice', title: 'Voice', hint: 'Always listening or an agent voice', configured: !!settings.notifications.voice || !!elevenlabs.connected },
   ], [knowledge, llm.providerId, smtp, settings.notifications.voice, elevenlabs.connected, websiteStep?.completed]);

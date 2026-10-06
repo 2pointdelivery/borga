@@ -23,7 +23,6 @@ export async function POST(req: NextRequest) {
   if (!isValidWsId(ws) || typeof providerId !== 'string' || typeof model !== 'string' || !model) {
     return NextResponse.json({ ok: false, error: 'ws, providerId and model are required' }, { status: 400 });
   }
-  if (providerId === 'llm-demo') return NextResponse.json({ ok: true, latencyMs: 0, note: 'Built-in demo needs no key.' });
 
   const cfg = await resolveProviderConfig(providerId, ws, userId);
   if (!cfg.baseUrl) return NextResponse.json({ ok: false, error: 'No base URL configured for this provider.' });

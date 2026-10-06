@@ -18,12 +18,37 @@ test('the knowledge base starts empty (no placeholder answers that agents would 
   assert.ok(!JSON.stringify(d.KNOWLEDGE_SEED).includes('Replace this placeholder'));
 });
 
-test('KPI cards start with labels and units only: no invented values, targets or trends', () => {
+test('KPI cards start with best-practice targets but no invented values or trends', () => {
   assert.ok(d.INITIAL_KPI_GROUPS.length > 0);
+  let seededTargets = 0;
   for (const g of d.INITIAL_KPI_GROUPS) {
     assert.ok(g.kpis.length > 0, g.id);
-    for (const k of g.kpis) assert.deepEqual([k.value, k.target, k.delta], [0, 0, 0], `${g.id}/${k.label}`);
+    for (const k of g.kpis) {
+      // No invented measurements: values and trends always start at zero, and
+      // the KPI stays unmeasured until live data or the user supplies a value.
+      assert.deepEqual([k.value, k.delta], [0, 0], `${g.id}/${k.label}`);
+      assert.equal(k.valueSet, false, `${g.id}/${k.label}`);
+      // Targets are best-practice starting benchmarks the user can edit.
+      assert.ok(k.target >= 0, `${g.id}/${k.label}`);
+      if (k.target > 0) seededTargets++;
+    }
   }
+  assert.ok(seededTargets > 0, 'at least some best-practice targets are seeded by default');
+});
+
+test('goal KPI presets are curated, unique best-practice targets', () => {
+  assert.ok(d.GOAL_KPI_PRESETS.length >= 8, 'enough presets to cover the main departments');
+  assert.equal(new Set(d.GOAL_KPI_PRESETS).size, d.GOAL_KPI_PRESETS.length, 'no duplicate presets');
+  for (const p of d.GOAL_KPI_PRESETS) assert.ok(p.length > 0 && p.length <= 48, p);
+});
+
+test('retired LLM providers and the demo model migrate to the current default', () => {
+  assert.deepEqual(d.normalizeLlmSelection(null), d.DEFAULT_LLM);
+  assert.deepEqual(d.normalizeLlmSelection({ ...d.DEFAULT_LLM, providerId: 'llm-demo', model: 'demo' }), d.DEFAULT_LLM);
+  assert.deepEqual(d.normalizeLlmSelection({ ...d.DEFAULT_LLM, providerId: 'llm-ollama', model: 'llama3.2' }), d.DEFAULT_LLM);
+  const keep = { providerId: 'llm-groq', model: 'x', online: true, latency: 5 };
+  assert.deepEqual(d.normalizeLlmSelection(keep), keep);
+  assert.deepEqual(d.normalizeLlmSelection({ ...keep, model: 'demo' }), { ...keep, model: d.DEFAULT_LLM.model });
 });
 
 test('agents start with no invented track record', () => {
@@ -38,6 +63,19 @@ test('sample scheduled tasks are switched off templates, not automation nobody a
   for (const t of d.INITIAL_SCHEDULED_TASKS) assert.deepEqual([t.enabled, t.nextRun], [false, null], t.name);
 });
 
+test('every agent is brain-linked and orchestrated by default', () => {
+  for (const a of d.AGENTS) {
+    assert.equal(a.brainLinked, true, `${a.name} must be linked to the shared brain`);
+    assert.equal(a.orchestratorId, 'a-borga', `${a.name} must be orchestrated by the command center`);
+    assert.equal(a.model, '', `${a.name} must follow the workspace default model`);
+  }
+  // Users can add agents; the default keeps them orchestrated.
+  const withDefaults = d.withBrainDefaults({ id: 'x', name: 'Test', role: 'r', department: 'd', status: 'idle', avatarColor: '#000', skills: [], description: '', tasksCompleted: 0, accuracy: 0, brainLinked: true });
+  assert.equal(withDefaults.model, '');
+  assert.equal(withDefaults.brainLinked, true);
+  assert.equal(withDefaults.orchestratorId, 'a-borga');
+});
+
 test('every business-data list starts empty', () => {
   for (const name of [
     'INITIAL_ADS', 'INITIAL_APPROVALS', 'INITIAL_BANK_ACCOUNTS', 'INITIAL_BANK_TXNS', 'INITIAL_BILLS', 'INITIAL_BROWSES', 'INITIAL_BUDGETS',
@@ -48,8 +86,6 @@ test('every business-data list starts empty', () => {
     assert.equal((d[name] as unknown[]).length, 0, `${name} must start empty`);
   }
 });
-
-// ── T33: nothing plays or listens on a fresh install ──────────────────────────────────────────────────────────────────
 
 test('voice is opt-in: the always-listening microphone and spoken greeting are off by default', () => {
   assert.equal(d.DEFAULT_SETTINGS.notifications.voice, false);

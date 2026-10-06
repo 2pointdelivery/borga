@@ -7,6 +7,7 @@ import {
   addComment,
   createInputSchema,
   createTicket,
+  deleteTicket,
   getTicket,
   listTickets,
   loadSettings,
@@ -49,6 +50,7 @@ const bodySchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('pollMailbox') }),
   z.object({ action: z.literal('similar'), id: z.string().max(40) }),
   z.object({ action: z.literal('sweep') }),
+  z.object({ action: z.literal('delete'), id: z.string().max(40), actor: actorSchema }),
 ]);
 
 function inboundUrl(req: NextRequest, userId: string, ws: string): string {
@@ -129,6 +131,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(await pollMailbox(userId, g.ws));
       case 'sweep':
         return NextResponse.json({ ok: true, ...(await sweepSla(userId, g.ws)) });
+      case 'delete': {
+        const r = await deleteTicket(userId, g.ws, b.id);
+        return r.ok
+          ? NextResponse.json({ ok: true, deleted: b.id })
+          : NextResponse.json({ ok: false, error: r.error }, { status: r.error === 'Ticket not found' ? 404 : 400 });
+      }
     }
   } catch (e) {
     console.error('[tickets] action failed', e);

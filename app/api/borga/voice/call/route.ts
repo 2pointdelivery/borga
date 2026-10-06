@@ -1,8 +1,10 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { randomBytes } from 'crypto';
-import { getApiKey, signPayloadId } from '@/lib/borga/secrets';
+import { signPayloadId } from '@/lib/borga/secrets';
+import { twilioCredentials } from '@/lib/borga/provider-keys';
+import { paymentRequired } from '@/lib/borga/billing-server';
 import { setBorgaState } from '@/lib/borga/persistence';
-import { featureGate } from '@/lib/borga/features-server';
+import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -26,25 +28,19 @@ const VOICE_NAME_TO_ID: Record<string, string> = {
 };
 
 function resolveVoiceId(nameOrId: string): string {
-  return VOICE_NAME_TO_ID[nameOrId.toLowerCase()] ?? nameOrId ?? DEFAULT_VOICE_ID;
-}
-
-async function getTwilioCreds() {
-  const sid = await getApiKey('TWILIO_ACCOUNT_SID');
-  const token = await getApiKey('TWILIO_AUTH_TOKEN');
-  const from = await getApiKey('TWILIO_FROM_PHONE');
-  if (!sid || !token || !from) return null;
-  return { sid, token, from };
+  return VOICE_NAME_TO_ID[nameOrId.toLowerCase()] ?? (nameOrId || DEFAULT_VOICE_ID);
 }
 
 function twilioAuth(sid: string, token: string): string {
   return 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64');
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  const userId = await sessionUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const off = await featureGate('calls', null, null);
   if (off) return off;
-  let body: { action?: string; to?: string; message?: string; voiceId?: string; callSid?: string } = {};
+  let body: { action?: string; to?: string; message?: string; voiceId?: string; callSid?: string; ws?: string } = {};
   try {
     body = await req.json();
   } catch {
@@ -52,12 +48,14 @@ export async function POST(req: Request) {
   }
 
   const action = body.action ?? 'dial';
-  const creds = await getTwilioCreds();
+  const ws = typeof body.ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(body.ws) ? body.ws : null;
+  const creds = await twilioCredentials(userId, ws);
 
   // Real-time status poll for a call already dialed.
   if (action === 'status') {
     const callSid = (body.callSid ?? '').trim();
-    if (!callSid) return NextResponse.json({ ok: false, error: 'callSid is required.' }, { status: 400 });
+    // The sid goes into a Twilio URL path that is called with our credentials, so only a real call sid may pass.
+    if (!/^CA[0-9a-f]{32}$/i.test(callSid)) return NextResponse.json({ ok: false, error: 'callSid is required.' }, { status: 400 });
     if (!creds) return NextResponse.json({ ok: false, configured: false, error: 'Twilio is not configured.' });
     try {
       const res = await fetch(
@@ -78,7 +76,7 @@ export async function POST(req: Request) {
 
   // action === 'dial' (default): place the real outbound call.
   const to = (body.to ?? '').trim();
-  const message = (body.message ?? '').trim();
+  const message = (body.message ?? '').trim().slice(0, 1500);
 
   if (!E164.test(to)) {
     return NextResponse.json(
@@ -94,8 +92,13 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: false,
       configured: false,
-      message: 'Twilio is not configured — add Twilio Account SID, Auth Token and From Number in Integrations to place real outbound calls.',
+      message: 'Twilio is not set up for this company. Add its Account SID, Auth token and phone number under Integrations → Connections to place real calls.',
     });
+  }
+
+  if (ws) {
+    const unpaid = await paymentRequired(userId, ws);
+    if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
   }
 
   const origin = new URL(req.url).origin;
@@ -108,6 +111,7 @@ export async function POST(req: Request) {
   }
 
   const voiceId = resolveVoiceId((body.voiceId ?? '').trim());
+  if (!/^[A-Za-z0-9]{8,40}$/.test(voiceId)) return NextResponse.json({ ok: false, error: 'Invalid voice id.' }, { status: 400 });
 
   // Twilio fetches the TwiML (and then the audio) from a public URL with no
   // session cookie of ours. Rather than putting the message text in that URL
@@ -116,7 +120,8 @@ export async function POST(req: Request) {
   // under a random id and sign the id — the callback proves it's carrying a
   // URL we actually issued without needing to trust its contents.
   const callbackId = randomBytes(16).toString('hex');
-  await setBorgaState(`voice_call_payload:${callbackId}`, { message, voiceId, createdAt: Date.now() });
+  // userId and ws are kept so the audio callback (which carries no session) uses this company's own ElevenLabs key.
+  await setBorgaState(`voice_call_payload:${callbackId}`, { message, voiceId, userId, ws, createdAt: Date.now() });
   const sig = signPayloadId(callbackId);
   const twimlUrl = `${origin}/api/borga/voice/call/twiml?id=${callbackId}&sig=${sig}`;
 

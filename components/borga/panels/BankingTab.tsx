@@ -44,8 +44,11 @@ import {
 } from '@/lib/borga/data';
 import { BANK_ACCOUNT_KINDS, BANK_ACCOUNT_KIND_LABEL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
+import { useComposioReady } from '../use-composio-ready';
 import { SectionTitle } from '../bits';
-import { DateInput, Field } from '../form-widgets';
+import { DateInput, Field, AccountSelect } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 /**
@@ -104,12 +107,17 @@ function suggestMatch(txn: BankTxn, candidates: ReturnType<typeof buildCandidate
   return null;
 }
 
+/** Normalise a suggestion into the "Ledger — X — ≈ 12,345" display form (no stray parens). */
+function matchedRefFor(ref: string): string {
+  return ref.replace(/\s*\(≈\s*/, ' — ≈ ').replace(/\)$/, '');
+}
+
 export function BankingTab() {
   const {
     bankAccounts, addBankAccount, updateBankAccount, deleteBankAccount, activeWorkspaceId,
     bankTxns, addBankTxns, matchBankTxn, setBankTxnAccount, unmatchBankTxn, excludeBankTxn, deleteBankTxn, updateBankTxn, setSettings,
     reconciliationRules, recordReconciliationMatch, deleteReconciliationRule,
-    finance, journals, coa, composio, log, activeWorkspace, settings,
+    finance, journals, coa, composio, log, activeWorkspace, settings, syncToolkitConnection,
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
@@ -117,10 +125,17 @@ export function BankingTab() {
 
   const [selectedAccountId, setSelectedAccountId] = useState<string>(bankAccounts[0]?.id ?? '');
   const [addOpen, setAddOpen] = useState(false);
+  const [editAccount, setEditAccount] = useState<BankAccount | null>(null);
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState<BankAccount | null>(null);
+  const [confirmDeleteTxn, setConfirmDeleteTxn] = useState<BankTxn | null>(null);
+  const [confirmDeleteRule, setConfirmDeleteRule] = useState<ReconciliationRule | null>(null);
+  const lineCountFor = (accountId: string) => bankTxns.filter((t) => t.accountId === accountId).length;
   const [newForm, setNewForm] = useState({ name: '', institution: '', last4: '', kind: 'checking' as BankAccount['kind'], balance: '' });
   const [importOpen, setImportOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const bankFeeds = useFeature('bankFeeds');
+  const { ready: composioReady } = useComposioReady();
+  const hasComposioKey = !!composio.apiKey || composioReady;
   const [csvText, setCsvText] = useState('');
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -141,8 +156,10 @@ export function BankingTab() {
     [accountTxns, methodFilter],
   );
 
+  // Cash accounts only: the match candidates are ledger postings that move cash.
+  // (Fixed Assets and other non-cash asset accounts must never be offered.)
   const cashAccountIds = useMemo(
-    () => new Set(coa.filter((a) => a.type === 'asset').map((a) => a.id)),
+    () => new Set(coa.filter((a) => a.isCash).map((a) => a.id)),
     [coa],
   );
   const candidates = useMemo(
@@ -183,7 +200,7 @@ export function BankingTab() {
     for (const t of bankTxns.filter((x) => x.status === 'unmatched')) {
       const suggestion = suggestMatch(t, candidates, reconciliationRules);
       if (suggestion) {
-        matchBankTxn(t.id, suggestion.ref.replace(' (≈', ' — ≈').replace('))', ')'), suggestion.accountId);
+        matchBankTxn(t.id, matchedRefFor(suggestion.ref), suggestion.accountId);
         if (suggestion.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
         count++;
       }
@@ -201,7 +218,7 @@ export function BankingTab() {
     for (const t of accountTxns.filter((x) => x.status === 'unmatched')) {
       const suggestion = suggestMatch(t, candidates, reconciliationRules);
       if (suggestion) {
-        matchBankTxn(t.id, suggestion.ref.replace(' (≈', ' — ≈').replace('))', ')'), suggestion.accountId);
+        matchBankTxn(t.id, matchedRefFor(suggestion.ref), suggestion.accountId);
         if (suggestion.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
         count++;
       }
@@ -292,7 +309,7 @@ export function BankingTab() {
               headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
               body: JSON.stringify({ action: 'accounts', apiKey: composio.apiKey }),
             });
-            const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { appName?: string; status?: string }[] };
+            const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { id?: string; appName?: string; status?: string }[] };
             if (!pd.ok) {
               clearInterval(timer);
               updateBankAccount(account.id, { status: 'disconnected' });
@@ -302,6 +319,8 @@ export function BankingTab() {
           if (found) {
             clearInterval(timer);
             updateBankAccount(account.id, { status: 'connected', source: 'composio-plaid' });
+            // Single mirror-sync so Tools cards reflect the link too.
+            syncToolkitConnection('plaid', true, found.id);
             log({
               agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync',
               message: `${account.institution} connected through composio.dev (Plaid). Statement sync is live.`,
@@ -319,19 +338,31 @@ export function BankingTab() {
 
   const submitNewAccount = () => {
     if (!newForm.name.trim()) return;
-    addBankAccount({
-      id: `bank-${Date.now()}`,
-      name: newForm.name.trim(),
-      institution: newForm.institution.trim() || 'Manual',
-      currency,
-      last4: newForm.last4.trim() || '0000',
-      kind: newForm.kind,
-      balance: Number(newForm.balance) || 0,
-      source: 'manual' as BankSource,
-      status: 'disconnected',
-    });
-    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bank account registered: ${newForm.name.trim()}.` });
+    if (editAccount) {
+      updateBankAccount(editAccount.id, {
+        name: newForm.name.trim(),
+        institution: newForm.institution.trim() || editAccount.institution,
+        last4: newForm.last4.trim() || editAccount.last4,
+        kind: newForm.kind,
+        balance: Number(newForm.balance) || editAccount.balance,
+      });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bank account updated: ${newForm.name.trim()}.` });
+    } else {
+      addBankAccount({
+        id: `bank-${Date.now()}`,
+        name: newForm.name.trim(),
+        institution: newForm.institution.trim() || 'Manual',
+        currency,
+        last4: newForm.last4.trim() || '0000',
+        kind: newForm.kind,
+        balance: Number(newForm.balance) || 0,
+        source: 'manual' as BankSource,
+        status: 'disconnected',
+      });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bank account registered: ${newForm.name.trim()}.` });
+    }
     setNewForm({ name: '', institution: '', last4: '', kind: 'checking', balance: '' });
+    setEditAccount(null);
     setAddOpen(false);
   };
 
@@ -376,7 +407,7 @@ export function BankingTab() {
           <FileText className="h-4 w-4" /> Import PDF
         </Button>
         <Button variant="outline" onClick={() => setImportOpen(true)} disabled={!activeAccount}>
-          <Upload className="h-4 w-4" /> Import statement
+          <Upload className="h-4 w-4" /> Import CSV
         </Button>
         </div>
       </div>
@@ -409,7 +440,7 @@ export function BankingTab() {
                 </span>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{b.name}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{b.institution} — ——{b.last4} — {BANK_ACCOUNT_KIND_LABEL[b.kind] ?? b.kind}</p>
+                  <p className="truncate text-[11px] text-muted-foreground">{b.institution} ··{b.last4} — {BANK_ACCOUNT_KIND_LABEL[b.kind] ?? b.kind}</p>
                 </div>
               </div>
               <Badge className={cn('shrink-0 text-[9px]', b.status === 'connected' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground')}>
@@ -427,8 +458,8 @@ export function BankingTab() {
                     size="sm"
                     variant="outline"
                     className="h-7 gap-1"
-                    disabled={!composio.apiKey}
-                    title={composio.apiKey ? 'Link via composio.dev (Plaid)' : 'Requires composio.dev API key'}
+                    disabled={!hasComposioKey}
+                    title={hasComposioKey ? 'Link via composio.dev (Plaid)' : 'Requires composio.dev API key'}
                     onClick={(e) => { e.stopPropagation(); void connectViaComposio(b); }}
                   >
                     <Link2 className="h-3 w-3" /> Link
@@ -437,7 +468,14 @@ export function BankingTab() {
                   <Badge className="gap-1 bg-emerald-500/10 text-emerald-600 text-[9px]"><Zap className="h-2.5 w-2.5" /> live</Badge>
                 )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); deleteBankAccount(b.id); }}
+                  onClick={(e) => { e.stopPropagation(); setEditAccount(b); setNewForm({ name: b.name, institution: b.institution, last4: b.last4, kind: b.kind, balance: String(b.balance) }); setAddOpen(true); }}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                  title="Edit account"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteAccount(b); }}
                   className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                   title="Remove account"
                 >
@@ -456,7 +494,7 @@ export function BankingTab() {
           Add bank account
         </button>
       </div>
-      {!composio.apiKey && (
+      {!hasComposioKey && (
         <p className="rounded-lg border border-dashed bg-muted/20 p-2.5 text-[11px] text-muted-foreground">
           Live feed linking uses composio.dev (Plaid toolkit) — add your API key under Integrations → AI &amp; Voice to enable it. Meanwhile, statements import via CSV and reconcile fully offline.
         </p>
@@ -530,7 +568,7 @@ export function BankingTab() {
                     <p className="font-medium">{t.description}</p>
                     {suggestion && (
                       <p className={cn('text-[10px]', suggestion.fromRule ? 'text-emerald-600' : 'text-sky-600')}>
-                        {suggestion.fromRule ? '🧠 learned: ' : 'suggested: '}{suggestion.ref}
+                        {suggestion.fromRule ? 'learned: ' : 'suggested: '}{suggestion.ref}
                       </p>
                     )}
                   </td>
@@ -544,17 +582,11 @@ export function BankingTab() {
                     {t.matchedRef ?? '…'}
                   </td>
                   <td className="px-4 py-2.5">
-                    <Select
-                      value={t.accountId ?? ''}
-                      onValueChange={(v) => setBankTxnAccount(t.id, v)}
-                    >
-                      <SelectTrigger className={cn('h-7 w-40 text-xs', !linkedAccount && 'text-amber-600 border-amber-500/40')}>
-                        <SelectValue placeholder="Unlinked" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {coa.map((a) => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <AccountSelect
+                      value={t.accountId ?? undefined}
+                      onChange={(v) => setBankTxnAccount(t.id, v ?? '')}
+                      placeholder="Unlinked"
+                    />
                   </td>
                   <td className="px-4 py-2.5">
                     <span className={cn(
@@ -615,13 +647,13 @@ export function BankingTab() {
                        >
                          <EyeOff className="h-3 w-3" />
                        </button>
-                       <button
-                         onClick={() => deleteBankTxn(t.id)}
-                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                         title="Delete line"
-                       >
-                         <Trash2 className="h-3 w-3" />
-                       </button>
+                        <button
+                          onClick={() => setConfirmDeleteTxn(t)}
+                          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          title="Delete line"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
                      </div>
                    </td>
                 </tr>
@@ -638,7 +670,7 @@ export function BankingTab() {
       {reconciliationRules.length > 0 && (
         <Card className="overflow-hidden">
           <div className="border-b bg-muted/40 px-4 py-2.5">
-            <p className="text-sm font-semibold">🧠 Auto-reconcile rule memory</p>
+            <p className="text-sm font-semibold">Auto-reconcile rule memory</p>
             <p className="text-[11px] text-muted-foreground">Learned from every manual match — new statement lines with a similar description auto-suggest these accounts.</p>
           </div>
           <table className="w-full text-sm">
@@ -662,7 +694,7 @@ export function BankingTab() {
                     <td className="hidden px-4 py-2 text-[11px] text-muted-foreground sm:table-cell">{new Date(r.lastMatchedAt).toLocaleDateString()}</td>
                     <td className="px-2 py-2">
                       <button
-                        onClick={() => deleteReconciliationRule(r.id)}
+                        onClick={() => setConfirmDeleteRule(r)}
                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         title="Forget this rule"
                       >
@@ -677,11 +709,11 @@ export function BankingTab() {
         </Card>
       )}
 
-      {/* Add bank account */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      {/* Add / edit bank account */}
+      <Dialog open={addOpen} onOpenChange={(o) => { setAddOpen(o); if (!o) setEditAccount(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add bank account</DialogTitle>
+            <DialogTitle>{editAccount ? `Edit ${editAccount.name}` : 'Add bank account'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
@@ -717,7 +749,8 @@ export function BankingTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={submitNewAccount} disabled={!newForm.name.trim()}>Add account</Button>
+            <Button variant="outline" onClick={() => { setAddOpen(false); setEditAccount(null); }}>Cancel</Button>
+            <Button onClick={submitNewAccount} disabled={!newForm.name.trim()}>{editAccount ? 'Save changes' : 'Add account'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -793,12 +826,11 @@ export function BankingTab() {
           </DialogHeader>
           <div className="space-y-3">
             <Field label="GL account" hint="Choosing an account here teaches the auto-reconciler this description next time.">
-              <Select value={manualAccountId} onValueChange={setManualAccountId}>
-                <SelectTrigger><SelectValue placeholder="Select an account…" /></SelectTrigger>
-                <SelectContent>
-                  {coa.map((a) => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <AccountSelect
+                value={manualAccountId || undefined}
+                onChange={(v) => setManualAccountId(v ?? '')}
+                placeholder="Select an account…"
+              />
             </Field>
             <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
               {candidates.length === 0 && (
@@ -829,6 +861,48 @@ export function BankingTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteAccount}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteAccount(null); }}
+        title={`Remove ${confirmDeleteAccount?.name ?? 'account'}?`}
+        description={confirmDeleteAccount
+          ? `The account, its imported statement lines (${lineCountFor(confirmDeleteAccount.id)}), and all reconciliation history are deleted permanently.`
+          : ''}
+        confirmLabel="Remove account"
+        onConfirm={() => {
+          if (!confirmDeleteAccount) return;
+          deleteBankAccount(confirmDeleteAccount.id);
+          log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bank account ${confirmDeleteAccount.name} removed with its statement lines.` });
+          setConfirmDeleteAccount(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteTxn}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteTxn(null); }}
+        title="Delete this statement line?"
+        description={confirmDeleteTxn ? `"${confirmDeleteTxn.description}" (${confirmDeleteTxn.amount}) is removed from the statement.` : ''}
+        confirmLabel="Delete line"
+        onConfirm={() => {
+          if (!confirmDeleteTxn) return;
+          deleteBankTxn(confirmDeleteTxn.id);
+          setConfirmDeleteTxn(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteRule}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteRule(null); }}
+        title="Forget this auto-reconcile rule?"
+        description={confirmDeleteRule ? `Pattern "${confirmDeleteRule.pattern}" will no longer auto-suggest matches.` : ''}
+        confirmLabel="Forget rule"
+        onConfirm={() => {
+          if (!confirmDeleteRule) return;
+          deleteReconciliationRule(confirmDeleteRule.id);
+          setConfirmDeleteRule(null);
+        }}
+      />
     </div>
   );
 }
@@ -843,7 +917,7 @@ function TextareaImport({
 }) {
   return (
     <div className="space-y-2">
-      <textarea
+      <Textarea
         rows={7}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -861,7 +935,7 @@ function TextareaImport({
         }}
       />
       <Button size="sm" variant="outline" className="gap-1" onClick={() => fileRef.current?.click()}>
-        <Upload className="h-3 w-3" /> Choose .csv file—
+        <Upload className="h-3 w-3" /> Choose .csv file…
       </Button>
     </div>
   );

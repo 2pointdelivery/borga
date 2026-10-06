@@ -116,11 +116,10 @@ export function ValuationTab() {
     { tone: 'bull', label: 'Bull Case', value: fmtM(v.ceiling), sub: '12-month upside', text: 'text-emerald-400', border: 'border-emerald-400/30 bg-emerald-400/5', badge: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/30', items: [['Revenue Growth', `+${Math.round(v.growthPct * 1.5)}% YoY`], ['Market Multiple', `${bullMultiple}×`], ['Implied Share', `~$${(v.ceiling / v.sharesM).toFixed(2)}`]] },
   ];
 
+  // Derived from the live method list — never indexed: if the user removes or
+  // renames a method in the config editor, the bridge follows without crashing.
   const BRIDGE = [
-    { name: 'Market Comps', value: METHODS[0].contribution },
-    { name: 'Revenue Mult.', value: METHODS[1].contribution },
-    { name: 'Eqvista Ref.', value: METHODS[2].contribution },
-    { name: 'Tech Premium', value: METHODS[3].contribution },
+    ...METHODS.map((m) => ({ name: m.name, value: m.contribution })),
     { name: 'Total FMV', value: blended },
   ];
 
@@ -209,7 +208,7 @@ export function ValuationTab() {
             <Badge className="mb-1 ml-auto bg-emerald-500/10 text-emerald-600">STRONG</Badge>
           </div>
           <div className="mt-1 h-1.5 rounded bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" />
-          <p className="mt-1 text-[11px] text-muted-foreground">Price +{v.growthPct}% YoY — Cities +51 — 5 Countries</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Price +{v.growthPct}% YoY — from revenue momentum</p>
         </Card>
         <Card className="p-4">
           <p className="text-xs font-medium text-muted-foreground">Enterprise Value</p>
@@ -252,12 +251,12 @@ export function ValuationTab() {
             <LineChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickMargin={8} />
-              <YAxis yAxisId="usd" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `${sym}${val.toFixed(2)}`} domain={[0.15, 0.3]} />
-              <YAxis yAxisId="eqv" orientation="right" tick={{ fontSize: 10, fill: '#FBBF24' }} tickFormatter={(val) => `${sym}${val.toFixed(1)}M`} domain={[1.5, 2.8]} />
+              <YAxis yAxisId="usd" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `${sym}${val.toFixed(2)}`} domain={['auto', 'auto']} />
+              <YAxis yAxisId="eqv" orientation="right" tick={{ fontSize: 10, fill: '#FBBF24' }} tickFormatter={(val) => `${sym}${val.toFixed(1)}M`} domain={['auto', 'auto']} />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: 11, color: '#9BBFBA' }} />
-              <Line yAxisId="usd" type="monotone" dataKey="usd" name="FMV Price (USD)" stroke="#3D9B8E" strokeWidth={2} dot={{ r: 2, fill: '#3D9B8E' }} />
-              <Line yAxisId="eqv" type="monotone" dataKey="eqv" name="Eqvista Val ($M CAD)" stroke="#FBBF24" strokeDasharray="5 4" dot={false} />
+              <Line yAxisId="usd" type="monotone" dataKey="usd" name={`FMV Price (${ws?.currency ?? 'USD'})`} stroke="#3D9B8E" strokeWidth={2} dot={{ r: 2, fill: '#3D9B8E' }} />
+              <Line yAxisId="eqv" type="monotone" dataKey="eqv" name={`Reference Val ($M ${ws?.currency ?? 'USD'})`} stroke="#FBBF24" strokeDasharray="5 4" dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -352,7 +351,7 @@ export function ValuationTab() {
       {/* Bridge + radar */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-5">
-          <SectionTitle title="Valuation Bridge" sub="Component contributions (CAD $M)" />
+          <SectionTitle title="Valuation Bridge" sub={`Component contributions (${ws?.currency ?? 'USD'} $M)`} />
           <div className="mt-4 h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={BRIDGE} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
@@ -388,7 +387,7 @@ export function ValuationTab() {
 
       <Card className="p-4">
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          These figures are derived from the live financial ledger and the company knowledge base (source facts under Company &amp; Brand → —Valuation &amp; financial position—). They are informational estimates only and do not constitute financial advice or a certified appraisal. Consult a licensed valuation professional before making investment decisions.
+          These figures are derived from the live financial ledger and the company knowledge base (source facts under Company &amp; Brand → Valuation &amp; financial position). They are informational estimates only and do not constitute financial advice or a certified appraisal. Consult a licensed valuation professional before making investment decisions.
         </p>
       </Card>
     </div>

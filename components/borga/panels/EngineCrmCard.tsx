@@ -21,14 +21,19 @@ export function EngineCrmCard({ onConnectionChange }: { onConnectionChange?: () 
 
   const run = async () => {
     setBusy(true);
-    const r = await pull();
-    setBusy(false);
-    if (!r.ok && !r.customers && !r.leads) return toast({ title: 'Pull failed', description: r.error, variant: 'error' });
-    toast({
-      title: r.error ? 'Pulled with problems' : 'CRM data pulled',
-      description: 'Customers: ' + fmt(r.customers) + '. Deals: ' + fmt(r.leads) + '.' + (r.skipped ? ' ' + r.skipped + ' record(s) skipped (no id or name).' : '') + (r.truncated ? ' Stopped at the safety limit (1000 records / 10 pages).' : '') + (r.error ? ' ' + r.error : ''),
-      variant: r.error ? 'warning' : 'success',
-    });
+    try {
+      const r = await pull();
+      if (!r.ok && !r.customers && !r.leads) return toast({ title: 'Pull failed', description: r.error, variant: 'error' });
+      toast({
+        title: r.error ? 'Pulled with problems' : 'CRM data pulled',
+        description: 'Customers: ' + fmt(r.customers) + '. Deals: ' + fmt(r.leads) + '.' + (r.skipped ? ' ' + r.skipped + ' record(s) skipped (no id or name).' : '') + (r.truncated ? ' Stopped at the safety limit (1000 records / 10 pages).' : '') + (r.error ? ' ' + r.error : ''),
+        variant: r.error ? 'warning' : 'success',
+      });
+    } catch (error) {
+      toast({ title: 'Pull failed', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (

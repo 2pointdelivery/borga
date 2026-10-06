@@ -100,12 +100,12 @@ test('LLM7: only models the provider marks as not usage-based are free; images, 
   assert.ok(!all.models.some((m) => m.id === 'flux-dev' || m.id === 'whisper-large'), 'non-chat model types are never offered');
 });
 
-test('Pollinations and Ollama lists: every listed model is usable', () => {
+test('Pollinations and Muse lists: every listed model is usable', () => {
   const poll = parseModelList('llm-pollinations', { object: 'list', data: [{ id: 'openai-fast', object: 'model', owned_by: 'ovh' }] });
   assert.deepEqual(poll.models.map((m) => [m.id, m.tier]), [['openai-fast', 'free']]);
-  const ollama = parseModelList('llm-ollama', { object: 'list', data: [{ id: 'llama3.2:latest' }, { id: 'nomic-embed-text:latest' }, { id: 'qwen2.5-coder:7b' }] });
-  assert.deepEqual(ollama.models.map((m) => m.id).sort(), ['llama3.2:latest', 'qwen2.5-coder:7b'], 'embedding models are not chat models');
-  assert.ok(ollama.models.every((m) => m.tier === 'free'));
+  const muse = parseModelList('llm-muse', { object: 'list', data: [{ id: 'muse' }, { id: 'muse-embed' }] });
+  assert.deepEqual(muse.models.map((m) => m.id), ['muse'], 'embedding models are not chat models');
+  assert.ok(muse.models.every((m) => m.tier === 'free'));
 });
 
 test('model search needs every typed word, ignores case and order, and an empty query matches all', () => {
@@ -120,9 +120,9 @@ test('model search needs every typed word, ignores case and order, and an empty 
 
 test('keyless and public-list flags match what was verified live', () => {
   const p = (id: string) => presetFor(id)!;
-  for (const id of ['llm-pollinations', 'llm-llm7', 'llm-ollama']) assert.equal(p(id).keyless, true, id);
+  for (const id of ['llm-pollinations', 'llm-llm7', 'llm-muse']) assert.equal(p(id).keyless, true, id);
   assert.ok(p('llm-pollinations').warning && p('llm-llm7').warning, 'community-run keyless providers carry a privacy warning');
-  assert.equal(p('llm-ollama').warning, undefined, 'Ollama stays on your machine');
+  assert.equal(p('llm-muse').warning, undefined, 'Muse stays on your machine');
   // list is public (200 with no key): OpenRouter, NVIDIA, SambaNova. List needs a key (401/403): Groq, Cerebras, Mistral, Gemini.
   for (const id of ['llm-openrouter', 'llm-nvidia', 'llm-sambanova']) assert.equal(p(id).keyOptional, true, id);
   for (const id of ['llm-groq', 'llm-gemini', 'llm-cerebras', 'llm-mistral']) assert.equal(p(id).keyOptional, undefined, id);
@@ -171,9 +171,20 @@ test('repairing a stored catalog adds new providers before the custom entry and 
   assert.equal(repairCatalog(fixed, fixed).length, fixed.length);
 });
 
-test('every free-provider preset has a signup link and a unique id', () => {
+test('repairing drops retired providers (demo, ollama) and adds new seed ones', () => {
+  const stored = [seed('llm-demo'), seed('llm-ollama'), seed('llm-groq'), seed('llm-custom')];
+  const fixed = repairCatalog(stored, [seed('llm-groq'), seed('llm-muse'), seed('llm-custom')]);
+  assert.deepEqual(fixed.map((p) => p.id), ['llm-groq', 'llm-muse', 'llm-custom']);
+});
+
+test('every free-provider preset has a unique id; signup links stay https, and local CLIs have none', () => {
   assert.equal(new Set(FREE_LLM_PROVIDERS.map((p) => p.id)).size, FREE_LLM_PROVIDERS.length);
-  for (const p of FREE_LLM_PROVIDERS) assert.match(p.signupUrl, /^https:\/\//);
+  for (const p of FREE_LLM_PROVIDERS) {
+    if (p.signupUrl !== undefined) assert.match(p.signupUrl, /^https:\/\//, p.id);
+  }
+  assert.equal(presetFor('llm-muse')?.signupUrl, undefined, 'a local CLI has no signup page');
+  assert.equal(presetFor('llm-muse')?.local, true);
+  assert.ok((presetFor('llm-muse')?.note ?? '').includes('install-opencode.sh'), 'the Muse card tells the user how to install it');
   assert.equal(presetFor('llm-openrouter')?.keyOptional, true);
   assert.equal(presetFor('llm-claude'), undefined);
 });

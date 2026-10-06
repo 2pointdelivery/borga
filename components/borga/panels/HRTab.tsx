@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Plus,
   Users,
@@ -14,10 +14,14 @@ import {
   Download,
   Search,
   Banknote,
+  ChevronDown,
+  ChevronRight,
+  Network,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -38,21 +42,36 @@ import {
   EMPLOYEE_STATUS_STYLE,
   LEAVE_KIND_LABEL,
   computeLeaveBalance,
+  formatStartedAt,
+  toMonthInput,
   type Employee,
+  type EmployeeStatus,
   type EmploymentType,
   type LeaveKind,
   type LeaveRequest,
 } from '@/lib/borga/data';
-import { fmtMoney, fmtMoneyFull } from '@/lib/borga/currencies';
+import { fmtMoney } from '@/lib/borga/currencies';
+import { EMAIL_RE } from '@/lib/borga/tickets';
+import { toast } from '@/lib/toast-bus';
+import { buildOrgTree, departmentTable, depthCounts, type OrgNode } from '@/lib/borga/org-chart';
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { DateInput, Field } from '../form-widgets';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 const TYPE_LABEL: Record<EmploymentType, string> = {
   'full-time': 'Full-time',
   'part-time': 'Part-time',
   contract: 'Contract',
+};
+
+const STATUS_LABEL: Record<EmployeeStatus, string> = {
+  active: 'Active',
+  onboarding: 'Onboarding',
+  'on-leave': 'On leave',
+  offboarded: 'Offboarded',
 };
 
 interface EmployeeFormState {
@@ -64,11 +83,15 @@ interface EmployeeFormState {
   salary: string;
   location: string;
   manager: string;
+  status: EmployeeStatus;
+  performance: string;
+  startedAt: string; // YYYY-MM month input
 }
 
 const EMPTY_FORM: EmployeeFormState = {
   name: '', role: '', department: '', email: '',
   employmentType: 'full-time', salary: '', location: '', manager: '',
+  status: 'onboarding', performance: '75', startedAt: '',
 };
 
 /** Shared add/edit employee dialog used by the directory. */
@@ -79,7 +102,7 @@ function EmployeeDialog({
   onOpenChange: (v: boolean) => void;
   editing: Employee | null;
 }) {
-  const { addEmployee, updateEmployee, log, activeWorkspace } = useBorga();
+  const { addEmployee, updateEmployee, employees, log, activeWorkspace } = useBorga();
   const [form, setForm] = useState<EmployeeFormState>(EMPTY_FORM);
   const [primedFor, setPrimedFor] = useState<Employee | null>(null);
 
@@ -92,25 +115,49 @@ function EmployeeDialog({
             name: editing.name, role: editing.role, department: editing.department,
             email: editing.email, employmentType: editing.employmentType,
             salary: String(editing.salary), location: editing.location, manager: editing.manager ?? '',
+            status: editing.status, performance: String(editing.performance ?? 75),
+            startedAt: toMonthInput(editing.startedAt),
           }
         : EMPTY_FORM,
     );
   }
 
   const currency = activeWorkspace()?.currency ?? 'USD';
+  const departments = [...new Set(employees.map((e) => e.department).filter(Boolean))].sort();
 
   const submit = () => {
     if (!form.name.trim() || !form.role.trim()) return;
+    const email = form.email.trim();
+    if (email && !EMAIL_RE.test(email)) {
+      toast({ title: 'Invalid email', description: 'Use a real address like jane@company.com — or leave it blank.', variant: 'warning' });
+      return;
+    }
+    if (email && employees.some((e) => e.id !== editing?.id && e.email.toLowerCase() === email.toLowerCase())) {
+      toast({ title: 'Email already in use', description: 'Another employee already has this address.', variant: 'warning' });
+      return;
+    }
+    const salary = Number(form.salary);
+    if (form.salary.trim() && (!Number.isFinite(salary) || salary < 0)) {
+      toast({ title: 'Invalid salary', description: 'Salary must be zero or more.', variant: 'warning' });
+      return;
+    }
+    const performance = Math.max(0, Math.min(100, Number(form.performance) || 0));
+    const startedAt = form.startedAt.trim()
+      ? formatStartedAt(form.startedAt.trim())
+      : editing?.startedAt ?? new Date().toLocaleDateString([], { month: 'short', year: 'numeric' });
     if (editing) {
       updateEmployee(editing.id, {
         name: form.name.trim(),
         role: form.role.trim(),
         department: form.department.trim() || editing.department,
-        email: form.email.trim(),
+        email,
         employmentType: form.employmentType,
-        salary: Number(form.salary) || editing.salary,
+        salary: form.salary.trim() ? salary : editing.salary,
         location: form.location.trim(),
         manager: form.manager.trim() || undefined,
+        status: form.status,
+        performance,
+        startedAt,
       });
       log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `Employee record updated: ${form.name.trim()}.` });
     } else {
@@ -119,13 +166,13 @@ function EmployeeDialog({
         name: form.name.trim(),
         role: form.role.trim(),
         department: form.department.trim() || 'General',
-        email: form.email.trim(),
+        email,
         employmentType: form.employmentType,
-        status: 'onboarding',
-        salary: Number(form.salary) || 0,
+        status: form.status,
+        salary: form.salary.trim() ? salary : 0,
         location: form.location.trim() || 'Remote',
-        startedAt: new Date().toLocaleDateString([], { month: 'short', year: 'numeric' }),
-        performance: 75,
+        startedAt,
+        performance,
         manager: form.manager.trim() || undefined,
       });
       log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `New hire added to HR records: ${form.name.trim()} — ${form.role.trim()}.` });
@@ -153,7 +200,15 @@ function EmployeeDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground">Department</label>
-              <Input value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} placeholder="Design" className="mt-1" />
+              <SearchSelect
+                options={departments.map((d) => ({ value: d, label: d }))}
+                value={form.department}
+                onChange={(v) => setForm({ ...form, department: v })}
+                placeholder="Design"
+                searchPlaceholder="Search departments"
+                allowCustom
+                className="mt-1"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Email</label>
@@ -183,10 +238,53 @@ function EmployeeDialog({
           </div>
           <div>
             <label className="text-xs font-medium text-muted-foreground">Reports to (optional)</label>
-            <Input value={form.manager} onChange={(e) => setForm({ ...form, manager: e.target.value })} placeholder="Manager name" className="mt-1" />
+            <SearchSelect
+              options={[
+                { value: '', label: 'No manager' },
+                ...employees
+                  .filter((e) => !editing || e.id !== editing.id)
+                  .map((e) => ({ value: e.name, label: e.name, detail: e.department })),
+              ]}
+              value={form.manager}
+              onChange={(v) => setForm({ ...form, manager: v })}
+              placeholder="Manager name…"
+              searchPlaceholder="Search team"
+              allowCustom
+              className="mt-1"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Status</label>
+              <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as EmployeeStatus })}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(STATUS_LABEL) as EmployeeStatus[]).map((s) => (
+                    <SelectItem key={s} value={s}>{STATUS_LABEL[s]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Start date</label>
+              <Input type="month" value={form.startedAt} onChange={(e) => setForm({ ...form, startedAt: e.target.value })} className="mt-1" />
+            </div>
+          </div>
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="text-xs font-medium text-muted-foreground">Performance</label>
+              <span className="text-xs font-semibold text-primary">{Math.max(0, Math.min(100, Number(form.performance) || 0))}/100</span>
+            </div>
+            <input
+              type="range" min={0} max={100} step={5}
+              value={Math.max(0, Math.min(100, Number(form.performance) || 0))}
+              onChange={(e) => setForm({ ...form, performance: e.target.value })}
+              className="w-full accent-primary"
+            />
           </div>
         </div>
         <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={submit} disabled={!form.name.trim() || !form.role.trim()}>
             {editing ? 'Save changes' : 'Add to directory'}
           </Button>
@@ -199,15 +297,32 @@ function EmployeeDialog({
 // ─── Directory ───────────────────────────────────────────────────────────────
 
 export function HRDirectoryTab() {
-  const { employees, deleteEmployee, runPayroll, log, activeWorkspace } = useBorga();
+  const { employees, deleteEmployee, payrollRuns, createPayrollBatch, releasePayrollBatch, deletePayrollBatch, log, activeWorkspace } = useBorga();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
+  const [confirmDeleteEmployee, setConfirmDeleteEmployee] = useState<Employee | null>(null);
   const [query, setQuery] = useState('');
   const [deptFilter, setDeptFilter] = useState<string>('all');
+  const [payrollOpen, setPayrollOpen] = useState(false);
+  const [payMonth, setPayMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [confirmRelease, setConfirmRelease] = useState<string | null>(null);
   const currency = activeWorkspace()?.currency ?? 'USD';
+  const money = (n: number) => fmtMoney(n, currency);
   const active = employees.filter((e) => e.status === 'active');
   const payroll = employees.filter((e) => e.status !== 'offboarded').reduce((s, e) => s + e.salary, 0);
   const departments = [...new Set(employees.map((e) => e.department))];
+
+  const monthRun = payrollRuns.find((r) => r.monthKey === payMonth) ?? null;
+
+  const prepareBatch = () => {
+    const run = createPayrollBatch(payMonth);
+    if (!run) toast({ title: 'Cannot prepare batch', description: 'That month is already released, or there is nobody active to pay.', variant: 'warning' });
+  };
+
+  const releaseBatch = (id: string) => {
+    if (!releasePayrollBatch(id)) toast({ title: 'Release blocked', description: 'That month was already released.', variant: 'error' });
+  };
 
   const filtered = employees.filter((e) => {
     if (deptFilter !== 'all' && e.department !== deptFilter) return false;
@@ -239,16 +354,10 @@ export function HRDirectoryTab() {
           <Button
             variant="outline"
             disabled={active.length === 0}
-            title={`Books ${active.length} employees × monthly salary to the ledger and journal`}
-            onClick={() => {
-              const label = new Date().toLocaleDateString([], { month: 'long', year: 'numeric' });
-              const total = Math.round(active.reduce((s, e) => s + e.salary / 12, 0));
-              if (window.confirm(`Run payroll for ${label}? ${active.length} employees — total ${fmtMoneyFull(total, currency)} will post to the ledger and journal.`)) {
-                runPayroll(label);
-              }
-            }}
+            title={`Prepare and release the monthly payroll batch for ${active.length} employees`}
+            onClick={() => setPayrollOpen(true)}
           >
-            <Banknote className="h-4 w-4" /> Run payroll
+            <Banknote className="h-4 w-4" /> Payroll
           </Button>
           <Button variant="outline" onClick={exportCsv}>
             <Download className="h-4 w-4" /> Export
@@ -264,15 +373,18 @@ export function HRDirectoryTab() {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search people…" className="pl-8" />
         </div>
-        <Select value={deptFilter} onValueChange={setDeptFilter}>
-          <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All departments</SelectItem>
-            {departments.map((d) => (
-              <SelectItem key={d} value={d}>{d}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchSelect
+          options={[
+            { value: 'all', label: 'All departments' },
+            ...departments.map((d) => ({ value: d, label: d })),
+          ]}
+          value={deptFilter}
+          onChange={(v) => setDeptFilter(v || 'all')}
+          placeholder="All departments"
+          searchPlaceholder="Search departments"
+          clearable={false}
+          className="w-44"
+        />
         <span className="ml-auto text-xs text-muted-foreground">{filtered.length} shown</span>
       </div>
 
@@ -324,7 +436,7 @@ export function HRDirectoryTab() {
                       <Pencil className="h-3 w-3" />
                     </button>
                     <button
-                      onClick={() => { deleteEmployee(e.id); log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `${e.name} removed from the directory.` }); }}
+                      onClick={() => setConfirmDeleteEmployee(e)}
                       className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                       title="Remove"
                     >
@@ -334,14 +446,144 @@ export function HRDirectoryTab() {
                 </td>
               </tr>
             ))}
-            {employees.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-xs text-muted-foreground">{filtered.length === 0 && employees.length > 0 ? 'No people match the filters.' : 'No employees yet.'}</td></tr>
+            {filtered.length === 0 && (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-xs text-muted-foreground">{employees.length > 0 ? 'No people match the filters.' : 'No employees yet.'}</td></tr>
             )}
           </tbody>
         </table>
       </Card>
 
       <EmployeeDialog open={dialogOpen} onOpenChange={setDialogOpen} editing={editing} />
+
+      <ConfirmDialog
+        open={!!confirmDeleteEmployee}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteEmployee(null); }}
+        title={`Remove ${confirmDeleteEmployee?.name ?? 'employee'}?`}
+        description="The employee record is deleted. Leave balances and timesheet rows lose their link and cannot be restored."
+        confirmLabel="Remove employee"
+        onConfirm={() => {
+          if (!confirmDeleteEmployee) return;
+          deleteEmployee(confirmDeleteEmployee.id);
+          log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `${confirmDeleteEmployee.name} removed from the directory.` });
+          setConfirmDeleteEmployee(null);
+        }}
+      />
+
+      <Dialog open={payrollOpen} onOpenChange={setPayrollOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Payroll batches</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <label className="text-xs font-medium text-muted-foreground">Month</label>
+                <Input type="month" value={payMonth} onChange={(e) => setPayMonth(e.target.value)} className="mt-1" />
+              </div>
+              {!monthRun && (
+                <Button size="sm" onClick={prepareBatch} disabled={active.length === 0}>
+                  <Plus className="h-3.5 w-3.5" /> Prepare batch
+                </Button>
+              )}
+            </div>
+
+            {monthRun ? (
+              <Card className="p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">{monthRun.periodLabel}</p>
+                    <p className="text-[11px] text-muted-foreground">{monthRun.lines.length} people · {money(monthRun.total)}</p>
+                  </div>
+                  <Badge variant="outline" className={cn('text-[10px] capitalize ring-1', monthRun.status === 'released' ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30' : 'bg-amber-500/10 text-amber-600 ring-amber-500/30')}>
+                    {monthRun.status}
+                  </Badge>
+                </div>
+                {monthRun.status === 'released' ? (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Released{monthRun.releasedAt ? ` ${new Date(monthRun.releasedAt).toLocaleString()}` : ''} — a month is paid exactly once, so this batch is locked.
+                  </p>
+                ) : (
+                  <>
+                    <div className="mt-3 max-h-44 space-y-1 overflow-y-auto">
+                      {monthRun.lines.map((l) => (
+                        <div key={l.employeeId} className="flex items-center justify-between rounded-lg border px-3 py-1.5 text-sm">
+                          <span className="truncate">{l.name}</span>
+                          <span className="font-mono text-xs">{money(l.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <Button className="flex-1 gap-1.5" onClick={() => setConfirmRelease(monthRun.id)}>
+                        <Banknote className="h-4 w-4" /> Release {money(monthRun.total)}
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon"
+                        className="text-muted-foreground hover:text-destructive"
+                        title="Discard draft batch"
+                        onClick={() => deletePayrollBatch(monthRun.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </Card>
+            ) : (
+              <p className="rounded-lg border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+                No batch for this month yet. Prepare one to review per-person amounts before releasing.
+              </p>
+            )}
+
+            {payrollRuns.length > 0 && (
+              <div>
+                <p className="mb-2 text-xs font-medium text-muted-foreground">History</p>
+                <div className="max-h-56 space-y-1.5 overflow-y-auto">
+                  {payrollRuns.map((r) => (
+                    <div key={r.id}>
+                      <button
+                        onClick={() => setExpandedRun((v) => (v === r.id ? null : r.id))}
+                        className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm hover:bg-muted/40"
+                      >
+                        <span className="font-mono text-[11px] text-muted-foreground">{r.monthKey}</span>
+                        <span className="min-w-0 flex-1 truncate font-medium">{r.periodLabel}</span>
+                        <Badge variant="outline" className={cn('text-[10px] capitalize ring-1', r.status === 'released' ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30' : 'bg-amber-500/10 text-amber-600 ring-amber-500/30')}>
+                          {r.status}
+                        </Badge>
+                        <span className="font-mono text-xs">{money(r.total)}</span>
+                      </button>
+                      {expandedRun === r.id && (
+                        <div className="ml-4 mt-1 space-y-1 border-l pl-3">
+                          {r.lines.map((l) => (
+                            <div key={l.employeeId} className="flex items-center justify-between text-xs">
+                              <span className="truncate text-muted-foreground">{l.name}</span>
+                              <span className="font-mono">{money(l.amount)}</span>
+                            </div>
+                          ))}
+                          <p className="text-[10px] text-muted-foreground">
+                            {r.status === 'released' ? `Released ${r.releasedAt ? new Date(r.releasedAt).toLocaleString() : ''}` : 'Draft — not yet posted.'}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmRelease}
+        onOpenChange={(o) => { if (!o) setConfirmRelease(null); }}
+        title={`Release payroll for ${payrollRuns.find((r) => r.id === confirmRelease)?.periodLabel ?? 'this month'}?`}
+        description={`${money(payrollRuns.find((r) => r.id === confirmRelease)?.total ?? 0)} posts to the ledger and journal. Released months cannot be paid twice — this cannot be undone, void the entries instead.`}
+        confirmLabel="Release batch"
+        onConfirm={() => {
+          if (confirmRelease) releaseBatch(confirmRelease);
+          setConfirmRelease(null);
+        }}
+      />
     </div>
   );
 }
@@ -350,6 +592,7 @@ export function HRDirectoryTab() {
 
 export function HRTimeOffTab() {
   const { leaveRequests, setLeaveStatus, deleteLeaveRequest, addLeaveRequest, employees, log } = useBorga();
+  const [confirmDeleteLeave, setConfirmDeleteLeave] = useState<LeaveRequest | null>(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<{
     employeeId: string;
@@ -366,12 +609,11 @@ export function HRTimeOffTab() {
 
   const submit = () => {
     const emp = employees.find((e) => e.id === form.employeeId);
-    const name = emp?.name ?? form.employeeId.trim();
-    if (!name || !form.from.trim()) return;
+    if (!emp || !form.from.trim()) return;
     addLeaveRequest({
       id: `lv-${Date.now()}`,
-      employeeId: form.employeeId || `custom-${Date.now()}`,
-      employeeName: name,
+      employeeId: emp.id,
+      employeeName: emp.name,
       kind: form.kind,
       from: form.from.trim(),
       to: form.to.trim() || form.from.trim(),
@@ -379,7 +621,7 @@ export function HRTimeOffTab() {
       reason: form.reason.trim(),
       status: 'pending',
     });
-    log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `Leave request filed for ${name}: ${LEAVE_KIND_LABEL[form.kind]} (${form.from.trim()}).` });
+    log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `Leave request filed for ${emp.name}: ${LEAVE_KIND_LABEL[form.kind]} (${form.from.trim()}).` });
     setForm({ employeeId: '', kind: 'vacation', from: '', to: '', days: '', reason: '' });
     setOpen(false);
   };
@@ -426,7 +668,7 @@ export function HRTimeOffTab() {
                   )}>
                     {l.status}
                   </span>
-                  <button onClick={() => deleteLeaveRequest(l.id)} className="text-[10px] text-muted-foreground hover:text-destructive">
+                  <button onClick={() => setConfirmDeleteLeave(l)} className="text-[10px] text-muted-foreground hover:text-destructive">
                     remove
                   </button>
                 </div>
@@ -447,14 +689,15 @@ export function HRTimeOffTab() {
           <div className="space-y-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground">Employee</label>
-              <Select value={form.employeeId} onValueChange={(v) => setForm({ ...form, employeeId: v })}>
-                <SelectTrigger className="mt-1"><SelectValue placeholder="Choose…" /></SelectTrigger>
-                <SelectContent>
-                  {employees.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchSelect
+                options={employees.map((e) => ({ value: e.id, label: e.name, detail: e.department }))}
+                value={form.employeeId}
+                onChange={(v) => setForm({ ...form, employeeId: v })}
+                placeholder="Choose…"
+                searchPlaceholder="Search team"
+                clearable={false}
+                className="mt-1"
+              />
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div>
@@ -480,7 +723,7 @@ export function HRTimeOffTab() {
                 <Input type="number" min={1} value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })} placeholder="1" />
               </Field>
               <Field label="Reason" className="col-span-2">
-                <Input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="Family trip" />
+                <Textarea rows={2} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="Family trip" />
               </Field>
             </div>
           </div>
@@ -489,6 +732,20 @@ export function HRTimeOffTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteLeave}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteLeave(null); }}
+        title="Remove this leave request?"
+        description={confirmDeleteLeave ? `The ${LEAVE_KIND_LABEL[confirmDeleteLeave.kind]} request for ${confirmDeleteLeave.employeeName} (${confirmDeleteLeave.from} → ${confirmDeleteLeave.to}) is removed permanently.` : ''}
+        confirmLabel="Remove request"
+        onConfirm={() => {
+          if (!confirmDeleteLeave) return;
+          deleteLeaveRequest(confirmDeleteLeave.id);
+          log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Leave request for ${confirmDeleteLeave.employeeName} removed.` });
+          setConfirmDeleteLeave(null);
+        }}
+      />
     </div>
   );
 }
@@ -496,7 +753,7 @@ export function HRTimeOffTab() {
 // ─── Teams ───────────────────────────────────────────────────────────────────
 
 export function HRTeamsTab() {
-  const { employees, log } = useBorga();
+  const { employees } = useBorga();
 
   const departments = [...new Set(employees.map((e) => e.department))];
   const avgPerf = employees.length
@@ -540,7 +797,6 @@ export function HRTeamsTab() {
           const perf = members.length
             ? Math.round(members.reduce((s, e) => s + e.performance, 0) / members.length)
             : 0;
-          void log;
           return (
             <Card key={d} className="p-4">
               <div className="flex items-center justify-between">
@@ -567,6 +823,166 @@ export function HRTeamsTab() {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── Organogram ──────────────────────────────────────────────────────────────
+
+const DEPT_COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316'];
+
+const deptColor = (dept: string) => {
+  let h = 0;
+  for (const c of dept) h = ((h * 31 + (c.codePointAt(0) ?? 0)) >>> 0);
+  return DEPT_COLORS[h % DEPT_COLORS.length];
+};
+
+function OrgNodeView({ node, collapsed, onToggle }: { node: OrgNode; collapsed: Set<string>; onToggle: (id: string) => void }) {
+  const e = node.employee;
+  const isCollapsed = collapsed.has(e.id);
+  return (
+    <div>
+      <div className="flex items-center gap-2.5 rounded-xl border bg-muted/20 px-3 py-2">
+        {node.reports.length > 0 ? (
+          <button
+            onClick={() => onToggle(e.id)}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={isCollapsed ? `Expand ${e.name}'s team` : `Collapse ${e.name}'s team`}
+          >
+            {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+        ) : (
+          <span className="w-6 shrink-0" />
+        )}
+        <AgentAvatar name={e.name} color={deptColor(e.department)} size={28} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{e.name}</p>
+          <p className="truncate text-[11px] text-muted-foreground">{e.role} · {e.department}</p>
+        </div>
+        {node.reports.length > 0 && (
+          <Badge variant="secondary" className="shrink-0 text-[10px]">{node.reports.length} report{node.reports.length === 1 ? '' : 's'}</Badge>
+        )}
+        <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium capitalize ring-1', EMPLOYEE_STATUS_STYLE[e.status])}>
+          {e.status.replace('-', ' ')}
+        </span>
+      </div>
+      {!isCollapsed && node.reports.length > 0 && (
+        <div className="ml-5 mt-1.5 space-y-1.5 border-l pl-3">
+          {node.reports.map((r) => (
+            <OrgNodeView key={r.employee.id} node={r} collapsed={collapsed} onToggle={onToggle} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Company organogram: reporting tree from Board level to the front line, plus a department table with heads and members. */
+export function HROrgChartTab() {
+  const { employees } = useBorga();
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const roots = useMemo(() => buildOrgTree(employees), [employees]);
+  const rows = useMemo(() => departmentTable(employees), [employees]);
+  const levels = useMemo(() => depthCounts(roots), [roots]);
+  const rosterCount = levels.reduce((s, n) => s + n, 0);
+  const managerCount = useMemo(() => {
+    let n = 0;
+    const walk = (nodes: OrgNode[]) => {
+      for (const node of nodes) {
+        if (node.reports.length) n++;
+        walk(node.reports);
+      }
+    };
+    walk(roots);
+    return n;
+  }, [roots]);
+
+  const toggle = (id: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  return (
+    <div className="borga-fade-up space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <SectionTitle title="Organogram" sub="Board to front line — built from each person's manager. People with no manager sit at the top, so add board members with no manager to start from the Board." />
+        <Badge>
+          <Network className="mr-1 h-3 w-3" /> {rosterCount} on chart · {levels.length} level{levels.length === 1 ? '' : 's'}
+        </Badge>
+      </div>
+
+      {roots.length === 0 ? (
+        <Card className="p-10 text-center text-sm text-muted-foreground">
+          No people on the chart yet{employees.length ? ' — everyone here is offboarded.' : ". Add employees in the Directory, then set each person's manager to grow the tree."}
+        </Card>
+      ) : (
+        <>
+          <Card className="p-5">
+            <p className="mb-3 text-sm font-semibold">Reporting tree</p>
+            <div className="max-w-2xl space-y-1.5">
+              {roots.map((r) => (
+                <OrgNodeView key={r.employee.id} node={r} collapsed={collapsed} onToggle={toggle} />
+              ))}
+            </div>
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              {managerCount} manager{managerCount === 1 ? '' : 's'} · offboarded people are out of the chart · set managers in the Directory to reshape the tree.
+            </p>
+          </Card>
+
+          <Card className="overflow-hidden">
+            <p className="border-b px-5 py-3 text-sm font-semibold">Departments — heads and members</p>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/20 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-5 py-2 font-medium">Department</th>
+                    <th className="px-4 py-2 font-medium">Head</th>
+                    <th className="px-4 py-2 font-medium">Members</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.name} className="border-b align-top last:border-0">
+                      <td className="px-5 py-3">
+                        <p className="font-semibold">{row.name}</p>
+                        <p className="text-[11px] text-muted-foreground">{row.members.length} member{row.members.length === 1 ? '' : 's'}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.head ? (
+                          <div className="flex items-center gap-2">
+                            <AgentAvatar name={row.head.name} color={deptColor(row.name)} size={24} />
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-medium">{row.head.name}</p>
+                              <p className="truncate text-[11px] text-muted-foreground">{row.head.role}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                          {row.members.map((m) => (
+                            <span key={m.id} className="flex items-center gap-1.5 text-xs">
+                              <AgentAvatar name={m.name} color={deptColor(row.name)} size={20} />
+                              <span className="font-medium">{m.name}</span>
+                              <span className="text-muted-foreground">{m.role}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

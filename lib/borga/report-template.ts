@@ -14,7 +14,7 @@ import { PAYMENT_METHOD_LABEL } from './data';
 import { fmtMoney } from './currencies';
 
 const esc = (s: string) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const money = (ws: Workspace | null | undefined, n: number) => fmtMoney(n, ws?.currency ?? 'USD');
 
@@ -104,6 +104,7 @@ export function openPrintWindow(html: string, title: string): void {
   win.document.open();
   win.document.write(html);
   win.document.close();
+  win.document.title = title;
   win.focus();
   setTimeout(() => {
     win.print();

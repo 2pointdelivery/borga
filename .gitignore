@@ -13,6 +13,11 @@
 # testing
 /coverage
 
+# environment — never commit real secrets (see .env.example for placeholders)
+.env
+.env.*
+!.env.example
+
 # next.js
 /.next/
 /out/

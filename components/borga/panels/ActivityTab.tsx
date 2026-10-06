@@ -1,12 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { Radio, Bot, GitBranch, BrainCircuit, RefreshCw, Mic } from 'lucide-react';
+import { Radio, Bot, GitBranch, BrainCircuit, RefreshCw, Mic, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { useBorga } from '@/lib/borga/store';
 import type { ActivityEvent } from '@/lib/borga/data';
 import { AgentAvatar, SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 const KIND_ICON: Record<ActivityEvent['kind'], typeof Radio> = {
@@ -18,20 +20,26 @@ const KIND_ICON: Record<ActivityEvent['kind'], typeof Radio> = {
   system: Radio,
 };
 
-const FILTERS: (ActivityEvent['kind'] | 'all')[] = ['all', 'task', 'handoff', 'learn', 'sync', 'voice'];
+const FILTERS: (ActivityEvent['kind'] | 'all')[] = ['all', 'task', 'handoff', 'learn', 'sync', 'voice', 'system'];
 
 export function ActivityTab() {
-  const { activity, agents } = useBorga();
+  const { activity, agents, clearActivity } = useBorga();
   const [filter, setFilter] = useState<ActivityEvent['kind'] | 'all'>('all');
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const shown = activity.filter((e) => (filter === 'all' ? true : e.kind === filter));
 
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Real-time activity" sub="A live timeline of everything the fleet is doing" />
-        <div className="flex items-center gap-1.5 text-xs text-emerald-500">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" /> Live
+        <SectionTitle title="Activity timeline" sub="Everything the fleet logs, as it happens in this session" />
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary" className="gap-1.5 text-emerald-600">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live
+          </Badge>
+          <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-destructive" onClick={() => setConfirmClear(true)} disabled={!activity.length}>
+            <Trash2 className="h-3.5 w-3.5" /> Clear
+          </Button>
         </div>
       </div>
 
@@ -85,6 +93,15 @@ export function ActivityTab() {
           <div className="p-8 text-center text-sm text-muted-foreground">No events in this filter yet.</div>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear the activity timeline?"
+        description="All logged events for this company are removed permanently. Agents will keep working — only the timeline is cleared."
+        confirmLabel="Clear timeline"
+        onConfirm={() => { clearActivity(); setConfirmClear(false); }}
+      />
     </div>
   );
 }

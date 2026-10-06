@@ -2,7 +2,7 @@
 
 import { fmtMoney } from '@/lib/borga/currencies';
 import { Fragment, useMemo, useState } from 'react';
-import { Plus, Trash2, Copy, Download, Printer, TrendingUp, Wand2, CalendarRange } from 'lucide-react';
+import { Plus, Trash2, Copy, Download, Printer, TrendingUp, Wand2, CalendarRange, Pencil } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,6 +36,8 @@ import {
 import { brandedDocHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 const MONTH_LABEL = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -50,6 +52,9 @@ export function BudgetTab() {
   const budget = budgets.find((b) => b.id === selectedId) ?? budgets[0];
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [confirmDeleteBudget, setConfirmDeleteBudget] = useState<Budget | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameForm, setRenameForm] = useState({ name: '', fiscalYear: 0 });
   const [form, setForm] = useState({ name: '', fiscalYear: new Date().getFullYear() });
   const [showForecast, setShowForecast] = useState(true);
   const [yearsToGenerate, setYearsToGenerate] = useState('3');
@@ -189,14 +194,15 @@ export function BudgetTab() {
       <Card className="flex flex-wrap items-end gap-3 p-4">
         <div>
           <p className="text-[11px] font-medium text-muted-foreground">Budget</p>
-          <Select value={budget?.id ?? ''} onValueChange={setSelectedId}>
-            <SelectTrigger className="mt-1 w-64"><SelectValue placeholder="Select a budget" /></SelectTrigger>
-            <SelectContent>
-              {budgets.map((b) => (
-                <SelectItem key={b.id} value={b.id}>{b.name} — FY{b.fiscalYear}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SearchSelect
+            options={budgets.map((b) => ({ value: b.id, label: b.name, detail: `FY${b.fiscalYear} · ${b.status}` }))}
+            value={budget?.id ?? ''}
+            onChange={setSelectedId}
+            placeholder="Select a budget"
+            searchPlaceholder="Search budgets"
+            clearable={false}
+            className="mt-1 w-64"
+          />
         </div>
         {budget && (
           <>
@@ -217,9 +223,17 @@ export function BudgetTab() {
               variant="ghost"
               size="sm"
               className="ml-auto text-destructive hover:text-destructive"
-              onClick={() => deleteBudget(budget.id)}
+              onClick={() => setConfirmDeleteBudget(budget)}
             >
               <Trash2 className="h-4 w-4" /> Delete
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setRenameForm({ name: budget.name, fiscalYear: budget.fiscalYear }); setRenameOpen(true); }}
+              title="Rename budget"
+            >
+              <Pencil className="h-4 w-4" />
             </Button>
           </>
         )}
@@ -260,7 +274,7 @@ export function BudgetTab() {
                 onBlur={(e) => updateBudget(budget.id, {
                   assumptions: {
                     revenueGrowthPct: budget.assumptions?.revenueGrowthPct ?? DEFAULT_BUDGET_ASSUMPTIONS.revenueGrowthPct,
-                    costGrowthPct: Number(e.target.value) || 0,
+                    costGrowthPct: budget.assumptions?.costGrowthPct ?? DEFAULT_BUDGET_ASSUMPTIONS.costGrowthPct,
                     expenseGrowthPct: Number(e.target.value) || 0,
                   },
                 })}
@@ -413,6 +427,54 @@ export function BudgetTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader><DialogTitle>Rename budget</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">Name</p>
+              <Input value={renameForm.name} onChange={(e) => setRenameForm((f) => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">Fiscal year</p>
+              <Input
+                type="number"
+                value={renameForm.fiscalYear}
+                onChange={(e) => setRenameForm((f) => ({ ...f, fiscalYear: Number(e.target.value) || f.fiscalYear }))}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!budget || !renameForm.name.trim()) return;
+                updateBudget(budget.id, { name: renameForm.name.trim(), fiscalYear: renameForm.fiscalYear });
+                log({ agentId: 'a-finance', agentName: 'Sage', actor: 'user', kind: 'system', message: `Budget renamed to "${renameForm.name.trim()}" (FY${renameForm.fiscalYear}).` });
+                setRenameOpen(false);
+              }}
+              disabled={!renameForm.name.trim()}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteBudget}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteBudget(null); }}
+        title={`Delete budget "${confirmDeleteBudget?.name ?? ''}"?`}
+        description="A full year of planning data — every line, assumption and forecast — is removed permanently."
+        confirmLabel="Delete budget"
+        onConfirm={() => {
+          if (!confirmDeleteBudget) return;
+          deleteBudget(confirmDeleteBudget.id);
+          log({ agentId: 'a-finance', agentName: 'Sage', actor: 'user', kind: 'system', message: `Budget "${confirmDeleteBudget.name}" deleted.` });
+          setConfirmDeleteBudget(null);
+        }}
+      />
     </div>
   );
 }

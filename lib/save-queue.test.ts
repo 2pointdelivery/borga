@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SaveQueue, canonicalJson, type SendResult } from './borga/save-queue';
+import { SaveQueue, canonicalJson, unionAppendOnly, type SendResult } from './borga/save-queue';
 
 type Payload = { value: unknown };
 
@@ -147,6 +147,33 @@ test('two tabs saving from the same version: exactly one wins, the other is told
   assert.equal(s.rows.get(ID)?.version, 1);
 });
 
+test('noteVersion adopts a newer sibling-tab version so the next save stays fresh', async () => {
+  const s = new FakeServer();
+  const a = tab(s);
+  const b = tab(s);
+  await a.queue.save(ID, { value: ['A'] }); // version 1
+  b.queue.setVersions('ws1|', { invoices: 0 });
+  // tab B hears about A's save through the cross-tab broadcast
+  b.queue.noteVersion(ID, 1);
+  await b.queue.save(ID, { value: ['B after hearing v1'] });
+  assert.deepEqual(b.events.conflicts, []);
+  assert.deepEqual(s.rows.get(ID)?.value, ['B after hearing v1']);
+});
+
+test('noteVersion never downgrades, and never unblocks a real conflict', async () => {
+  const s = new FakeServer();
+  const { queue, events } = tab(s);
+  await queue.save(ID, { value: ['v1'] });
+  queue.noteVersion(ID, 0);
+  assert.equal(queue.version(ID), 1);
+  s.external(ID, ['someone else']);
+  await queue.save(ID, { value: ['stale edit'] });
+  assert.deepEqual(events.conflicts, [ID]);
+  queue.noteVersion(ID, 99);
+  assert.equal(queue.isBlocked(ID), true, 'still blocked');
+  assert.equal(queue.version(ID), 1, 'version untouched while blocked');
+});
+
 test('a rejected save is dropped quietly: no error hook, no conflict, no block', async () => {
   const events = { conflicts: 0, errors: 0 };
   const sent: number[] = [];
@@ -192,4 +219,77 @@ test('canonicalJson ignores key order and undefined fields but not content', () 
   assert.notEqual(canonicalJson([1, 2]), canonicalJson([2, 1]));
   assert.notEqual(canonicalJson({ a: 1 }), canonicalJson({ a: '1' }));
   assert.equal(canonicalJson(null), 'null');
+});
+
+test('an append-only feed merges both sides instead of conflicting', async () => {
+  const s = new FakeServer();
+  const events = { conflicts: [] as string[] };
+  const queue = new SaveQueue<Payload>({
+    send: (id, p, base) => s.handle(id, p, base),
+    valueOf: (p) => p.value,
+    merge: (_id, local, server) => unionAppendOnly(local, server, 200),
+    withValue: (p, value) => ({ ...p, value }),
+    onConflict: (id) => events.conflicts.push(id),
+    onError: () => {},
+  });
+  const ID = 'ws1|activity';
+  await queue.save(ID, { value: [{ id: 'a' }] }); // version 1
+  s.external(ID, [{ id: 'b' }, { id: 'a' }]); // an agent logged meanwhile: version 2
+  await queue.save(ID, { value: [{ id: 'c' }, { id: 'a' }] });
+  assert.deepEqual(events.conflicts, [], 'no banner for a feed both sides append to');
+  assert.deepEqual(s.rows.get(ID)?.value, [{ id: 'c' }, { id: 'a' }, { id: 'b' }], 'both sides entries survive');
+  assert.equal(queue.isBlocked(ID), false);
+});
+
+test('an explicit clear never merges: emptied feeds stay empty instead of resurrecting', async () => {
+  const s = new FakeServer();
+  const events = { conflicts: [] as string[] };
+  const queue = new SaveQueue<Payload>({
+    send: (id, p, base) => s.handle(id, p, base),
+    valueOf: (p) => p.value,
+    merge: (_id, local, server) => unionAppendOnly(local, server, 200),
+    withValue: (p, value) => ({ ...p, value }),
+    onConflict: (id) => events.conflicts.push(id),
+    onError: () => {},
+  });
+  const ID = 'ws1|activity';
+  await queue.save(ID, { value: [{ id: 'a' }] });
+  s.external(ID, [{ id: 'b' }, { id: 'a' }]);
+  await queue.save(ID, { value: [] }); // user cleared the timeline
+  assert.deepEqual(events.conflicts, [ID], 'a clear against a newer copy is a real decision for the user');
+});
+
+test('a merge that keeps losing to a hot writer still ends in a conflict, not a spin', async () => {
+  const s = new FakeServer();
+  const events = { conflicts: [] as string[] };
+  let merges = 0;
+  const queue = new SaveQueue<Payload>({
+    send: (id, p, base) => s.handle(id, p, base),
+    valueOf: (p) => p.value,
+    merge: (_id, local, server) => {
+      merges++;
+      // simulate a writer that always moves first: poison the merge target
+      s.external('ws1|activity', [{ id: `hot-${merges}` }]);
+      return unionAppendOnly(local, server, 200);
+    },
+    withValue: (p, value) => ({ ...p, value }),
+    onConflict: (id) => events.conflicts.push(id),
+    onError: () => {},
+  });
+  const ID = 'ws1|activity';
+  await queue.save(ID, { value: [{ id: 'a' }] });
+  s.external(ID, [{ id: 'b' }]);
+  await queue.save(ID, { value: [{ id: 'c' }] });
+  assert.deepEqual(events.conflicts, [ID]);
+  assert.ok(merges <= 3, `merge retried at most twice, got ${merges}`);
+});
+
+test('unionAppendOnly dedupes by id, keeps local-first order, and caps', () => {
+  assert.deepEqual(
+    unionAppendOnly([{ id: 1 }, { id: 2 }], [{ id: 2 }, { id: 3 }], 10),
+    [{ id: 1 }, { id: 2 }, { id: 3 }],
+  );
+  assert.equal((unionAppendOnly([{ id: 1 }], [{ id: 2 }, { id: 3 }], 2) ?? []).length, 2);
+  assert.equal(unionAppendOnly([], [{ id: 1 }], 10), null, 'empty local refuses to merge');
+  assert.equal(unionAppendOnly([{ id: 1 }], { nope: true }, 10), null, 'non-arrays refuse to merge');
 });

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { getApiKey, setApiKey, isAllowedKey } from '@/lib/borga/secrets';
+import { setApiKey, isAllowedKey } from '@/lib/borga/secrets';
+import { whatsappCredentials } from '@/lib/borga/provider-keys';
 import { getBorgaState, setBorgaState } from '@/lib/borga/persistence';
 import { userWsKey } from '@/lib/borga/keys';
 import { operatorFromRequest } from '@/lib/auth/operator';
@@ -63,26 +64,16 @@ async function saveWhatsAppConfig(config: WhatsAppConfig, userId: string, ws: st
 }
 
 // Get WhatsApp API credentials
-async function getWhatsAppCredentials(): Promise<{ accessToken: string; phoneNumberId: string; businessAccountId: string } | null> {
-  const accessToken = await getApiKey('WHATSAPP_ACCESS_TOKEN');
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
-  const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '';
-
-  if (!accessToken || !phoneNumberId) {
-    return null;
-  }
-
-  return { accessToken, phoneNumberId, businessAccountId };
-}
+const getWhatsAppCredentials = whatsappCredentials;
 
 // Send WhatsApp message
-async function sendWhatsAppMessage(message: WhatsAppMessage): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const credentials = await getWhatsAppCredentials();
+async function sendWhatsAppMessage(message: WhatsAppMessage, userId: string, ws: string | null): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const credentials = await getWhatsAppCredentials(userId, ws);
   if (!credentials) {
-    return { success: false, error: 'WhatsApp credentials not configured' };
+    return { success: false, error: 'WhatsApp is not connected for this company. Add its Meta credentials under Integrations → Connections.' };
   }
 
-  const { accessToken, phoneNumberId } = await credentials;
+  const { accessToken, phoneNumberId } = credentials;
 
   try {
     const response = await fetch(`${WHATSAPP_API_BASE}/${phoneNumberId}/messages`, {
@@ -129,13 +120,13 @@ async function sendWhatsAppMessage(message: WhatsAppMessage): Promise<{ success:
 }
 
 // Verify WhatsApp business number
-async function verifyWhatsAppNumber(): Promise<{ verified: boolean; phone?: string; error?: string }> {
-  const credentials = await getWhatsAppCredentials();
+async function verifyWhatsAppNumber(userId: string, ws: string | null): Promise<{ verified: boolean; phone?: string; error?: string }> {
+  const credentials = await getWhatsAppCredentials(userId, ws);
   if (!credentials) {
     return { verified: false, error: 'WhatsApp credentials not configured' };
   }
 
-  const { accessToken, phoneNumberId } = await credentials;
+  const { accessToken, phoneNumberId } = credentials;
 
   try {
     const response = await fetch(`${WHATSAPP_API_BASE}/${phoneNumberId}`, {
@@ -209,7 +200,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Verify the configuration
-    const verification = await verifyWhatsAppNumber();
+    const verification = await verifyWhatsAppNumber(userId, ws);
     
     if (verification.verified) {
       const config = await loadWhatsAppConfig(userId, ws);
@@ -282,7 +273,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const result = await sendWhatsAppMessage(message);
+    const result = await sendWhatsAppMessage(message, userId, ws);
 
     if (result.success) {
       return NextResponse.json({ 
@@ -301,7 +292,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'verify') {
-    const verification = await verifyWhatsAppNumber();
+    const verification = await verifyWhatsAppNumber(userId, ws);
     
     if (verification.verified) {
       const config = await loadWhatsAppConfig(userId, ws);
@@ -334,7 +325,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'status') {
     const config = await loadWhatsAppConfig(userId, ws);
-    const credentials = await getWhatsAppCredentials();
+    const credentials = await getWhatsAppCredentials(userId, ws);
     
     return NextResponse.json({ 
       ok: true, 
@@ -360,7 +351,7 @@ export async function GET(req: NextRequest) {
   const off = await featureGate('whatsapp', userId, ws);
   if (off) return off;
   const config = await loadWhatsAppConfig(userId, ws);
-  const credentials = await getWhatsAppCredentials();
+  const credentials = await getWhatsAppCredentials(userId, ws);
   
   return NextResponse.json({ 
     ok: true, 

@@ -187,6 +187,75 @@ ${body}${button}
   return { html, text };
 }
 
+// ---------------------------------------------------------------------------
+// Transactional mail (account emails: reset, welcome, invite). Not "updates" the person opted into, so the footer says why they got
+// it and there is no unsubscribe. Same light, table-based layout as the updates so it reads well in every mail client.
+
+export interface TransactionalMail {
+  brand: string;
+  accent?: string;
+  /** Hidden preview line shown beside the subject in the inbox. */
+  preheader: string;
+  title: string;
+  paragraphs: string[];
+  cta?: { label: string; url: string };
+  /** Smaller print under the button (what to do if this was not you). */
+  note?: string;
+  /** Why they are getting this message. */
+  reason: string;
+}
+
+/** Only absolute http(s) links go into a button; anything else (javascript:, data:, relative) is dropped. */
+const safeHref = (u: string) => (/^https?:\/\/[^\s"'<>]+$/i.test(u) ? u : '');
+
+export function renderTransactional(m: TransactionalMail): { html: string; text: string } {
+  const accent = safeColor(m.accent ?? '#6366f1');
+  const href = m.cta ? safeHref(m.cta.url) : '';
+  const paras = m.paragraphs.map((p) => `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#374151;">${esc(p)}</p>`).join('');
+  const button = href
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 8px;"><tr><td style="background:${accent};border-radius:8px;"><a href="${esc(href)}" style="display:inline-block;padding:12px 24px;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;">${esc(m.cta!.label)}</a></td></tr></table><p style="margin:0 0 6px;font-size:12px;line-height:1.5;color:#6b7280;">If the button does not work, copy this address into your browser:<br><a href="${esc(href)}" style="color:${accent};word-break:break-all;">${esc(href)}</a></p>`
+    : '';
+  const note = m.note ? `<p style="margin:18px 0 0;font-size:13px;line-height:1.55;color:#6b7280;">${esc(m.note)}</p>` : '';
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>${esc(m.title)}</title></head>
+<body style="margin:0;background:#f3f4f6;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<span style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(m.preheader)}</span>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:12px;overflow:hidden;">
+<tr><td style="background:${accent};padding:16px 24px;color:#ffffff;font-size:16px;font-weight:700;">${esc(m.brand)}</td></tr>
+<tr><td style="padding:28px 24px 24px;">
+<h1 style="margin:0 0 14px;font-size:21px;line-height:1.3;color:#111827;">${esc(m.title)}</h1>
+${paras}${button}${note}
+</td></tr>
+<tr><td style="padding:16px 24px;border-top:1px solid #e5e7eb;font-size:12px;line-height:1.5;color:#6b7280;">${esc(m.reason)}</td></tr>
+</table></td></tr></table></body></html>`;
+  const text = [
+    m.brand, '', m.title, '', ...m.paragraphs.flatMap((p) => [p, '']),
+    ...(href ? [`${m.cta!.label}: ${href}`, ''] : []),
+    ...(m.note ? [m.note, ''] : []),
+    '--', m.reason,
+  ].join('\n');
+  return { html, text };
+}
+
+/**
+ * A support reply to a customer. Deliberately plain, like a person wrote it: the message as typed (line breaks kept, links made
+ * clickable, nothing else interpreted) and a small footer with the reference. Everything typed is escaped first.
+ */
+export function renderTicketReply(o: { body: string; companyName: string; ticketRef: string }): { html: string; text: string } {
+  const linkify = (escaped: string) => escaped.replace(/https?:\/\/[^\s<>"']+/g, (u) => {
+    const trail = /[.,;:!?)]+$/.exec(u)?.[0] ?? '';
+    const url = trail ? u.slice(0, -trail.length) : u;
+    return `<a href="${url}" style="color:#2563eb;">${url}</a>${trail}`;
+  });
+  const body = o.body.replace(/\r\n?/g, '\n').trim();
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="color-scheme" content="light"></head><body style="margin:0;padding:16px;background:#ffffff;">
+<div style="max-width:600px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#111827;">${linkify(esc(body)).replace(/\n/g, '<br>')}</div>
+<div style="max-width:600px;margin-top:24px;padding-top:12px;border-top:1px solid #e5e7eb;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:#6b7280;">${esc(o.companyName)} &middot; Reference ${esc(o.ticketRef)}. Reply to this email and it will be added to your request.</div>
+</body></html>`;
+  const text = `${body}\n\n--\n${o.companyName} | Reference ${o.ticketRef}. Reply to this email and it will be added to your request.`;
+  return { html, text };
+}
+
 const list = (v: unknown, max = 12): string[] => (Array.isArray(v) ? v.map((x) => clip(x, 40)).filter(Boolean).slice(0, max) : []);
 
 /** Dedupe key: one email per underlying thing (a ticket, an approval, a batch of numbers). */

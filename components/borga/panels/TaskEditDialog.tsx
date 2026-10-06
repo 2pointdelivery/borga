@@ -28,7 +28,7 @@ export function TaskEditDialog({ task, open, onOpenChange }: { task: Task | null
       due: editing.due,
       progress: editing.progress,
     });
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'task', message: `Updated task: ${editing.title.trim()}` });
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'task', message: `Updated task: ${editing.title.trim()}` });
     setForm(null);
     onOpenChange(false);
   };
@@ -36,7 +36,7 @@ export function TaskEditDialog({ task, open, onOpenChange }: { task: Task | null
   const remove = () => {
     if (!task) return;
     deleteTask(task.id);
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'task', message: `Deleted task: ${task.title}` });
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'task', message: `Deleted task: ${task.title}` });
     setForm(null);
     onOpenChange(false);
   };

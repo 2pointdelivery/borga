@@ -38,4 +38,6 @@ export const ticketsApi = {
     call<Envelope & { settings: ClientSettings }>(ws, { body: { action: 'saveSettings', settings, ...opts } }),
   similar: (ws: string, id: string) => call<Envelope & { enabled: boolean; similar: Array<{ ticketId: string; title: string; excerpt: string; score: number }> }>(ws, { body: { action: 'similar', id } }),
   pollMailbox: (ws: string) => call<Envelope & { fetched: number; created: number; replied: number }>(ws, { body: { action: 'pollMailbox' } }),
+  /** Delete a closed/resolved ticket (the server refuses active ones to keep SLA history auditable). */
+  remove: (ws: string, id: string, actor: string) => call<Envelope & { deleted: string }>(ws, { body: { action: 'delete', id, actor } }),
 };

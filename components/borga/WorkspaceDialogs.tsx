@@ -36,6 +36,48 @@ import { useBorga } from '@/lib/borga/store';
 
 const COLORS = ['#6366f1', '#0ea5e9', '#059669', '#f59e0b', '#ec4899', '#8b5cf6'];
 
+/** Read an image file as a data URL, downscaled so the workspace row stays small. */
+/** Days in a month (non-leap February caps at 28 - the close always lands on a real date). */
+function daysInMonth(month: number): number {
+  return new Date(2023, Math.max(1, Math.min(12, month)), 0).getDate();
+}
+
+function readLogoFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read that file.'));
+    reader.onload = () => {
+      const src = String(reader.result ?? '');
+      const img = new Image();
+      img.onerror = () => reject(new Error('That file is not a readable image.'));
+      img.onload = () => {
+        try {
+          const MAX = 256;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            // No canvas — keep the original if it is small, else refuse.
+            if (src.length < 400_000) resolve(src);
+            else reject(new Error('Logo too large — please use an image under 300 KB.'));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/png'));
+        } catch {
+          reject(new Error('Could not process that image.'));
+        }
+      };
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 interface CompanyForm {
   name: string;
   legalName: string;
@@ -56,6 +98,8 @@ interface CompanyForm {
   phone: string;
   website: string;
   plan: WorkspacePlan;
+  /** Branded logo as a data URL (shown on reports, invoices and PDFs). Empty = none. */
+  logoDataUrl: string;
 }
 
 function formFrom(ws: Workspace | null): CompanyForm {
@@ -79,6 +123,7 @@ function formFrom(ws: Workspace | null): CompanyForm {
     phone: ws?.phone ?? '',
     website: ws?.website ?? '',
     plan: ws?.plan ?? 'trial',
+    logoDataUrl: ws?.logoDataUrl ?? '',
   };
 }
 
@@ -98,6 +143,7 @@ function CompanyFormFields({
   /** Picking a country also sets that country's currency (used when creating a company, not when editing one). */
   suggestCurrency?: boolean;
 }) {
+  const [logoError, setLogoError] = useState<string | null>(null);
   return (
     <div className="max-h-[60vh] space-y-5 overflow-y-auto pr-1">
       {/* Identity */}
@@ -166,8 +212,8 @@ function CompanyFormFields({
       <section className="space-y-3">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Accounting year close</p>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Fiscal year end  month">
-            <Select value={String(form.fiscalYearEndMonth)} onValueChange={(v) => set({ fiscalYearEndMonth: Number(v) })}>
+          <Field label="Fiscal year end month">
+            <Select value={String(form.fiscalYearEndMonth)} onValueChange={(v) => set({ fiscalYearEndMonth: Number(v), fiscalYearEndDay: Math.min(form.fiscalYearEndDay, daysInMonth(Number(v))) })}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {MONTH_NAMES.map((m, i) => (
@@ -176,8 +222,8 @@ function CompanyFormFields({
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Fiscal year end  day">
-            <Input type="number" min={1} max={31} value={form.fiscalYearEndDay} onChange={(e) => set({ fiscalYearEndDay: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })} />
+          <Field label="Fiscal year end day" hint={`1–${daysInMonth(form.fiscalYearEndMonth)} for the chosen month`}>
+            <Input type="number" min={1} max={daysInMonth(form.fiscalYearEndMonth)} value={form.fiscalYearEndDay} onChange={(e) => set({ fiscalYearEndDay: Math.min(daysInMonth(form.fiscalYearEndMonth), Math.max(1, Number(e.target.value) || 1)) })} />
           </Field>
         </div>
         <p className="text-[11px] text-muted-foreground">
@@ -204,6 +250,58 @@ function CompanyFormFields({
       {/* Brand + plan */}
       <section className="space-y-3">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Workspace</p>
+        <div>
+          <Label className="text-xs font-medium text-muted-foreground">Company logo</Label>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Shown on invoices, bills, board reports and PDFs. PNG or JPG, square works best.
+          </p>
+          <div className="mt-2 flex items-center gap-3">
+            {form.logoDataUrl ? (
+              <img
+                src={form.logoDataUrl}
+                alt="Company logo preview"
+                className="h-12 w-12 rounded-xl border object-contain bg-white"
+              />
+            ) : (
+              <span
+                className="flex h-12 w-12 items-center justify-center rounded-xl text-sm font-bold text-white"
+                style={{ background: color }}
+              >
+                {(form.name || 'WS').slice(0, 2).toUpperCase()}
+              </span>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <label className="inline-flex h-8 cursor-pointer items-center rounded-md border px-3 text-xs font-medium transition-colors hover:bg-accent">
+                {form.logoDataUrl ? 'Replace logo' : 'Upload logo'}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!file) return;
+                    setLogoError(null);
+                    void readLogoFile(file).then(
+                      (url) => set({ logoDataUrl: url }),
+                      (err) => setLogoError(err instanceof Error ? err.message : 'Could not read that file.'),
+                    );
+                  }}
+                />
+              </label>
+              {logoError && <p className="text-[11px] text-destructive">{logoError}</p>}
+              {form.logoDataUrl && (
+                <button
+                  type="button"
+                  className="h-8 rounded-md px-3 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+                  onClick={() => set({ logoDataUrl: '' })}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
         <div className="flex flex-wrap items-center gap-6">
           {showPlan && (
             <Field label="Plan">
@@ -218,14 +316,14 @@ function CompanyFormFields({
             </Field>
           )}
           <div>
-            <Label className="text-xs font-medium text-muted-foreground">Colour</Label>
+              <Label className="text-xs font-medium text-muted-foreground">Color</Label>
             <div className="mt-2 flex gap-1.5">
               {COLORS.map((c) => (
                 <button
                   key={c}
                   type="button"
                   onClick={() => setColor(c)}
-                  aria-label={`Use colour ${c}`}
+                  aria-label={`Use color ${c}`}
                   className={
                     'h-6 w-6 rounded-full ring-2 ring-offset-2 ring-offset-background transition-transform hover:scale-110 ' +
                     (color === c ? 'ring-foreground' : 'ring-transparent')
@@ -288,6 +386,7 @@ export function NewWorkspaceDialog({
       email: form.email.trim() || undefined,
       phone: form.phone.trim() || undefined,
       website: form.website.trim() || undefined,
+      logoDataUrl: form.logoDataUrl || undefined,
       // This dialog already collected the company profile, so the wizard must not ask for it again on a second, simpler page:
       // the profile step starts completed and the wizard opens at the next step.
       onboarding: ((ob) => ({ ...ob, started: true, currentStep: 'industry' as const, steps: ob.steps.map((s) => (s.id === 'profile' ? { ...s, completed: true } : s)) }))(makeOnboarding()),
@@ -377,6 +476,7 @@ export function EditWorkspaceDialog({
       email: form.email.trim() || undefined,
       phone: form.phone.trim() || undefined,
       website: form.website.trim() || undefined,
+      logoDataUrl: form.logoDataUrl || undefined,
     });
     log({
       agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system',

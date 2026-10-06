@@ -10,6 +10,7 @@ import { useFeatures } from '@/lib/borga/features-client';
 import { Badge } from '@/components/ui/badge';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface State {
   featureOn: boolean;
@@ -36,6 +37,8 @@ export function SupermemoryCard() {
   const [busy, setBusy] = useState<string | null>(null);
   const [facts, setFacts] = useState<string[] | null>(null);
   const [keyDraft, setKeyDraft] = useState('');
+  const [confirmPurge, setConfirmPurge] = useState(false);
+  const [confirmRemoveKey, setConfirmRemoveKey] = useState(false);
   const toggleFeature = useFeatures((f) => f.toggle);
   const connUrl = `/api/borga/connections?ws=${encodeURIComponent(ws)}`;
   const url = `/api/borga/supermemory?ws=${encodeURIComponent(ws)}`;
@@ -60,21 +63,47 @@ export function SupermemoryCard() {
 
   const toggle = async (key: keyof State['settings'], v: boolean) => {
     setS({ ...s, settings: { ...s.settings, [key]: v } });
-    const r = await post({ action: 'saveSettings', settings: { [key]: v } });
-    if (!r.ok) toast({ title: 'Not saved', description: r.error, variant: 'error' });
+    try {
+      const r = await post({ action: 'saveSettings', settings: { [key]: v } });
+      if (!r.ok) toast({ title: 'Not saved', description: r.error, variant: 'error' });
+    } catch (error) {
+      toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    }
     void load();
   };
 
   const run = async (name: 'syncNow' | 'profile' | 'purge') => {
-    if (name === 'purge' && !window.confirm('Delete everything Borga stored in Supermemory for this company? Your Borga data is not affected, and it can be sent again by syncing.')) return;
+    if (name === 'purge') {
+      setConfirmPurge(true);
+      return;
+    }
     setBusy(name);
-    const r = await post(name === 'purge' ? { action: 'purge', confirm: 'DELETE' } : { action: name });
-    setBusy(null);
-    if (!r.ok) return toast({ title: 'Supermemory', description: r.error ?? 'Request failed', variant: 'error' });
-    if (name === 'profile') setFacts((r.facts as string[]) ?? []);
-    if (name === 'syncNow') toast({ title: 'Sync finished', variant: 'success' });
-    if (name === 'purge') toast({ title: 'Deleted from Supermemory', description: `${(r.deletedDocuments as number | undefined) ?? 0} document(s) removed.`, variant: 'success' });
-    void load();
+    try {
+      const r = await post({ action: name });
+      if (!r.ok) return toast({ title: 'Supermemory', description: r.error ?? 'Request failed', variant: 'error' });
+      if (name === 'profile') setFacts((r.facts as string[]) ?? []);
+      if (name === 'syncNow') toast({ title: 'Sync finished', variant: 'success' });
+      void load();
+    } catch (error) {
+      toast({ title: 'Supermemory', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doPurge = async () => {
+    setConfirmPurge(false);
+    setBusy('purge');
+    try {
+      const r = await post({ action: 'purge', confirm: 'DELETE' });
+      if (!r.ok) return toast({ title: 'Supermemory', description: r.error ?? 'Request failed', variant: 'error' });
+      toast({ title: 'Deleted from Supermemory', description: `${(r.deletedDocuments as number | undefined) ?? 0} document(s) removed.`, variant: 'success' });
+      void load();
+    } catch (error) {
+      toast({ title: 'Supermemory', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    } finally {
+      setBusy(null);
+    }
   };
 
   const live = s.featureOn && s.keySource !== 'none';
@@ -158,11 +187,7 @@ export function SupermemoryCard() {
               variant="ghost"
               className="text-rose-600"
               disabled={busy !== null}
-              onClick={async () => {
-                if (!window.confirm('Remove the saved Supermemory key for this company?')) return;
-                await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'delete', provider: 'supermemory' }) });
-                void load();
-              }}
+              onClick={() => setConfirmRemoveKey(true)}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
@@ -217,6 +242,28 @@ export function SupermemoryCard() {
           <Trash2 className="h-3.5 w-3.5" /> Delete everything from Supermemory
         </Button>
       )}
+
+      <ConfirmDialog
+        open={confirmPurge}
+        onOpenChange={setConfirmPurge}
+        title="Delete everything from Supermemory?"
+        description="All vectors stored for this company are removed. Your Borga data is not affected, and it can be sent again by syncing."
+        confirmLabel="Delete from Supermemory"
+        onConfirm={doPurge}
+      />
+
+      <ConfirmDialog
+        open={confirmRemoveKey}
+        onOpenChange={setConfirmRemoveKey}
+        title="Remove the saved Supermemory key?"
+        description="This company falls back to the deployment key, if one is set — otherwise memory features switch off."
+        confirmLabel="Remove key"
+        onConfirm={async () => {
+          setConfirmRemoveKey(false);
+          await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'delete', provider: 'supermemory' }) });
+          void load();
+        }}
+      />
     </Card>
   );
 }

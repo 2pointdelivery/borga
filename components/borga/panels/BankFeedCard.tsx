@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from '@/lib/toast-bus';
 import { useBorga } from '@/lib/borga/store';
 import { ConnectionPanel } from './ConnectionsTab';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface BankConnection {
   id: string;
@@ -40,6 +41,7 @@ export function BankFeedCard() {
   const [days, setDays] = useState('90');
   const [busy, setBusy] = useState<string | null>(null);
   const [showKeys, setShowKeys] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState<BankConnection | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -86,7 +88,6 @@ export function BankFeedCard() {
   };
 
   const disconnect = async (c: BankConnection) => {
-    if (!window.confirm(`Disconnect ${c.institution}? Its accounts and the transactions already imported stay; no new ones arrive.`)) return;
     setBusy(c.id);
     try {
       await call({ action: 'disconnect', connectionId: c.id });
@@ -138,7 +139,7 @@ export function BankFeedCard() {
               </span>
               <span className="flex gap-1.5">
                 <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void sync(c)}>{busy === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Sync now</Button>
-                <Button size="sm" variant="ghost" className="text-muted-foreground" disabled={busy !== null} onClick={() => void disconnect(c)}><Unplug className="h-3.5 w-3.5" /> Disconnect</Button>
+                <Button size="sm" variant="ghost" className="text-muted-foreground" disabled={busy !== null} onClick={() => setConfirmDisconnect(c)}><Unplug className="h-3.5 w-3.5" /> Disconnect</Button>
               </span>
             </li>
           ))}
@@ -151,6 +152,15 @@ export function BankFeedCard() {
         </button>
         {showKeys && <div className="mt-2"><ConnectionPanel providerId="saltedge" onChange={() => void load()} /></div>}
       </div>
+
+      <ConfirmDialog
+        open={!!confirmDisconnect}
+        onOpenChange={(o) => { if (!o) setConfirmDisconnect(null); }}
+        title={`Disconnect ${confirmDisconnect?.institution ?? 'bank'}?`}
+        description="Its accounts and the transactions already imported stay; no new ones arrive."
+        confirmLabel="Disconnect"
+        onConfirm={() => { if (confirmDisconnect) void disconnect(confirmDisconnect); setConfirmDisconnect(null); }}
+      />
     </Card>
   );
 }

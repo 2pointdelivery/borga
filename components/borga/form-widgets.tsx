@@ -31,40 +31,46 @@ import { cn } from '@/lib/utils';
 
 const NO_PROJECT = '__none__';
 
-/** Shared project picker for any record that can be attributed to a Project (invoices, bills, journal entries, ledger entries, expenses, tasks). */
+/** Shared project picker for any record that can be attributed to a Project (invoices, bills, journal entries, ledger entries, expenses, tasks). Searchable — projects are unbounded user data. */
 export function ProjectSelect({ value, onChange, placeholder = 'No project' }: { value?: string; onChange: (v: string | undefined) => void; placeholder?: string }) {
   const { projects } = useBorga();
+  const options: SearchOption[] = [
+    { value: NO_PROJECT, label: placeholder },
+    ...projects.map((p) => ({ value: p.id, label: p.name, detail: p.status })),
+  ];
   return (
-    <Select value={value || NO_PROJECT} onValueChange={(v) => onChange(v === NO_PROJECT ? undefined : v)}>
-      <SelectTrigger><SelectValue placeholder={placeholder} /></SelectTrigger>
-      <SelectContent>
-        <SelectItem value={NO_PROJECT}>{placeholder}</SelectItem>
-        {projects.map((p) => (
-          <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <SearchSelect
+      options={options}
+      value={value ?? ''}
+      onChange={(v) => onChange(!v || v === NO_PROJECT ? undefined : v)}
+      placeholder={placeholder}
+      searchPlaceholder="Search projects"
+      clearable={false}
+    />
   );
 }
 
 const NO_ACCOUNT = '__none__';
 
-/** Shared chart-of-accounts picker — links a transaction (invoice, bill, ledger entry) to a GL account, filterable by type. */
+/** Shared chart-of-accounts picker — links a transaction (invoice, bill, ledger entry) to a GL account, filterable by type. Searchable and grouped by account type — the COA grows with the business. */
 export function AccountSelect({
   value, onChange, types, placeholder = 'No account',
 }: { value?: string; onChange: (v: string | undefined) => void; types?: AccountType[]; placeholder?: string }) {
   const { coa } = useBorga();
   const accounts = types ? coa.filter((a) => types.includes(a.type)) : coa;
+  const options: SearchOption[] = [
+    { value: NO_ACCOUNT, label: placeholder },
+    ...accounts.map((a) => ({ value: a.id, label: a.name, detail: a.code, group: a.type })),
+  ];
   return (
-    <Select value={value || NO_ACCOUNT} onValueChange={(v) => onChange(v === NO_ACCOUNT ? undefined : v)}>
-      <SelectTrigger><SelectValue placeholder={placeholder} /></SelectTrigger>
-      <SelectContent>
-        <SelectItem value={NO_ACCOUNT}>{placeholder}</SelectItem>
-        {accounts.map((a) => (
-          <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <SearchSelect
+      options={options}
+      value={value ?? ''}
+      onChange={(v) => onChange(!v || v === NO_ACCOUNT ? undefined : v)}
+      placeholder={placeholder}
+      searchPlaceholder="Search accounts"
+      clearable={false}
+    />
   );
 }
 

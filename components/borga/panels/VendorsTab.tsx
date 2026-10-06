@@ -30,7 +30,11 @@ import {
   type Vendor, type Bill, type BillLine, type PaymentTerms, type PaymentMethod,
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
+import { toast } from '@/lib/toast-bus';
+import { findBillDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect, CountrySelect, CityInput } from '../form-widgets';
 import { billHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { cn } from '@/lib/utils';
@@ -44,7 +48,7 @@ interface VendorForm {
 }
 
 interface BillForm {
-  vendorId: string; number: string; amount: string;
+  vendorId: string; number: string;
   received: string; due: string; status: Bill['status'];
   taxProfileIds: string[]; externalRef?: string;
   paymentMethod: PaymentMethod; notes: string; description: string; lines: BillLine[];
@@ -62,7 +66,7 @@ const nextBillLine = () => { billLineSeq += 1; return `bl-${Date.now().toString(
 
 function emptyBill(vendorId: string, defaultTaxProfileId?: string): BillForm {
   return {
-    vendorId, number: '', amount: '',
+    vendorId, number: '',
     received: new Date().toISOString().slice(0, 10),
     due: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
     status: 'unpaid', taxProfileIds: defaultTaxProfileId ? [defaultTaxProfileId] : [], externalRef: '', paymentMethod: 'bank-transfer', notes: '', description: '',
@@ -88,18 +92,19 @@ export function VendorsTab() {
 
   const [billDialogOpen, setBillDialogOpen] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<{ kind: 'bill' | 'vendor'; id: string; name: string } | null>(null);
   const [billForm, setBillForm] = useState<BillForm>(() => emptyBill(vendors[0]?.id ?? '', DEFAULT_TAX_PROFILE_ID));
 
-  const [payTarget, setPayTarget] = useState<Bill | null>(null);
+    const [payTarget, setPayTarget] = useState<Bill | null>(null);
   const [payMethod, setPayMethod] = useState<PaymentMethod>('bank-transfer');
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [confirmDuplicateBill, setConfirmDuplicateBill] = useState<{ data: Omit<Bill, 'id'> & { number: string }; flags: DuplicateFlag[] } | null>(null);  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payExternalRef, setPayExternalRef] = useState('');
   const [emailTarget, setEmailTarget] = useState<Bill | null>(null);
   const [emailForm, setEmailForm] = useState({ to: '', subject: '', body: '' });
   const [emailState, setEmailState] = useState<'idle' | 'sending' | 'sent' | 'fallback'>('idle');
 
   const outstanding = bills.filter((b) => b.status !== 'paid').reduce((s, b) => s + b.amount, 0);
-  const overdue = bills.filter((b) => b.status === 'unpaid').length;
+  const unpaidCount = bills.filter((b) => b.status === 'unpaid').length;
 
   const risks = useMemo(
     () => new Map(vendors.map((v) => [v.id, computeVendorRisk(v.id, bills.map((b) => ({ vendorId: b.vendorId, status: b.status, amount: b.amount })))])),
@@ -110,7 +115,7 @@ export function VendorsTab() {
     if (b) {
       setEditingBill(b);
       setBillForm({
-        vendorId: b.vendorId, number: b.number, amount: String(b.amount),
+        vendorId: b.vendorId, number: b.number,
         received: b.received, due: b.due, status: b.status,
         taxProfileIds: b.taxProfileIds ?? (b.taxProfileId ? [b.taxProfileId] : []),
         externalRef: b.externalRef ?? '',
@@ -185,7 +190,7 @@ export function VendorsTab() {
 
   const submitBill = () => {
     const vendor = vendors.find((v) => v.id === billForm.vendorId);
-    if (!vendor || !billForm.amount) return;
+    if (!vendor || billTotals.total <= 0) return;
     const lines = billForm.lines.filter((l) => l.description.trim() || l.unitPrice);
     if (lines.length === 0) return;
     const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
@@ -209,9 +214,42 @@ export function VendorsTab() {
       updateBill(editingBill.id, shared);
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill ${billForm.number.trim()} updated — ${lines.length} line(s), total ${money(Math.round(total * 100) / 100)}.` });
     } else {
-      addBill({ id: `b-${Date.now()}`, ...shared, number: shared.number || `BILL-${Date.now().toString().slice(-4)}` });
+      const number = shared.number || `BILL-${Date.now().toString().slice(-4)}`;
+      const flags = findBillDuplicates({ id: '', vendorId: vendor.id, vendorName: vendor.name, number, amount: shared.amount, received: shared.received, externalRef: shared.externalRef }, bills);
+      const exact = flags.find((f) => f.level === 'exact');
+      if (exact) {
+        toast({ title: 'Duplicate bill blocked', description: exact.message, variant: 'error' });
+        log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `Duplicate bill blocked: ${number} from ${vendor.name} — ${exact.message}` });
+        return;
+      }
+      const likely = flags.filter((f) => f.level === 'likely');
+      if (likely.length) {
+        setConfirmDuplicateBill({ data: { ...shared, number }, flags: likely });
+        return;
+      }
+      addBill({ id: `b-${Date.now()}`, ...shared, number });
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill recorded from ${vendor.name}: ${money(Math.round(total * 100) / 100)} (${PAYMENT_METHOD_LABEL[billForm.paymentMethod]}).` });
     }
+    setBillDialogOpen(false);
+    setEditingBill(null);
+  };
+
+  const doConfirmDuplicateBill = () => {
+    const p = confirmDuplicateBill;
+    if (!p) return;
+    addBill({ id: `b-${Date.now()}`, ...p.data });
+    addApproval({
+      id: `ap-${Date.now().toString(36)}`,
+      title: `Possible duplicate bill — review ${p.data.number} (${p.data.vendorName})`,
+      description: `Recorded despite matching ${p.flags.map((f) => f.matchLabel).join('; ')} for ${money(p.data.amount)}. Please confirm it is a separate bill, not a double entry.`,
+      category: 'spend',
+      amount: p.data.amount,
+      status: 'pending',
+      submittedBy: 'Sage',
+      createdAt: new Date().toISOString(),
+    });
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${p.data.number} recorded over a duplicate warning — routed to the approval queue for review.` });
+    setConfirmDuplicateBill(null);
     setBillDialogOpen(false);
     setEditingBill(null);
   };
@@ -328,7 +366,7 @@ export function VendorsTab() {
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Vendors & payables" sub={`${vendors.length} vendors — ${money(outstanding)} outstanding across ${overdue} unpaid bill${overdue === 1 ? '' : 's'}`} />
+        <SectionTitle title="Vendors & payables" sub={`${vendors.length} vendors — ${money(outstanding)} outstanding across ${unpaidCount} unpaid bill${unpaidCount === 1 ? '' : 's'}`} />
         <div className="flex gap-2">
           <Button variant="outline" onClick={exportCsv}>
             <Download className="h-4 w-4" /> Export
@@ -353,7 +391,7 @@ export function VendorsTab() {
           <p className="mt-1 text-xl font-semibold">{money(bills.filter((b) => b.status === 'scheduled').reduce((s, b) => s + b.amount, 0))}</p>
         </Card>
         <Card className="p-3">
-          <p className="text-[11px] text-muted-foreground">Paid this period</p>
+          <p className="text-[11px] text-muted-foreground">Paid to date</p>
           <p className="mt-1 text-xl font-semibold">{money(bills.filter((b) => b.status === 'paid').reduce((s, b) => s + b.amount, 0))}</p>
         </Card>
       </div>
@@ -403,29 +441,30 @@ export function VendorsTab() {
                     {b.taxProfileName && <span className="block text-[10px] font-normal text-muted-foreground">{b.taxProfileName} {b.taxRate ?? 0}%</span>}
                   </td>
                   <td className="px-4 py-2.5">
-                    <select
-                      value={b.status}
-                      onChange={(e) => setBillStatus(b.id, e.target.value as Bill['status'])}
-                      className={cn(
-                        'rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1 outline-none',
+                    <Select value={b.status} onValueChange={(v) => setBillStatus(b.id, v as Bill['status'])}>
+                      <SelectTrigger className={cn(
+                        'h-6 w-24 border-0 bg-transparent px-1.5 py-0.5 text-[10px] font-semibold shadow-none outline-none [&>svg]:hidden',
                         b.status === 'paid'
-                          ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30'
+                          ? 'bg-emerald-500/10 text-emerald-600 ring-1 ring-emerald-500/30'
                           : b.status === 'scheduled'
-                            ? 'bg-sky-500/10 text-sky-600 ring-sky-500/30'
-                            : 'bg-amber-500/10 text-amber-600 ring-amber-500/30',
-                      )}
-                    >
-                      <option value="unpaid">unpaid</option>
-                      <option value="scheduled">scheduled</option>
-                      <option value="paid">paid</option>
-                    </select>
+                            ? 'bg-sky-500/10 text-sky-600 ring-1 ring-sky-500/30'
+                            : 'bg-amber-500/10 text-amber-600 ring-1 ring-amber-500/30',
+                      )}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unpaid">unpaid</SelectItem>
+                        <SelectItem value="scheduled">scheduled</SelectItem>
+                        <SelectItem value="paid">paid</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </td>
                   <td className="px-2 py-2.5">
                     <div className="flex justify-end gap-0.5">
                       {/* Lock rule: only unpaid drafts delete — scheduled/paid void with audit trace. */}
                       {b.status === 'unpaid' && !b.voidedAt && (
                         <button
-                          onClick={() => { if (deleteBill(b.id)) log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${b.number} deleted.` }); }}
+                          onClick={() => setConfirmTarget({ kind: 'bill', id: b.id, name: b.number })}
                           className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                           title="Delete draft bill"
                         >
@@ -533,7 +572,7 @@ export function VendorsTab() {
                       <button onClick={() => { setEditingVendor(v); setVendorForm({ name: v.name, service: v.service, email: v.email, phone: v.phone, website: v.website, terms: v.terms, status: v.status, since: v.since, legalName: v.legalName ?? '', tradingName: v.tradingName ?? '', addressLine: v.addressLine ?? '', city: v.city ?? '', country: v.country ?? '', billingAddress: v.billingAddress ?? '', contactName: v.contactName ?? '', contactEmail: v.contactEmail ?? '', contactPhone: v.contactPhone ?? '', taxNumber: v.taxNumber ?? '' }); setVendorDialogOpen(true); }} className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary" title="Edit vendor">
                         <Pencil className="h-3 w-3" />
                       </button>
-                      <button onClick={() => { deleteVendor(v.id); log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Vendor ${v.name} removed.` }); }} className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Remove vendor">
+                      <button onClick={() => setConfirmTarget({ kind: 'vendor', id: v.id, name: v.name })} className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Remove vendor">
                         <Trash2 className="h-3 w-3" />
                       </button>
                     </div>
@@ -666,17 +705,17 @@ export function VendorsTab() {
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <Field label="Vendor *" className="col-span-2">
-                <Select value={billForm.vendorId} onValueChange={(v) => setBillForm({ ...billForm, vendorId: v })}>
-                  <SelectTrigger><SelectValue placeholder="Choose…" /></SelectTrigger>
-                  <SelectContent>
-                    {vendors.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={vendors.map((v) => ({ value: v.id, label: v.name, detail: v.service }))}
+                  value={billForm.vendorId}
+                  onChange={(v) => setBillForm({ ...billForm, vendorId: v })}
+                  placeholder="Choose…"
+                  searchPlaceholder="Search vendors"
+                  clearable={false}
+                />
               </Field>
               <Field label="Bill number">
-                <Input value={billForm.number} onChange={(e) => setBillForm({ ...billForm, number: e.target.value })} placeholder="INV-1001" />
+                <Input value={billForm.number} onChange={(e) => setBillForm({ ...billForm, number: e.target.value })} placeholder="BILL-1001" />
               </Field>
             </div>
 
@@ -826,7 +865,7 @@ export function VendorsTab() {
             <p className="text-[11px] text-muted-foreground">
               Sent through the company&apos;s linked Gmail (composio.dev OAuth). If Gmail isn&apos;t linked, the message opens in your mail client instead.
             </p>
-            {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Sent — bill marked scheduled.</p>}
+            {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Remittance emailed — bill marked scheduled. The payment itself still needs to be made.</p>}
             {emailState === 'fallback' && <p className="text-xs font-medium text-amber-600">Opened in your mail client (Gmail not linked for this workspace).</p>}
           </div>
           <DialogFooter>
@@ -837,6 +876,40 @@ export function VendorsTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmTarget}
+        onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
+        title={confirmTarget?.kind === 'bill' ? `Delete bill ${confirmTarget?.name ?? ''}?` : `Remove vendor "${confirmTarget?.name ?? ''}"?`}
+        description={confirmTarget?.kind === 'bill'
+          ? 'The unpaid draft bill is removed. Scheduled and paid bills void with an audit trail instead.'
+          : (() => {
+              const open = bills.filter((b) => b.vendorId === confirmTarget?.id && b.status !== 'paid');
+              return open.length
+                ? `${confirmTarget?.name ?? 'The vendor'} has ${open.length} open bill${open.length !== 1 ? 's' : ''} — they lose their vendor link. The vendor is removed anyway.`
+                : 'The vendor is removed. Paid bill history keeps the name for reference.';
+            })()}
+        confirmLabel={confirmTarget?.kind === 'bill' ? 'Delete bill' : 'Remove vendor'}
+        onConfirm={() => {
+          if (!confirmTarget) return;
+          if (confirmTarget.kind === 'bill') {
+            if (deleteBill(confirmTarget.id)) log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${confirmTarget.name} deleted.` });
+          } else {
+            deleteVendor(confirmTarget.id);
+            log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Vendor ${confirmTarget.name} removed.` });
+          }
+          setConfirmTarget(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDuplicateBill}
+        onOpenChange={(o) => { if (!o) setConfirmDuplicateBill(null); }}
+        title="Possible duplicate bill — record anyway?"
+        description={confirmDuplicateBill ? `This looks like ${confirmDuplicateBill.flags.map((f) => f.matchLabel).join('; ')} for ${money(confirmDuplicateBill.data.amount)}. Recording it raises a review approval so someone confirms it is a separate bill.` : ''}
+        confirmLabel="Record + flag for review"
+        onConfirm={doConfirmDuplicateBill}
+      />
     </div>
   );
 }

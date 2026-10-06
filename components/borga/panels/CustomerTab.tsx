@@ -50,9 +50,12 @@ import {
     type Customer,
   type Contact,
   type CustomerStatus,
+  type Task,
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { SearchSelect } from '../SearchSelect';
 import { CityInput, CountrySelect, Field, IndustryInput, RegionSelect } from '../form-widgets';
 import { cn } from '@/lib/utils';
 
@@ -79,7 +82,7 @@ export function CustomerTab() {
     customers, addCustomer, updateCustomer, deleteCustomer,
     contacts, addContact, updateContact, deleteContact,
     leads, updateLead, invoices, updateInvoice, agents, log, activeWorkspace,
-    projects, tasks, addTask, finance,
+    projects, tasks, addTask, updateTask, deleteTask, finance,
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
@@ -93,6 +96,8 @@ export function CustomerTab() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [custForm, setCustForm] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [confirmDelete, setConfirmDelete] = useState<Customer | null>(null);
+  const [confirmDeleteContact, setConfirmDeleteContact] = useState<Contact | null>(null);
+  const [confirmDeleteTask, setConfirmDeleteTask] = useState<Task | null>(null);
 
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
@@ -153,7 +158,7 @@ export function CustomerTab() {
       bucket: 'week',
       assignee: agents.find((a) => a.name === selected.owner)?.name ?? 'Borga',
       tags: [],
-      due: '…',
+      due: 'This week',
       progress: 0,
       customerId: selected.id,
     });
@@ -172,6 +177,7 @@ export function CustomerTab() {
         phone: custForm.phone.trim(),
         addressLine: custForm.addressLine.trim(),
         city: custForm.city.trim(),
+        state: custForm.state.trim(),
         country: custForm.country.trim(),
         status: custForm.status,
         owner: custForm.owner.trim(),
@@ -188,6 +194,7 @@ export function CustomerTab() {
         phone: custForm.phone.trim(),
         addressLine: custForm.addressLine.trim(),
         city: custForm.city.trim(),
+        state: custForm.state.trim(),
         country: custForm.country.trim(),
         status: custForm.status,
         owner: custForm.owner.trim() || 'Unassigned',
@@ -448,7 +455,7 @@ export function CustomerTab() {
                             <Pencil className="h-3 w-3" />
                           </button>
                           <button
-                            onClick={() => { deleteContact(ct.id); log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: `Contact ${ct.name} removed.` }); }}
+                            onClick={() => setConfirmDeleteContact(ct)}
                             className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                             title="Remove contact"
                           >
@@ -541,10 +548,24 @@ export function CustomerTab() {
                 {relatedTasks.length === 0 && <p className="py-3 text-center text-xs text-muted-foreground">No tasks linked yet.</p>}
                 {relatedTasks.map((t) => (
                   <div key={t.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
-                    <span className={cn('flex items-center gap-1.5', t.status === 'done' && 'text-muted-foreground line-through')}>
-                      <CheckSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> {t.title}
-                    </span>
-                    <Badge variant="outline" className="shrink-0 text-[10px] capitalize">{t.status.replace('-', ' ')}</Badge>
+                    <button
+                      onClick={() => updateTask(t.id, t.status === 'done' ? { status: 'todo', progress: 0 } : { status: 'done', progress: 100 })}
+                      className={cn('flex min-w-0 items-center gap-1.5 text-left', t.status === 'done' && 'text-muted-foreground line-through')}
+                      title={t.status === 'done' ? 'Reopen task' : 'Mark done'}
+                    >
+                      <CheckSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{t.title}</span>
+                    </button>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Badge variant="outline" className="text-[10px] capitalize">{t.status.replace('-', ' ')}</Badge>
+                      <button
+                        onClick={() => setConfirmDeleteTask(t)}
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        title="Delete task"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -572,7 +593,7 @@ export function CustomerTab() {
                           </Button>
                         )}
                         <p className="font-mono text-xs">{money(d.value)}</p>
-                        <Progress value={d.priority === 'P0' ? 100 : d.priority === 'P1' ? 66 : 33} className="h-1.5 w-14" />
+                        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">{d.priority}</span>
                       </div>
                     </div>
                   ))}
@@ -639,12 +660,14 @@ export function CustomerTab() {
                 </Select>
               </Field>
               <Field label="Account owner" className="col-span-2">
-                <Input list="customer-agents" value={custForm.owner} onChange={(e) => setCustForm({ ...custForm, owner: e.target.value })} placeholder="Aisha Bello" />
-                <datalist id="customer-agents">
-                  {agents.map((a) => (
-                    <option key={a.id} value={a.name} />
-                  ))}
-                </datalist>
+                <SearchSelect
+                  options={agents.map((a) => ({ value: a.name, label: a.name, detail: a.department }))}
+                  value={custForm.owner}
+                  onChange={(v) => setCustForm({ ...custForm, owner: v })}
+                  placeholder="Pick an owner…"
+                  searchPlaceholder="Search agents"
+                  allowCustom
+                />
               </Field>
             </div>
             <Field label="Notes">
@@ -716,6 +739,34 @@ export function CustomerTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteContact}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteContact(null); }}
+        title={`Remove ${confirmDeleteContact?.name ?? 'contact'}?`}
+        description="The contact is removed from this account permanently."
+        confirmLabel="Remove contact"
+        onConfirm={() => {
+          if (!confirmDeleteContact) return;
+          deleteContact(confirmDeleteContact.id);
+          log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: `Contact ${confirmDeleteContact.name} removed.` });
+          setConfirmDeleteContact(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteTask}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteTask(null); }}
+        title="Delete task?"
+        description={confirmDeleteTask ? `"${confirmDeleteTask.title}" is removed from this account's tasks.` : ''}
+        confirmLabel="Delete task"
+        onConfirm={() => {
+          if (!confirmDeleteTask) return;
+          deleteTask(confirmDeleteTask.id);
+          log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: `Task "${confirmDeleteTask.title}" deleted.` });
+          setConfirmDeleteTask(null);
+        }}
+      />
     </div>
   );
 }

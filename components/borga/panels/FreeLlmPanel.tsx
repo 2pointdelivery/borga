@@ -37,12 +37,18 @@ export function FreeLlmPanel({ catalog, hasKey }: { catalog: LlmProvider[]; hasK
 
   const run = async (p: FreeProviderPreset): Promise<{ ok: boolean; count: number }> => {
     setBusy(p.id);
-    const r = await loadFreeModels(p.id);
-    setBusy(null);
-    const msg = r.ok ? `${r.count} free model${r.count === 1 ? '' : 's'} loaded${r.total ? ` (of ${r.total} listed)` : ''}` : (r.error ?? 'Failed');
-    // "needs a key" and "Ollama is not running" are not failures worth a red message
-    setResults((prev) => ({ ...prev, [p.id]: { ok: !!r.ok, msg, soft: !r.ok && (!!r.needsKey || !!p.local) } }));
-    return { ok: !!r.ok, count: r.count ?? 0 };
+    try {
+      const r = await loadFreeModels(p.id);
+      const msg = r.ok ? `${r.count} free model${r.count === 1 ? '' : 's'} loaded${r.total ? ` (of ${r.total} listed)` : ''}` : (r.error ?? 'Failed');
+      // "needs a key" and "local CLI not reachable" are not failures worth a red message
+      setResults((prev) => ({ ...prev, [p.id]: { ok: !!r.ok, msg, soft: !r.ok && (!!r.needsKey || !!p.local) } }));
+      return { ok: !!r.ok, count: r.count ?? 0 };
+    } catch (error) {
+      setResults((prev) => ({ ...prev, [p.id]: { ok: false, msg: error instanceof Error ? error.message : 'Request failed' } }));
+      return { ok: false, count: 0 };
+    } finally {
+      setBusy(null);
+    }
   };
 
   // First visit this session: fetch every public list so the dropdowns show what is really available, with no clicks.
@@ -117,7 +123,7 @@ export function FreeLlmPanel({ catalog, hasKey }: { catalog: LlmProvider[]; hasK
                 {res && <p className={res.ok ? 'text-[11px] text-emerald-600' : res.soft ? 'text-[11px] text-muted-foreground' : 'text-[11px] text-rose-600'}>{res.msg}</p>}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {!keyed && !p.keyless && (
+                {!keyed && !p.keyless && p.signupUrl && (
                   <a href={p.signupUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline">
                     Get free key <ExternalLink className="h-3 w-3" />
                   </a>

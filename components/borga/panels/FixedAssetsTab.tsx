@@ -5,9 +5,12 @@ import { AlertTriangle, Download, Info, Plus, Undo2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useBorga } from '@/lib/borga/store';
+import { toast } from '@/lib/toast-bus';
 import { fmtMoneyFull } from '@/lib/borga/currencies';
 import { addMonths, fiscalYearEnd } from '@/lib/borga/filing-catalog';
 import {
@@ -20,6 +23,7 @@ import {
 import { ledgerBalance, missingCounterAccount, periodLabel, type PostingPlan } from '@/lib/borga/fixed-asset-journals';
 import { SectionTitle } from '../bits';
 import { AccountSelect, DateInput, Field, ProjectSelect } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const noopSubscribe = () => () => {};
@@ -49,6 +53,7 @@ export function FixedAssetsTab() {
 
   const [editing, setEditing] = useState<FixedAsset | 'new' | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [confirmReverseRun, setConfirmReverseRun] = useState(false);
   const [posting, setPosting] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [fyEnd, setFyEnd] = useState('');
@@ -208,11 +213,11 @@ export function FixedAssetsTab() {
 
       <Card className="flex flex-wrap items-center justify-between gap-3 p-3 text-xs">
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={fixedAssets.transferSurplus} onChange={(e) => setAssetTransferSurplus(e.target.checked)} />
+          <Switch checked={fixedAssets.transferSurplus} onCheckedChange={(v) => setAssetTransferSurplus(v)} />
           <span>Move revaluation surplus to retained earnings as revalued assets are used (IAS 16.41). Applies only to revalued assets.</span>
         </label>
         {fixedAssets.runs.length > 0 && (
-          <Button size="sm" variant="outline" onClick={() => { if (window.confirm('Reverse the most recent posted month? Each of its entries gets a linked reversing entry, and you can post the month again.')) reverseLastAssetRun(); }}>
+          <Button size="sm" variant="outline" onClick={() => setConfirmReverseRun(true)}>
             <Undo2 className="h-3.5 w-3.5" /> Reverse last run ({periodLabel(fixedAssets.runs.reduce((m, r) => (r.period > m ? r.period : m), ''))})
           </Button>
         )}
@@ -230,7 +235,7 @@ export function FixedAssetsTab() {
           asset={open} policy={policy} period={period} currency={currency} sim={sims.get(open.id)} fixedAssetsTransfer={fixedAssets.transferSurplus}
           onClose={() => setOpenId(null)} onEdit={() => { setEditing(open); setOpenId(null); }}
           onAddEvent={(e) => addAssetEvent(open.id, e)} onRemoveEvent={(id) => removeAssetEvent(open.id, id)}
-          onDelete={() => { if (deleteFixedAsset(open.id)) setOpenId(null); else window.alert('This asset has entries posted to the ledger, so it cannot be deleted. Record a disposal instead.'); }}
+          onDelete={() => { if (deleteFixedAsset(open.id)) setOpenId(null); else toast({ title: 'Cannot delete this asset', description: 'It has entries posted to the ledger. Record a disposal instead.', variant: 'warning' }); }}
         />
       )}
       {posting && (
@@ -239,6 +244,14 @@ export function FixedAssetsTab() {
           onPost={(thr) => postAssetEntries(thr)}
         />
       )}
+      <ConfirmDialog
+        open={confirmReverseRun}
+        onOpenChange={setConfirmReverseRun}
+        title="Reverse the most recent posted month?"
+        description="Each of its entries gets a linked reversing entry, and you can post the month again."
+        confirmLabel="Reverse run"
+        onConfirm={() => { setConfirmReverseRun(false); reverseLastAssetRun(); }}
+      />
     </div>
   );
 }
@@ -439,7 +452,7 @@ function AssetDialog({ asset, policy, today, onClose, onSave }: {
             </div>
           </Field>
           <Field label="Project"><ProjectSelect value={f.projectId} onChange={(v) => set({ projectId: v })} /></Field>
-          <Field label="Notes"><Input value={f.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="Serial number, location…" /></Field>
+          <Field label="Notes"><Textarea rows={2} value={f.notes} onChange={(e) => set({ notes: e.target.value })} placeholder="Serial number, location…" /></Field>
         </div>
         {issues.length > 0 && f.name !== '' && <ul className="list-disc space-y-0.5 pl-5 text-xs text-rose-600">{issues.map((m) => <li key={m}>{m}</li>)}</ul>}
         <DialogFooter>
@@ -461,12 +474,15 @@ function DetailDialog({ asset, policy, period, currency, sim, fixedAssetsTransfe
 }) {
   const money = (n: number) => fmtMoneyFull(n, currency);
   const pos = sim ? positionAt(sim, period) : null;
+  const [confirmRemoveEvent, setConfirmRemoveEvent] = useState<string | null>(null);
+  const [confirmDeleteAsset, setConfirmDeleteAsset] = useState(false);
   const sched = useMemo(() => (period && isPeriod(period) ? forecast(asset, policy, period, 12, { transferSurplus: fixedAssetsTransfer }) : []), [asset, policy, period, fixedAssetsTransfer]);
   const [adding, setAdding] = useState(false);
   const kinds = EVENT_KINDS.filter((k) => (k !== 'revaluation' || (policy.allowsRevaluation && asset.model === 'revaluation')) && (k !== 'impairment-reversal' || (policy.allowsImpairmentReversal && asset.model === 'cost')));
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <>
+      <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{asset.name}{asset.tag ? ` (${asset.tag})` : ''}</DialogTitle>
@@ -497,7 +513,7 @@ function DetailDialog({ asset, policy, period, currency, sim, fixedAssetsTransfe
                     <span><strong>{EVENT_LABEL[e.kind]}</strong> · {e.date} · {describe(e, money)}{e.note ? ` · ${e.note}` : ''}</span>
                     <span className="flex shrink-0 items-center gap-2">
                       {e.journalId ? <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600">posted</span> : (
-                        <button className="text-muted-foreground hover:text-destructive" onClick={() => onRemoveEvent(e.id)}>Remove</button>
+                        <button className="text-muted-foreground hover:text-destructive" onClick={() => setConfirmRemoveEvent(e.id)}>Remove</button>
                       )}
                     </span>
                   </li>
@@ -530,11 +546,32 @@ function DetailDialog({ asset, policy, period, currency, sim, fixedAssetsTransfe
           )}
         </div>
         <DialogFooter className="sm:justify-between">
-          <Button variant="ghost" className="text-destructive" onClick={() => { if (window.confirm('Delete this asset? Only possible while nothing is posted for it.')) onDelete(); }}>Delete</Button>
+          <Button variant="ghost" className="text-destructive" onClick={() => setConfirmDeleteAsset(true)}>Delete</Button>
           <span className="flex gap-2"><Button variant="outline" onClick={onEdit}>Edit</Button><Button onClick={onClose}>Close</Button></span>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+      open={confirmDeleteAsset}
+      onOpenChange={setConfirmDeleteAsset}
+      title={`Delete ${asset.name}?`}
+      description="Only possible while nothing is posted for it — posted assets must record a disposal instead."
+      confirmLabel="Delete asset"
+      onConfirm={() => { setConfirmDeleteAsset(false); onDelete(); }}
+    />
+    <ConfirmDialog
+      open={!!confirmRemoveEvent}
+      onOpenChange={(o) => { if (!o) setConfirmRemoveEvent(null); }}
+      title="Remove this event?"
+      description="The unposted event (revaluation, impairment, disposal…) is removed from the asset. Posted events cannot be removed."
+      confirmLabel="Remove event"
+      onConfirm={() => {
+        if (!confirmRemoveEvent) return;
+        onRemoveEvent(confirmRemoveEvent);
+        setConfirmRemoveEvent(null);
+      }}
+    />
+    </>
   );
 }
 
@@ -600,7 +637,7 @@ function EventForm({ kinds, policy, asset, onCancel, onAdd }: {
         {la && <Field label={la}><Input type="number" value={v.a} onChange={(e) => setV({ ...v, a: e.target.value })} /></Field>}
         {lb && <Field label={lb}><Input type="number" value={v.b} onChange={(e) => setV({ ...v, b: e.target.value })} /></Field>}
         {lc && <Field label={lc}><Input type="number" value={v.c} onChange={(e) => setV({ ...v, c: e.target.value })} /></Field>}
-        <Field label="Note" className="sm:col-span-2"><Input value={v.note} onChange={(e) => setV({ ...v, note: e.target.value })} placeholder="Optional: valuer, reason…" /></Field>
+        <Field label="Note" className="sm:col-span-2"><Textarea rows={2} value={v.note} onChange={(e) => setV({ ...v, note: e.target.value })} placeholder="Optional: valuer, reason…" /></Field>
       </div>
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="outline" onClick={onCancel}>Cancel</Button>

@@ -29,33 +29,6 @@ interface ChatMsg {
 // Tier 1 unified brain: single system prompt lives in lib/borga/agent-core.ts.
 const SYSTEM_PROMPT = BORGA_SYSTEM_PROMPT;
 
-function generateFallbackResponse(messages: ChatMsg[], kb: KnowledgeEntry[], providerId: string): string {
-  const lastUser = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
-  const lower = lastUser.toLowerCase();
-  const isDemo = providerId === 'Demo';
-
-  // Search knowledge base for matching facts
-  const relevant = kb
-    .filter((k) => {
-      const words = lower.split(/\s+/).filter((w) => w.length > 3);
-      const titleLower = k.title.toLowerCase();
-      return words.some((w) => titleLower.includes(w) || k.answer.toLowerCase().includes(w));
-    })
-    .slice(0, 2);
-
-  if (relevant.length > 0) {
-    return isDemo
-      ? relevant.map((k) => k.answer).join(' ')
-      : `${relevant.map((k) => k.answer).join(' ')}\n\n*(AI provider ${providerId} unavailable — check API key configuration)*`;
-  }
-
-  if (isDemo) {
-    return "I don't have a stored answer for that yet — this is running in demo mode (no AI provider connected), so I can only cite the knowledge base. Add a real provider in Settings → AI & Voice for open-ended answers, or add the fact to the Knowledge Base.";
-  }
-
-  return `I'm unable to process your request right now as the AI provider (${providerId}) is not properly configured. Please check your API key settings in the Tools tab and ensure the provider is connected.`;
-}
-
 export async function POST(req: NextRequest) {
   const userId = await getUserId(req);
   let body: { messages?: ChatMsg[]; model?: string; providerId?: string; ws?: string; companyName?: string } = {};
@@ -73,8 +46,8 @@ export async function POST(req: NextRequest) {
     if (unpaid) return NextResponse.json({ reply: unpaid.error, billing: unpaid.billing }, { status: 402 });
   }
 
-  const rawModel = body.model ?? 'demo';
-  let providerId = body.providerId ?? 'llm-demo';
+  const rawModel = body.model ?? '';
+  let providerId = body.providerId ?? 'llm-pollinations';
   let model = rawModel;
 
   // Align routing and prefix-stripping exactly with resolved agent-context LLM logic.
@@ -104,26 +77,19 @@ export async function POST(req: NextRequest) {
 
   const lastUserText = (body.messages ?? []).filter((m) => m.role === 'user').at(-1)?.content ?? '';
 
-  // --- Demo mode: zero-config KB-aware fallback, no API key required ---
-  // This is the DEFAULT_LLM selection, so chat must work out of the box; it
-  // answers from the workspace knowledge base and otherwise says so plainly.
-  if (providerId === 'llm-demo') {
-    return NextResponse.json({ reply: generateFallbackResponse(messages, kb, 'Demo') }, { status: 200 });
-  }
-
-  // --- Ollama (local, no key required) ---
-  if (providerId === 'llm-ollama') {
-    const ollamaBase = baseUrl || 'http://127.0.0.1:11434/v1';
-    // Validate it's not an external URL to prevent SSRF from env manipulation
+  // --- Muse (local CLI) ---
+  // Runs on the user's own machine. Without a configured local address there
+  // is nothing to call, so the reply says how to install it instead of failing.
+  if (providerId === 'llm-muse') {
+    let museHost = '';
     try {
-      const u = new URL(ollamaBase);
-      const host = u.hostname;
-      const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local');
-      if (!isLocal && !process.env.OLLAMA_BASE_URL) {
-        return NextResponse.json({ reply: 'OLLAMA_BASE_URL must point to a local Ollama instance.' }, { status: 200 });
-      }
+      museHost = baseUrl ? new URL(baseUrl).hostname : '';
     } catch {
-      return NextResponse.json({ reply: 'Invalid OLLAMA_BASE_URL in environment.' }, { status: 200 });
+      museHost = '';
+    }
+    const museLocal = museHost === 'localhost' || museHost === '127.0.0.1' || museHost === '::1' || museHost.endsWith('.local');
+    if (!baseUrl || !museLocal) {
+      return NextResponse.json({ reply: 'Muse runs on your own computer via the Muse CLI. Install it first: /bin/bash -c "$(curl -fsSL https://dev.meta.ai/cli/install-opencode.sh)", then set its local address under Integrations → AI & Voice.' }, { status: 200 });
     }
 
     if (kb.length) {
@@ -132,25 +98,24 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const upstream = await fetch(`${ollamaBase}/chat/completions`, {
+      const upstream = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model, messages, max_tokens: 512, temperature: 0.6 }),
         signal: AbortSignal.timeout(30000),
       });
       if (!upstream.ok) {
-        return NextResponse.json({ 
-          reply: generateFallbackResponse(messages, kb, 'Ollama') + '\n\n*(Ollama returned an error — is the model loaded? Run: ollama pull ' + model + ')' 
+        return NextResponse.json({
+          reply: 'Muse returned an error — is the CLI serving its local endpoint at the configured address?'
         }, { status: 502 });
       }
       const data = (await upstream.json()) as { choices?: { message?: { content?: string } }[] };
       return NextResponse.json({ reply: data.choices?.[0]?.message?.content?.trim() ?? 'Borga received no answer.' }, { status: 200 });
-    } catch (error) {
-      console.error('Ollama connection error:', error);
-      // Ollama not running → graceful fallback
+    } catch {
+      // Muse not reachable → plain guidance, no stack trace
       return NextResponse.json({
-        reply: generateFallbackResponse(messages, kb, 'Ollama') + '\n\n*(Ollama is not running locally. Start it with: ollama serve)*',
-        error: 'OLLAMA_UNREACHABLE'
+        reply: 'Muse is not reachable at its configured local address. Install the CLI: /bin/bash -c "$(curl -fsSL https://dev.meta.ai/cli/install-opencode.sh)", then set its local address under Integrations → AI & Voice.',
+        error: 'MUSE_UNREACHABLE'
       }, { status: 502 });
     }
   }

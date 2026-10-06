@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { useBorga } from '@/lib/borga/store';
 import { KNOWLEDGE_CATEGORIES, type AgentMemory, type KnowledgeCategoryId, type KnowledgeEntry, type MemoryKind } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { SupermemoryCard } from './SupermemoryCard';
 import { cn } from '@/lib/utils';
 
@@ -50,6 +52,9 @@ export function KnowledgeBaseTab() {
   const [answerDraft, setAnswerDraft] = useState('');
   const [viewTarget, setViewTarget] = useState<KnowledgeEntry | null>(null);
   const [editTarget, setEditTarget] = useState<KnowledgeEntry | null>(null);
+  const [confirmDeleteEntry, setConfirmDeleteEntry] = useState<KnowledgeEntry | null>(null);
+  const [confirmDeleteMemory, setConfirmDeleteMemory] = useState<AgentMemory | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editAnswer, setEditAnswer] = useState('');
   const [editCategory, setEditCategory] = useState<KnowledgeCategoryId>('company');
@@ -136,6 +141,9 @@ export function KnowledgeBaseTab() {
     collectQuestion(qOpen, answerDraft, source);
     setQOpen(null);
     setAnswerDraft('');
+    setTitle('');
+    setCategory('company');
+    setSource('');
   };
 
   return (
@@ -154,8 +162,8 @@ export function KnowledgeBaseTab() {
               fresh.forEach((k) =>
                 addMemory({
                   id: `mem-kb-${k.id}-${Date.now().toString(36)}`,
-                  agentId: 'a-fundraising',
-                  agentName: 'Nadia',
+                  agentId: 'a-borga',
+                  agentName: 'Borga',
                   kind: 'fact',
                   content: `${k.title}: ${k.answer}`,
                   tags: ['knowledge-base', k.category ?? 'general'],
@@ -164,7 +172,7 @@ export function KnowledgeBaseTab() {
                   lastAccessed: new Date().toISOString(),
                 }),
               );
-              log({ agentId: 'a-fundraising', agentName: 'Nadia', actor: 'system', kind: 'learn', message: `Taught the fleet ${fresh.length} new fact${fresh.length === 1 ? '' : 's'} from the knowledge base.` });
+              log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'learn', message: `Taught the fleet ${fresh.length} new fact${fresh.length === 1 ? '' : 's'} from the knowledge base.` });
             }}
           >
             <BrainCircuit className="h-4 w-4" /> Teach fleet
@@ -196,7 +204,7 @@ export function KnowledgeBaseTab() {
               className={cn('cursor-pointer', filter === c.id && 'border-primary text-primary')}
               onClick={() => setFilter(c.id)}
             >
-              {c.label.split('&')[0].trim()}
+              {c.label}
             </Badge>
           ))}
           {autoCount > 0 && (
@@ -291,7 +299,7 @@ export function KnowledgeBaseTab() {
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
                   <button
-                    onClick={() => deleteKnowledge(k.id)}
+                    onClick={() => setConfirmDeleteEntry(k)}
                     className="rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                     title="Delete"
                   >
@@ -327,12 +335,20 @@ export function KnowledgeBaseTab() {
               <option value="instruction">Instruction</option>
               <option value="observation">Observation</option>
             </select>
-            <select value={memAgent} onChange={(e) => setMemAgent(e.target.value)} className="h-8 rounded-lg border border-input bg-background px-2 text-xs">
-              <option value="all">All agents</option>
-              {memAgentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
+            <SearchSelect
+              options={[
+                { value: 'all', label: 'All agents' },
+                ...memAgentOptions.map((a) => ({ value: a.id, label: a.name })),
+              ]}
+              value={memAgent}
+              onChange={setMemAgent}
+              placeholder="All agents"
+              searchPlaceholder="Search agents"
+              clearable={false}
+              className="h-8 w-36 text-xs"
+            />
             {memories.length > 0 && (
-              <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs text-destructive hover:text-destructive" onClick={() => clearMemoriesByAgent('')}>
+              <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs text-destructive hover:text-destructive" onClick={() => setConfirmClearAll(true)}>
                 <Trash2 className="h-3 w-3" /> Clear all
               </Button>
             )}
@@ -361,7 +377,7 @@ export function KnowledgeBaseTab() {
                   <p className="mt-1 text-[10px] text-muted-foreground">Stored {new Date(m.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
                 </div>
                 <button
-                  onClick={() => deleteMemory(m.id)}
+                  onClick={() => setConfirmDeleteMemory(m)}
                   className="rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                   title="Delete memory"
                 >
@@ -447,7 +463,7 @@ export function KnowledgeBaseTab() {
                 <Button variant="outline" className="gap-1.5" onClick={() => { setViewTarget(null); openEdit(viewTarget); }}>
                   <Pencil className="h-3.5 w-3.5" /> Edit
                 </Button>
-                <Button variant="outline" className="gap-1.5 text-destructive hover:text-destructive" onClick={() => { deleteKnowledge(viewTarget.id); setViewTarget(null); }}>
+                <Button variant="outline" className="gap-1.5 text-destructive hover:text-destructive" onClick={() => { setViewTarget(null); setConfirmDeleteEntry(viewTarget); }}>
                   <Trash2 className="h-3.5 w-3.5" /> Delete
                 </Button>
                 <Button className="ml-auto gap-1.5" onClick={() => setViewTarget(null)}>
@@ -498,6 +514,44 @@ export function KnowledgeBaseTab() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteEntry}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteEntry(null); }}
+        title={`Delete "${confirmDeleteEntry?.title ?? 'entry'}"?`}
+        description="The knowledge entry is removed permanently. Memories already taught from it stay."
+        confirmLabel="Delete entry"
+        onConfirm={() => {
+          if (!confirmDeleteEntry) return;
+          deleteKnowledge(confirmDeleteEntry.id);
+          setConfirmDeleteEntry(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteMemory}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteMemory(null); }}
+        title="Delete this memory?"
+        description="The agent memory is removed permanently and will not be recalled again."
+        confirmLabel="Delete memory"
+        onConfirm={() => {
+          if (!confirmDeleteMemory) return;
+          deleteMemory(confirmDeleteMemory.id);
+          setConfirmDeleteMemory(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmClearAll}
+        onOpenChange={setConfirmClearAll}
+        title={`Clear all ${memories.length} memor${memories.length === 1 ? 'y' : 'ies'}?`}
+        description="Every agent memory in this workspace is wiped. Agents forget everything they learned."
+        confirmLabel="Clear all"
+        onConfirm={() => {
+          clearMemoriesByAgent('');
+          setConfirmClearAll(false);
+        }}
+      />
     </div>
   );
 }

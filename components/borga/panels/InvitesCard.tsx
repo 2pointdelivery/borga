@@ -7,8 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/lib/toast-bus';
+import { ConfirmDialog } from '../ConfirmDialog';
 
-interface Invite { id: string; email: string; createdAt: number; expiresAt: number; used: boolean }
+interface Invite { id: string; email: string; createdAt: number; expiresAt: number; used: boolean; revoked?: boolean }
 
 const HEADERS = { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' };
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -22,6 +23,7 @@ export function InvitesCard() {
   const [busy, setBusy] = useState(false);
   const [fresh, setFresh] = useState<{ link: string; email: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [confirmRevoke, setConfirmRevoke] = useState<Invite | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -104,14 +106,15 @@ export function InvitesCard() {
         <ul className="divide-y rounded-lg border text-xs">
           {invites.map((i) => {
             const expired = !i.used && i.expiresAt < now;
+            const label = i.revoked ? 'Revoked' : i.used ? 'Used' : expired ? 'Expired' : 'Pending';
             return (
               <li key={i.id} className="flex items-center justify-between gap-3 px-3 py-2">
                 <span className="min-w-0 truncate">{i.email}</span>
                 <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
                   {new Date(i.createdAt).toLocaleDateString()}
-                  <Badge variant={i.used ? 'secondary' : 'outline'}>{i.used ? 'Used or revoked' : expired ? 'Expired' : 'Pending'}</Badge>
+                  <Badge variant={i.used && !i.revoked ? 'secondary' : 'outline'}>{label}</Badge>
                   {!i.used && !expired && (
-                    <button type="button" aria-label={`Revoke invite for ${i.email}`} className="text-muted-foreground hover:text-rose-600" onClick={() => revoke(i.id)}>
+                    <button type="button" aria-label={`Revoke invite for ${i.email}`} className="text-muted-foreground hover:text-rose-600" onClick={() => setConfirmRevoke(i)}>
                       <Ban className="h-3.5 w-3.5" />
                     </button>
                   )}
@@ -121,6 +124,19 @@ export function InvitesCard() {
           })}
         </ul>
       )}
+
+      <ConfirmDialog
+        open={!!confirmRevoke}
+        onOpenChange={(o) => { if (!o) setConfirmRevoke(null); }}
+        title={`Revoke the signup invite for ${confirmRevoke?.email ?? ''}?`}
+        description="The link stops working immediately and cannot be reactivated."
+        confirmLabel="Revoke invite"
+        onConfirm={async () => {
+          if (!confirmRevoke) return;
+          await revoke(confirmRevoke.id);
+          setConfirmRevoke(null);
+        }}
+      />
     </Card>
   );
 }

@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { toast } from '@/lib/toast-bus';
+import { connectionIdForToolkit, commsChannelForToolkit } from './connected-apps';
 import {
   AGENTS,
   CONNECTORS,
@@ -25,6 +26,7 @@ INITIAL_APPROVALS,
   INITIAL_CHATS,
   DEFAULT_WHATSAPP,
   DEFAULT_LLM,
+  normalizeLlmSelection,
   LLM_PROVIDERS,
   type LlmProvider,
   type LlmModelInfo,
@@ -97,6 +99,8 @@ INITIAL_APPROVALS,
   type Employee,
   type LeaveRequest,
   type LeaveStatus,
+  INITIAL_PAYROLL_RUNS,
+  type PayrollRun,
   type Invoice,
   type InvoiceStatus,
   type PaymentMethod,
@@ -143,10 +147,13 @@ INITIAL_APPROVALS,
   type ReconciliationRule,
   INITIAL_RECONCILIATION_RULES,
   normalizeReconciliationPattern,
+  withBrainDefaults,
 } from './data';
+import type { InventoryItem, Warehouse, StockMovement, PosSale } from './inventory';
+import { INITIAL_WAREHOUSES, refundMovements, serviceItemsFromTracks, refundFinanceEntries, refundJournals } from './inventory';
 import { notifyEmail } from './email-client';
 import { mergeLoadedModels, repairCatalog } from './model-catalog';
-import { SaveQueue } from './save-queue';
+import { SaveQueue, unionAppendOnly } from './save-queue';
 import { fmtMoneyFull } from './currencies';
 import type { BillingInfo } from './billing';
 import { mergeBankFeed, markFeedDisconnected, type MergeStats } from './bank-feed';
@@ -206,6 +213,7 @@ type PersistEntity =
   | 'workflows'
   | 'closures'
   | 'timeEntries'
+  | 'payrollRuns'
   | 'invites'
   | 'taxProfiles'
   | 'valuation'
@@ -218,7 +226,11 @@ type PersistEntity =
   | 'mcpServers'
   | 'filings'
   | 'fixedAssets'
-  | 'notices';
+  | 'notices'
+  | 'inventoryItems'
+  | 'warehouses'
+  | 'stockMovements'
+  | 'posSales';
 
 // Active workspace id is tracked at module level so the fire-and-forget
 // persistence helper can scope every write to the current company without
@@ -281,11 +293,12 @@ const LS_FALLBACK_FIELDS: [keyof BorgaStore, string][] = [
   ['customers', 'customers'], ['contacts', 'contacts'], ['vendors', 'vendors'],
   ['bills', 'bills'], ['coa', 'coa'], ['journals', 'journals'],
   ['bankAccounts', 'bankAccounts'], ['bankTxns', 'bankTxns'], ['workflows', 'workflows'],
-  ['closures', 'closures'], ['timeEntries', 'timeEntries'], ['invites', 'invites'],
+  ['closures', 'closures'], ['timeEntries', 'timeEntries'], ['payrollRuns', 'payrollRuns'], ['invites', 'invites'],
   ['taxProfiles', 'taxProfiles'], ['valuation', 'valuation'],
   ['budgets', 'budgets'], ['revenueTracks', 'revenueTracks'], ['recurringInvoices', 'recurringInvoices'], ['recurringBills', 'recurringBills'], ['projects', 'projects'],
   ['reconciliationRules', 'reconciliationRules'], ['mcpServers', 'mcpServers'],
   ['filings', 'filings'], ['fixedAssets', 'fixedAssets'], ['notices', 'notices'],
+  ['inventoryItems', 'inventoryItems'], ['warehouses', 'warehouses'], ['stockMovements', 'stockMovements'], ['posSales', 'posSales'],
 ];
 
 // The fundraising agent (Nadia) is a core built-in: whenever the agent list
@@ -323,6 +336,20 @@ interface SavePayload {
  */
 const SAVES = new SaveQueue<SavePayload>({
   valueOf: (p) => p.value,
+  /**
+   * The activity timeline is append-only on both sides (dashboard logs here,
+   * agents log on the server), so a version refusal unions both sides' entries
+   * instead of blocking the feed and raising a banner. Every other entity
+   * keeps the strict rule: a differing copy is a real conflict for the user.
+   * Notices and run history are deliberately excluded — dismissing or deleting
+   * one is an explicit act a blind union would undo.
+   */
+  merge: (id, localValue, serverValue) => {
+    const entity = id.slice(id.indexOf('|') + 1);
+    if (entity !== 'activity') return null;
+    return unionAppendOnly(localValue, serverValue, 200);
+  },
+  withValue: (p, value) => ({ ...p, value }),
   send: async (_id, p, baseVersion) => {
     try {
       const res = await fetch('/api/borga/data', {
@@ -346,7 +373,16 @@ const SAVES = new SaveQueue<SavePayload>({
       if (!res.ok) return { status: 'error' };
       const j = (await res.json().catch(() => ({}))) as { version?: number };
       offlineNotified = false;
-      return { status: 'ok', version: typeof j.version === 'number' ? j.version : baseVersion + 1 };
+      const version = typeof j.version === 'number' ? j.version : baseVersion + 1;
+      // Tell other tabs in this browser the new version so their next save
+      // goes out fresh instead of conflicting spuriously (storage events only
+      // fire in the *other* tabs — never here).
+      try {
+        localStorage.setItem(`borga-ver:${_id}`, String(version));
+      } catch {
+        /* quota / private mode — ignore */
+      }
+      return { status: 'ok', version };
     } catch {
       return { status: 'error' };
     }
@@ -370,10 +406,25 @@ const SAVES = new SaveQueue<SavePayload>({
 /** Queue id for an entity: company id (or "global") plus entity name. */
 const saveId = (ws: string | null, entity: string) => `${ws ?? 'global'}|${entity}`;
 
+// Cross-tab version sync: when another tab in this browser saves, it stores
+// the new version under `borga-ver:<saveId>`; adopting it keeps this tab's
+// next save fresh. Attached lazily on first persist (browser only).
+let verListenerAttached = false;
+function attachVersionListener() {
+  if (verListenerAttached || typeof window === 'undefined') return;
+  verListenerAttached = true;
+  window.addEventListener('storage', (e) => {
+    if (!e.key || !e.key.startsWith('borga-ver:') || e.newValue == null) return;
+    const v = Number(e.newValue);
+    if (Number.isInteger(v) && v >= 0) SAVES.noteVersion(e.key.slice('borga-ver:'.length), v);
+  });
+}
+
 async function persist(entity: PersistEntity, value: unknown) {
   const ws = entity === 'workspaces' ? null : ACTIVE_WS;
   writeLocal(ws, entity, value);
   if (SERVER_LOAD_FAILED) return;
+  attachVersionListener();
   await SAVES.save(saveId(ws, entity), { entity, ws, value });
 }
 
@@ -425,8 +476,16 @@ interface BorgaStore {
   employees: Employee[];
   addEmployee: (e: Employee) => void;
   updateEmployee: (id: string, patch: Partial<Employee>) => void;
-  /** Books the monthly payroll expense for all active employees into ledger + journal. */
-  runPayroll: (periodLabel: string) => boolean;
+  payrollRuns: PayrollRun[];
+  /**
+   * Starts (or reopens) the payroll batch for a month (YYYY-MM). Returns null
+   * when that month is already released — a month is paid exactly once.
+   */
+  createPayrollBatch: (monthKey: string) => PayrollRun | null;
+  /** Posts a draft batch to the ledger + journal and marks it released. */
+  releasePayrollBatch: (id: string) => boolean;
+  /** Drafts only — released runs stay on the books forever. */
+  deletePayrollBatch: (id: string) => boolean;
   deleteEmployee: (id: string) => void;
   leaveRequests: LeaveRequest[];
   setLeaveStatus: (id: string, status: LeaveStatus) => void;
@@ -451,6 +510,8 @@ interface BorgaStore {
   addFinanceEntry: (f: FinanceEntry) => void;
   /** Manual drafts only — auto-posted entries are locked and must be voided. */
   deleteFinanceEntry: (id: string) => boolean;
+  /** Edit a manual draft (same lock rule as deletion). */
+  updateFinanceEntry: (id: string, patch: Partial<FinanceEntry>) => boolean;
   /** Voids a ledger entry in place (kept for audit, excluded from reports). */
   voidFinanceEntry: (id: string, reason?: string) => void;
 
@@ -637,6 +698,8 @@ interface BorgaStore {
   fundraising: FundingOpportunity[];
   addFunding: (f: FundingOpportunity) => void;
   updateFundingStage: (id: string, stage: FundingStage) => void;
+  updateFunding: (id: string, patch: Partial<FundingOpportunity>) => void;
+  deleteFunding: (id: string) => void;
 
   browses: BrowseResult[];
   browse: (url: string, browsedBy: string) => void;
@@ -652,6 +715,8 @@ interface BorgaStore {
   setElevenlabs: (patch: Partial<ElevenLabsConfig>) => void;
   calls: CallRecord[];
   placeCall: (a: { agentId: string; agentName: string; contact: string; leadName: string; note?: string }) => void;
+  /** Removes a mis-dialed call log entry (the call itself already happened). */
+  deleteCall: (id: string) => void;
 
   knowledge: KnowledgeEntry[];
   addKnowledge: (e: KnowledgeEntry) => void;
@@ -690,6 +755,8 @@ interface BorgaStore {
   ops: OpsState;
   setBookingStatus: (id: string, status: BookingStatus) => void;
   addDriver: (d: Driver) => void;
+  /** Removes a mistyped driver from the local roster. */
+  removeDriver: (id: string) => void;
   addClient: (c: Client) => void;
 
   composio: ComposioConfig;
@@ -697,9 +764,18 @@ interface BorgaStore {
   addComposioConnection: (connection: any) => void;
   removeComposioConnection: (appId: string) => void;
   updateComposioConnection: (appId: string, updates: Partial<any>) => void;
+  /**
+   * Single mirror-sync for a Composio toolkit: one call updates the connection
+   * card, the composio.connections record AND the inbox channel (where one
+   * maps), so connecting an app once is reflected everywhere. Connect flows
+   * in Inbox, Social and Tools all funnel through here.
+   */
+  syncToolkitConnection: (toolkit: string, connected: boolean, accountId?: string) => void;
 
   messages: CommsMessage[];
   sendMessage: (m: CommsMessage) => void;
+  /** Removes one message row from the unified inbox thread list. */
+  deleteMessage: (id: string) => void;
 
   ads: AdCampaign[];
   addCampaign: (c: AdCampaign) => void;
@@ -743,6 +819,8 @@ interface BorgaStore {
   saveConflicts: string[];
   /** Discards this tab's unsaved edits to the conflicted entities and loads the latest data from the server. */
   loadLatest: () => Promise<void>;
+  /** Overwrites the server copy with this tab's latest edit, then reloads. Returns false when it failed. */
+  forceSaveEntity: (entity: PersistEntity) => Promise<boolean>;
 
   tasks: Task[];
   addTask: (t: Task) => void;
@@ -752,6 +830,7 @@ interface BorgaStore {
 
   activity: ActivityEvent[];
   log: (e: Omit<ActivityEvent, 'id' | 'time'>) => void;
+  clearActivity: () => void;
 
   connectors: Connector[];
   setConnector: (id: string, status: Connector['status'], lastSync: string) => void;
@@ -790,17 +869,40 @@ interface BorgaStore {
   agentRuns: AgentRun[];
   addAgentRun: (r: AgentRun) => void;
   clearAgentRuns: () => void;
+  /** Removes one run from the local history (server-run records stay in the queue/audit trail). */
+  deleteAgentRun: (id: string) => void;
 
   notices: ProactiveNotice[];
   addNotice: (n: ProactiveNotice) => void;
   dismissNotice: (id: string) => void;
   clearNotices: () => void;
+
+  // Inventory: catalog (products + services), locations, stock ledger, POS sales.
+  inventoryItems: InventoryItem[];
+  addItem: (item: InventoryItem) => void;
+  updateItem: (id: string, patch: Partial<InventoryItem>) => void;
+  deleteItem: (id: string) => void;
+  warehouses: Warehouse[];
+  addWarehouse: (w: Warehouse) => void;
+  updateWarehouse: (id: string, patch: Partial<Warehouse>) => void;
+  deleteWarehouse: (id: string) => void;
+  stockMovements: StockMovement[];
+  /** Appends to the stock ledger (costing recomputes from it — the ledger is the truth). */
+  recordStockMovement: (m: StockMovement) => void;
+  posSales: PosSale[];
+  addPosSale: (sale: PosSale) => void;
+  /** Marks a sale refunded and appends the reversing stock movements. */
+  refundPosSale: (id: string) => void;
 }
 
 let logSeq = 0;
 
-// Intelligent task distribution based on workflow type
-function distributeWorkflowTasks(workflowName: string, agents: Agent[]): void {
+// Intelligent task distribution based on workflow type. Returns one follow-up
+// task spec per relevant agent — the caller creates them with addTask, so a
+// finished workflow visibly fans out instead of vanishing into a dead event.
+interface DistributedTask { agentId: string; agentName: string; task: string; priority: Priority; }
+
+function distributeWorkflowTasks(workflowName: string, agents: Agent[]): DistributedTask[] {
   const wf = workflowName.toLowerCase();
   const tasksToDistribute: Array<{ agentId: string; task: string; priority: string }> = [];
 
@@ -908,26 +1010,27 @@ function distributeWorkflowTasks(workflowName: string, agents: Agent[]): void {
 
   // Fleet/briefing workflows
   if (/fleet|brief|morning|daily|standup/.test(wf)) {
-    // Distribute briefing tasks to all department leads
+    // No agent carries a 'Leadership' skill, so without a fallback this whole
+    // branch silently produced nothing — the orchestrator owns the briefing.
     const departmentLeads = agents.filter(a => a.status === 'active' && a.skills.includes('Leadership'));
-    
-    departmentLeads.forEach(agent => {
-      tasksToDistribute.push({ 
-        agentId: agent.id, 
-        task: `Review and act on fleet briefing from ${workflowName}`, 
-        priority: 'P1' 
+    const targets = departmentLeads.length ? departmentLeads : agents.filter(a => a.status === 'active' && a.id === 'a-borga');
+
+    targets.forEach(agent => {
+      tasksToDistribute.push({
+        agentId: agent.id,
+        task: `Review and act on fleet briefing from ${workflowName}`,
+        priority: 'P1'
       });
     });
   }
 
-  // Add tasks to the store if we have access to the store methods
-  // This is a simplified version - in production, this would use proper task management
-  if (typeof window !== 'undefined') {
-    // Client-side: emit event for task distribution
-    window.dispatchEvent(new CustomEvent('borga:tasks-distributed', { 
-      detail: { workflowName, tasks: tasksToDistribute } 
-    }));
-  }
+  // Resolve agent names and clamp priorities, then hand the specs back — the
+  // caller persists them as real tasks.
+  return tasksToDistribute.map((t) => {
+    const agent = agents.find((a) => a.id === t.agentId);
+    const priority: Priority = t.priority === 'P0' || t.priority === 'P1' || t.priority === 'P2' || t.priority === 'P3' ? t.priority : 'P1';
+    return { agentId: t.agentId, agentName: agent?.name ?? 'Borga', task: t.task, priority };
+  });
 }
 
 export const useBorga = create<BorgaStore>((set, get) => ({
@@ -997,6 +1100,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('employees', get().employees);
   },
   leaveRequests: INITIAL_LEAVE,
+  payrollRuns: INITIAL_PAYROLL_RUNS,
   setLeaveStatus: (id, status) => {
     const req = get().leaveRequests.find((l) => l.id === id);
     if (!req) return;
@@ -1030,53 +1134,97 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('leave', get().leaveRequests);
   },
 
-  runPayroll: (periodLabel) => {
+  createPayrollBatch: (monthKey) => {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) return null;
+    const released = get().payrollRuns.find((r) => r.monthKey === monthKey && r.status === 'released');
+    if (released) {
+      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Payroll for ${released.periodLabel} is already released — a month is paid exactly once. See payroll history.` });
+      return null;
+    }
+    const draft = get().payrollRuns.find((r) => r.monthKey === monthKey && r.status === 'draft');
+    if (draft) return draft;
     const active = get().employees.filter((e) => e.status === 'active');
-    const total = Math.round(active.reduce((s, e) => s + e.salary / 12, 0) * 100) / 100;
+    const lines = active.map((e) => ({ employeeId: e.id, name: e.name, amount: Math.round((e.salary / 12) * 100) / 100 }));
+    const total = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
     if (!active.length || total <= 0) {
-      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: 'Payroll run skipped — no active employees to pay.' });
+      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: 'Payroll batch skipped — no active employees to pay.' });
+      return null;
+    }
+    const run: PayrollRun = {
+      id: `pr-${Date.now().toString(36)}`,
+      monthKey,
+      periodLabel: new Date(Number(monthKey.slice(0, 4)), Number(monthKey.slice(5, 7)) - 1, 1).toLocaleDateString([], { month: 'long', year: 'numeric' }),
+      lines,
+      total,
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+    };
+    set((s) => ({ payrollRuns: [run, ...s.payrollRuns] }));
+    persist('payrollRuns', get().payrollRuns);
+    return run;
+  },
+  releasePayrollBatch: (id) => {
+    const run = get().payrollRuns.find((r) => r.id === id);
+    if (!run || run.status !== 'draft') return false;
+    if (get().payrollRuns.some((r) => r.id !== id && r.monthKey === run.monthKey && r.status === 'released')) {
+      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Payroll for ${run.periodLabel} is already released — refusing a second release.` });
       return false;
     }
+    const dateIso = new Date().toISOString().slice(0, 10);
     const today = new Date();
-    const dateIso = today.toISOString().slice(0, 10);
     // Ledger: one consolidated payroll expense entry (locked — auto-posted).
     const entry: FinanceEntry = {
       id: `f-payroll-${Date.now().toString(36)}`,
-      label: `Payroll — ${periodLabel}`,
-      amount: total,
+      label: `Payroll — ${run.periodLabel}`,
+      amount: run.total,
       category: 'People',
       kind: 'expense',
       dateIso,
       paymentMethod: 'bank-transfer',
       createdAt: new Date().toISOString(),
       source: 'auto',
-      externalRef: `${active.length} employees`,
+      externalRef: `${run.lines.length} employees`,
     };
     set((s) => ({ finance: [...s.finance, entry] }));
     persist('finance', get().finance);
     // Journal: DR Payroll Expense / CR Cash & Bank.
     const cash = get().coa.find((a) => a.isCash);
     const payrollAcct = get().coa.find((a) => /payroll/i.test(a.name) && a.type === 'expense') ?? get().coa.find((a) => a.type === 'expense');
+    let journalId: string | undefined;
     if (cash && payrollAcct) {
       const je: JournalEntry = {
         id: `je-payroll-${Date.now().toString(36)}`,
         date: today.toLocaleDateString([], { month: 'short', day: 'numeric' }),
         dateIso,
-        memo: `Payroll run — ${periodLabel}`,
-        description: `Monthly payroll for ${active.length} active employees (${periodLabel}).`,
-        reference: `PAY-${periodLabel.replace(/\s/g, '-').toUpperCase()}`,
+        memo: `Payroll run — ${run.periodLabel}`,
+        description: `Monthly payroll for ${run.lines.length} active employees (${run.periodLabel}).`,
+        reference: `PAY-${run.monthKey}`,
         paymentMethod: 'bank-transfer',
         status: 'posted',
         createdAt: new Date().toISOString(),
         lines: [
-          { accountId: payrollAcct.id, debit: total, credit: 0 },
-          { accountId: cash.id, debit: 0, credit: total },
+          { accountId: payrollAcct.id, debit: run.total, credit: 0 },
+          { accountId: cash.id, debit: 0, credit: run.total },
         ],
       };
+      journalId = je.id;
       set((s) => ({ journals: [je, ...s.journals] }));
       persist('journals', get().journals);
     }
-    get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'agent', kind: 'task', message: `Payroll executed for ${periodLabel}: ${active.length} employees, ${total.toLocaleString()} posted to ledger and journal (DR ${payrollAcct?.name ?? 'Payroll'} / CR Cash).` });
+    set((s) => ({
+      payrollRuns: s.payrollRuns.map((r) =>
+        r.id === id ? { ...r, status: 'released' as const, releasedAt: new Date().toISOString(), financeEntryId: entry.id, journalId } : r,
+      ),
+    }));
+    persist('payrollRuns', get().payrollRuns);
+    get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `Payroll released for ${run.periodLabel}: ${run.lines.length} employees, ${run.total.toLocaleString()} posted to ledger and journal (DR ${payrollAcct?.name ?? 'Payroll'} / CR Cash).` });
+    return true;
+  },
+  deletePayrollBatch: (id) => {
+    const run = get().payrollRuns.find((r) => r.id === id);
+    if (!run || run.status !== 'draft') return false;
+    set((s) => ({ payrollRuns: s.payrollRuns.filter((r) => r.id !== id) }));
+    persist('payrollRuns', get().payrollRuns);
     return true;
   },
 
@@ -1291,6 +1439,15 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     // Lock rule: system-posted entries are immutable — void instead.
     if (entry.source === 'auto' || entry.voidedAt) return false;
     set((s) => ({ finance: s.finance.filter((f) => f.id !== id) }));
+    persist('finance', get().finance);
+    return true;
+  },
+  updateFinanceEntry: (id, patch) => {
+    const entry = get().finance.find((f) => f.id === id);
+    if (!entry) return false;
+    // Same lock rule as deletion: auto-posted or voided entries are immutable.
+    if (entry.source === 'auto' || entry.voidedAt) return false;
+    set((s) => ({ finance: s.finance.map((f) => (f.id === id ? { ...f, ...patch } : f)) }));
     persist('finance', get().finance);
     return true;
   },
@@ -2235,7 +2392,8 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('agents', get().agents);
   },
   addAgent: (a) => {
-    set((s) => ({ agents: [...s.agents, a] }));
+    // Soft-start: even a hand-authored agent is added wired to the defaults — model follows the workspace and it is orchestrated.
+    set((s) => ({ agents: [...s.agents, withBrainDefaults(a)] }));
     persist('agents', get().agents);
   },
   deleteAgent: (id) => {
@@ -2250,6 +2408,15 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
   updateFundingStage: (id, stage) => {
     set((s) => ({ fundraising: s.fundraising.map((f) => (f.id === id ? { ...f, stage } : f)) }));
+    persist('fundraising', get().fundraising);
+  },
+  updateFunding: (id, patch) => {
+    set((s) => ({ fundraising: s.fundraising.map((f) => (f.id === id ? { ...f, ...patch } : f)) }));
+    persist('fundraising', get().fundraising);
+  },
+  /** Removes a wrong-fit or rejected opportunity. */
+  deleteFunding: (id) => {
+    set((s) => ({ fundraising: s.fundraising.filter((f) => f.id !== id) }));
     persist('fundraising', get().fundraising);
   },
 
@@ -2337,6 +2504,10 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('elevenlabs', get().elevenlabs);
   },
   calls: INITIAL_CALLS,
+  deleteCall: (id) => {
+    set((s) => ({ calls: s.calls.filter((c) => c.id !== id) }));
+    persist('calls', get().calls);
+  },
   placeCall: (a) => {
     const voiceName = get().elevenlabs.voice || 'george';
     const companyName = get().activeWorkspace()?.name ?? 'the company';
@@ -2459,7 +2630,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     fetch('/api/borga/voice/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-      body: JSON.stringify({ action: 'dial', to: normalizedTo, message: script, voiceId: voiceName }),
+      body: JSON.stringify({ action: 'dial', to: normalizedTo, message: script, voiceId: voiceName, ws: ACTIVE_WS }),
     })
       .then((r) => r.json())
       .then((d: { ok?: boolean; callSid?: string; error?: string; message?: string }) => {
@@ -2612,6 +2783,11 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set((s) => ({ ops: { ...s.ops, drivers: [...s.ops.drivers, d] } }));
     persist('ops', get().ops);
   },
+  /** Removes a mistyped driver from the local roster. */
+  removeDriver: (id) => {
+    set((s) => ({ ops: { ...s.ops, drivers: s.ops.drivers.filter((d) => d.id !== id) } }));
+    persist('ops', get().ops);
+  },
   addClient: (c) => {
     set((s) => ({ ops: { ...s.ops, clients: [...s.ops.clients, c] } }));
     persist('ops', get().ops);
@@ -2683,9 +2859,57 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('composio', clean);
   },
 
+  syncToolkitConnection: (toolkit, connected, accountId) => {
+    const slug = toolkit.toLowerCase();
+    const now = new Date().toISOString();
+    const cardId = connectionIdForToolkit(slug);
+    // Drop the legacy `c-<slug>` ghost card from the old id convention, if any.
+    const legacyId = `c-${slug}`;
+    set((s) => {
+      const pruned = s.connections.filter((c) => c.id !== legacyId);
+      const cardExists = pruned.some((c) => c.id === cardId);
+      const connections = cardExists
+        ? pruned.map((c) => (c.id === cardId
+          ? { ...c, status: connected ? 'connected' as const : 'off' as const, account: accountId ?? c.account, lastSync: 'Just now' }
+          : c))
+        : [...pruned, {
+          id: cardId, type: 'tool' as const, provider: slug, label: slug,
+          status: connected ? 'connected' as const : 'off' as const,
+          account: accountId ?? '', lastSync: 'Just now',
+        }];
+      const existing = s.composio.connections || [];
+      const record = {
+        appId: slug, appName: slug, entityId: 'default',
+        connectionId: accountId ?? '', status: 'connected' as const,
+        connectedAt: now, lastUsed: now,
+      };
+      const without = existing.filter((c: any) => c.appId !== slug);
+      const composioConnections = connected ? [...without, record] : without;
+      const channel = commsChannelForToolkit(slug);
+      const messagingChannels = channel
+        ? s.messagingChannels.map((c) => (c.channel === channel ? { ...c, connected, account: accountId ?? c.account } : c))
+        : s.messagingChannels;
+      return {
+        connections,
+        composio: { ...s.composio, connections: composioConnections },
+        messagingChannels,
+      };
+    });
+    const clean = { ...get().composio };
+    if ('apiKey' in clean && clean.apiKey) clean.apiKey = '[stored server-side]';
+    persist('connections', get().connections);
+    persist('composio', clean);
+    persist('messagingChannels', get().messagingChannels);
+  },
+
   messages: INITIAL_MESSAGES,
   sendMessage: (m) => {
     set((s) => ({ messages: [m, ...s.messages] }));
+    persist('messages', get().messages);
+  },
+  /** Removes one message row from the unified inbox thread list. */
+  deleteMessage: (id) => {
+    set((s) => ({ messages: s.messages.filter((m) => m.id !== id) }));
     persist('messages', get().messages);
   },
 
@@ -2817,6 +3041,31 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set({ saveConflicts: [] });
     await get().hydrate();
   },
+  /**
+   * "Keep mine": overwrites the server copy with this tab's latest edit
+   * (read back from the local mirror, which persist() writes before every
+   * save) and reloads, clearing the conflict. The user asked for it
+   * explicitly, so last-write-wins is intended here.
+   */
+  forceSaveEntity: async (entity: PersistEntity) => {
+    const ws = entity === 'workspaces' ? null : (get().activeWorkspaceId ?? ACTIVE_WS);
+    const value = readLocalValue(ws ?? 'global', entity);
+    if (value === undefined) return false;
+    try {
+      const res = await fetch('/api/borga/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ entity, value, ws: ws ?? undefined }),
+      });
+      if (!res.ok) return false;
+    } catch {
+      return false;
+    }
+    set((s) => ({ saveConflicts: s.saveConflicts.filter((e) => e !== entity) }));
+    SAVES.unblockScope(`${ws ?? 'global'}|${entity}`);
+    await get().hydrate();
+    return true;
+  },
 
   hydrate: async () => {
     const seq = ++hydrateSeq;
@@ -2876,7 +3125,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       // Remember which version of every entity this tab now holds; saves are refused if it has moved on by then.
       SAVES.setVersions(`${wsId}|`, (d.versions ?? {}) as Record<string, number>);
       const dbAgents = Array.isArray(d.agents) && d.agents.length ? (d.agents as Agent[]) : null;
-      const agents = dbAgents ? ensureNadia(dbAgents) : AGENTS;
+      const agents = dbAgents ? ensureNadia(dbAgents).map(withBrainDefaults) : AGENTS;
       const agentsChanged = !!dbAgents && agents !== dbAgents;
       set({
         synced: true,
@@ -2889,13 +3138,20 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         toolkits: d.toolkits ?? COMPOSIO_TOOLKITS,
         connections: d.connections ?? INITIAL_CONNECTIONS,
         ops: d.ops ?? INITIAL_OPS,
-        composio: d.composio ?? DEFAULT_COMPOSIO,
+        // A previously persisted mask ('[stored server-side]') is not a key:
+        // drop it so it can never be sent to Composio (which would 401) or
+        // shadow the server-side COMPOSIO_API_KEY.
+        composio: (() => {
+          const c = d.composio ?? DEFAULT_COMPOSIO;
+          if (c.apiKey && /^\[.*\]$/.test(c.apiKey.trim())) return { ...c, apiKey: '' };
+          return c;
+        })(),
         messages: d.messages ?? INITIAL_MESSAGES,
         ads: d.ads ?? INITIAL_ADS,
         webhooks: d.webhooks ?? INITIAL_WEBHOOKS,
         mcpServers: d.mcpServers ?? INITIAL_MCP_SERVERS,
         kpiGroups: d.kpis ?? INITIAL_KPI_GROUPS,
-        llm: d.llm ?? DEFAULT_LLM,
+        llm: normalizeLlmSelection(d.llm ?? DEFAULT_LLM),
         llmCatalog: Array.isArray(d.llmCatalog) && d.llmCatalog.length ? repairCatalog(d.llmCatalog, LLM_PROVIDERS) : LLM_PROVIDERS,
         valuation: d.valuation ?? VALUATION_CONFIG_SEED,
         fundraising: d.fundraising ?? INITIAL_FUNDRAISING,
@@ -2921,6 +3177,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         notices: Array.isArray(d.notices) ? d.notices : INITIAL_NOTICES,
         employees: Array.isArray(d.employees) ? d.employees : INITIAL_EMPLOYEES,
         leaveRequests: Array.isArray(d.leave) ? d.leave : INITIAL_LEAVE,
+        payrollRuns: Array.isArray(d.payrollRuns) ? d.payrollRuns : INITIAL_PAYROLL_RUNS,
         invoices: Array.isArray(d.invoices) ? d.invoices : INITIAL_INVOICES,
         messagingChannels: Array.isArray(d.messagingChannels) && d.messagingChannels.length > 0 ? d.messagingChannels : DEFAULT_MESSAGING_CHANNELS,
         secureChats: Array.isArray(d.secureChats) ? d.secureChats : [],
@@ -2946,6 +3203,15 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         fixedAssets: normalizeFixedAssets(d.fixedAssets),
         projects: Array.isArray(d.projects) ? d.projects : INITIAL_PROJECTS,
         reconciliationRules: Array.isArray(d.reconciliationRules) ? d.reconciliationRules : INITIAL_RECONCILIATION_RULES,
+        // Inventory: a saved catalog is trusted as-is; a fresh workspace starts with
+        // its onboarding-captured services as service items (a services company is
+        // aligned from the start — products can be added alongside them).
+        inventoryItems: Array.isArray(d.inventoryItems) && d.inventoryItems.length > 0
+          ? d.inventoryItems
+          : serviceItemsFromTracks((d.revenueTracks ?? []) as Array<{ lines?: Array<{ name?: string; service?: string }> }>),
+        warehouses: Array.isArray(d.warehouses) && d.warehouses.length > 0 ? d.warehouses : INITIAL_WAREHOUSES,
+        stockMovements: Array.isArray(d.stockMovements) ? d.stockMovements : [],
+        posSales: Array.isArray(d.posSales) ? d.posSales : [],
       });
       // Local fallback: when the database is unavailable the API returns shared
       // seeds for every workspace, which would erase company-specific edits on
@@ -2988,7 +3254,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     {
       id: 'e-init',
       time: '…',
-      agentId: 'a1',
+      agentId: 'a-borga',
       agentName: 'Borga',
       actor: 'system',
       kind: 'system',
@@ -3014,6 +3280,10 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     } else if (e.kind === 'system' && e.actor === 'system' && /(blocked|error|unreachable|rejected|denied|skipped)/i.test(e.message)) {
       toast({ title: 'System notice', description: e.message, variant: 'error' });
     }
+  },
+  clearActivity: () => {
+    set({ activity: [] });
+    persist('activity', get().activity);
   },
 
   connectors: CONNECTORS,
@@ -3110,17 +3380,47 @@ export const useBorga = create<BorgaStore>((set, get) => ({
           });
         }
 
-        // Distribute tasks to relevant agents based on workflow type
-        distributeWorkflowTasks(workflowName, agents);
+        // Fan out follow-up tasks to the relevant agents so the workflow has visible output.
+        const specs = distributeWorkflowTasks(workflowName, agents);
+        for (const spec of specs) {
+          get().addTask({
+            id: `t-wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            title: spec.task,
+            detail: `Follow-up from workflow "${workflowName}".`,
+            priority: spec.priority,
+            status: 'todo',
+            bucket: 'week',
+            assignee: spec.agentName,
+            tags: ['workflow'],
+            due: 'This week',
+            progress: 0,
+          });
+        }
+        if (specs.length) {
+          get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'task', message: `Workflow "${workflowName}" created ${specs.length} follow-up task${specs.length === 1 ? '' : 's'}.` });
+        }
         get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow completed: ${workflowName}` });
         finish('complete');
       })
       .catch((error) => {
-        console.error('Workflow execution error:', error);
+        toast({ title: `Workflow "${workflowName}" failed to reach the engine`, description: (error as Error)?.message ?? 'Falling back to local task distribution.', variant: 'error' });
         get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" failed to reach the engine — falling back to local task distribution.` });
 
         // Fallback to local task distribution — the dispatch itself still failed, so mark it accordingly.
-        distributeWorkflowTasks(workflowName, agents);
+        for (const spec of distributeWorkflowTasks(workflowName, agents)) {
+          get().addTask({
+            id: `t-wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            title: spec.task,
+            detail: `Follow-up from workflow "${workflowName}" (engine unreachable).`,
+            priority: spec.priority,
+            status: 'todo',
+            bucket: 'week',
+            assignee: spec.agentName,
+            tags: ['workflow'],
+            due: 'This week',
+            progress: 0,
+          });
+        }
         finish('error');
       });
   },
@@ -3176,6 +3476,10 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set({ agentRuns: [] });
     persist('agentRuns', []);
   },
+  deleteAgentRun: (id) => {
+    set((s) => ({ agentRuns: s.agentRuns.filter((r) => r.id !== id) }));
+    persist('agentRuns', get().agentRuns);
+  },
 
   notices: INITIAL_NOTICES,
   addNotice: (n) => {
@@ -3194,6 +3498,65 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   clearNotices: () => {
     set({ notices: [] });
     persist('notices', []);
+  },
+
+  // ── Inventory ────────────────────────────────────────────────────────────
+  inventoryItems: [],
+  addItem: (item) => {
+    set((s) => ({ inventoryItems: [item, ...s.inventoryItems] }));
+    persist('inventoryItems', get().inventoryItems);
+  },
+  updateItem: (id, patch) => {
+    set((s) => ({ inventoryItems: s.inventoryItems.map((i) => (i.id === id ? { ...i, ...patch } : i)) }));
+    persist('inventoryItems', get().inventoryItems);
+  },
+  deleteItem: (id) => {
+    set((s) => ({ inventoryItems: s.inventoryItems.filter((i) => i.id !== id) }));
+    persist('inventoryItems', get().inventoryItems);
+  },
+
+  warehouses: INITIAL_WAREHOUSES,
+  addWarehouse: (w) => {
+    set((s) => ({ warehouses: [...s.warehouses, w] }));
+    persist('warehouses', get().warehouses);
+  },
+  updateWarehouse: (id, patch) => {
+    set((s) => ({ warehouses: s.warehouses.map((w) => (w.id === id ? { ...w, ...patch } : w)) }));
+    persist('warehouses', get().warehouses);
+  },
+  deleteWarehouse: (id) => {
+    set((s) => ({ warehouses: s.warehouses.filter((w) => w.id !== id) }));
+    persist('warehouses', get().warehouses);
+  },
+
+  stockMovements: [],
+  recordStockMovement: (m) => {
+    set((s) => ({ stockMovements: [m, ...s.stockMovements].slice(0, 1000) }));
+    persist('stockMovements', get().stockMovements);
+  },
+
+  posSales: [],
+  addPosSale: (sale) => {
+    set((s) => ({ posSales: [sale, ...s.posSales].slice(0, 500) }));
+    persist('posSales', get().posSales);
+  },
+  refundPosSale: (id) => {
+    const sale = get().posSales.find((s) => s.id === id);
+    if (!sale || sale.status === 'refunded') return;
+    const now = new Date().toISOString();
+    const reversing = refundMovements(sale, now);
+    const financeReversals = refundFinanceEntries(sale, now);
+    const journalReversals = refundJournals(sale, get().coa, now);
+    set((s) => ({
+      posSales: s.posSales.map((s2) => (s2.id === id ? { ...s2, status: 'refunded' as const, refundedAt: now } : s2)),
+      stockMovements: [...reversing, ...s.stockMovements].slice(0, 1000),
+      finance: [...s.finance, ...financeReversals],
+      journals: [...journalReversals, ...s.journals],
+    }));
+    persist('posSales', get().posSales);
+    persist('stockMovements', get().stockMovements);
+    persist('finance', get().finance);
+    persist('journals', get().journals);
   },
 }));
 

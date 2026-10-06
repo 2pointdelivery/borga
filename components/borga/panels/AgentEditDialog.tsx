@@ -17,7 +17,7 @@ const DEPARTMENTS = ['Command', 'Sales', 'Design', 'Engineering', 'Operations', 
 export function AgentEditDialog({ agent, open, onOpenChange }: { agent: Agent | null; open: boolean; onOpenChange: (v: boolean) => void }) {
   const { updateAgent, deleteAgent, log, llmCatalog, llm, activeWorkspaceId } = useBorga();
   // Models come from the per-workspace catalog, grouped by provider. Providers that cannot be called
-  // (no key / Ollama down) are flagged: an agent set to one of their models falls back to the default.
+  // (no key / local endpoint down) are flagged: an agent set to one of their models falls back to the default.
   const providers = (llmCatalog ?? []).filter((p) => p.models.length > 0);
   const [usable, setUsable] = useState<Set<string> | null>(null);
   useEffect(() => {
@@ -108,7 +108,7 @@ export function AgentEditDialog({ agent, open, onOpenChange }: { agent: Agent | 
                   aria-label="Agent model"
                   sections={providers.map((p) => ({ key: p.id, label: p.label + (usable && !usable.has(p.id) ? (presetFor(p.id)?.local ? ' (not running)' : ' (no key yet)') : ''), models: p.models }))}
                   value={editing.model || DEFAULT_VALUE}
-                  leading={{ value: DEFAULT_VALUE, label: `Workspace default (${llm.model || 'demo'})` }}
+                  leading={{ value: DEFAULT_VALUE, label: `Workspace default (${llm.model || 'default'})` }}
                   allowCustom={false}
                   onChange={(v) => patch({ model: v === DEFAULT_VALUE ? '' : v })}
                 />

@@ -3,7 +3,8 @@ import { buildAgentContext, buildSystemPrompt, resolveLlm, callLlm } from './age
 import { executeTool, parseToolCalls } from './tools';
 import { getBorgaState, setBorgaState, scopedKey } from './persistence';
 import { userWsKey } from './keys';
-import type { AgentRun, ActivityEvent } from './data';
+import type { AgentRun, AgentRunStep, ActivityEvent, PlannedStep } from './data';
+import { planFromGoal as planFromGoalPure, type PlanStep } from './plan-from-goal';
 
 /**
  * Always-on home: the agent loop as a plain library, runnable anywhere —
@@ -15,46 +16,15 @@ import type { AgentRun, ActivityEvent } from './data';
 export const MAX_RUN_STEPS = 8;
 export const MAX_RUNS_STORED = 50;
 
-// Generate a goal-driven fallback plan when no LLM is configured.
-// Still executes REAL tool calls against real data.
-export function planFromGoal(goal: string): Array<{ thought: string; toolName: string; params: Record<string, unknown> }> {
-  const g = goal.toLowerCase();
-  const steps: Array<{ thought: string; toolName: string; params: Record<string, unknown> }> = [];
+export const planFromGoal = planFromGoalPure;
+export type { PlanStep };
 
-  if (/kpi|brief|review|metric|flag|below/.test(g)) {
-    steps.push({ thought: 'Querying current KPI state to find below-target metrics.', toolName: 'query_state', params: { entity: 'kpis' } });
-    steps.push({ thought: 'Logging morning brief activity to keep the team informed.', toolName: 'log_activity', params: { message: 'Agent performed KPI review — checked all departments for below-target metrics.', kind: 'sync' } });
-    steps.push({ thought: 'Storing key KPI findings as an observation for future reference.', toolName: 'store_memory', params: { content: `KPI review completed. Logged observations for ${new Date().toDateString()}.`, kind: 'observation', tags: ['kpi', 'daily-review'], confidence: 85 } });
-  } else if (/lead|pipeline|follow.?up|qualify|stage/.test(g)) {
-    steps.push({ thought: 'Querying current leads to assess pipeline health.', toolName: 'query_state', params: { entity: 'leads' } });
-    steps.push({ thought: 'Creating a follow-up task for the highest-priority leads.', toolName: 'create_task', params: { title: 'Follow up on P0 leads in pipeline', detail: 'Scheduled follow-up: review open proposals and send updated contact.', priority: 'P0', bucket: 'today', assignee: 'Atlas', tags: ['sales', 'pipeline'], due: 'Today 5pm' } });
-    steps.push({ thought: 'Logging pipeline review activity.', toolName: 'log_activity', params: { message: 'Lead pipeline review completed — follow-up tasks created for P0 leads.', kind: 'task' } });
-  } else if (/grant|fund|opport|sbir|pitch/.test(g)) {
-    steps.push({ thought: 'Querying existing funding opportunities to assess current pipeline.', toolName: 'query_state', params: { entity: 'fundraising' } });
-    steps.push({ thought: 'Searching knowledge base for grant-related information.', toolName: 'search_knowledge', params: { query: 'grant funding logistics' } });
-    steps.push({ thought: 'Creating a task to evaluate new funding opportunities.', toolName: 'create_task', params: { title: 'Evaluate new grant opportunities', detail: 'Scan registries and score by mission fit (target >80% match).', priority: 'P1', bucket: 'week', assignee: 'Nadia', tags: ['fundraising', 'grants'], due: 'This week' } });
-    steps.push({ thought: 'Storing observation about funding scan.', toolName: 'store_memory', params: { content: 'Initiated grant opportunity scan. Follow-up task created for Nadia.', kind: 'observation', tags: ['fundraising', 'grants'], confidence: 80 } });
-  } else if (/content|social|post|linkedin|twitter/.test(g)) {
-    steps.push({ thought: 'Querying recent social posts to assess engagement.', toolName: 'query_state', params: { entity: 'tasks', filter: 'marketing' } });
-    steps.push({ thought: 'Creating content calendar task.', toolName: 'create_task', params: { title: 'Draft Q3 social content calendar', detail: 'Create 3 LinkedIn posts and 2 Twitter threads based on the latest company insights.', priority: 'P1', bucket: 'week', assignee: 'Nova', tags: ['marketing', 'content'], due: 'This week' } });
-    steps.push({ thought: 'Logging content workflow initiation.', toolName: 'log_activity', params: { message: 'Content calendar workflow initiated — drafting 5 posts for multi-channel distribution.', kind: 'task' } });
-  } else if (/research|market|competitor|industry trend|benchmark|landscape/.test(g)) {
-    steps.push({ thought: `Researching the web for: ${goal.slice(0, 100)}`, toolName: 'web_research', params: { question: goal.slice(0, 300) } });
-    steps.push({ thought: 'Storing the research findings for future reference.', toolName: 'store_memory', params: { content: `Web research completed for: "${goal.slice(0, 200)}"`, kind: 'fact', tags: ['research', 'web'], confidence: 70 } });
-    steps.push({ thought: 'Logging this research run.', toolName: 'log_activity', params: { message: `Completed web research on: "${goal.slice(0, 100)}"`, kind: 'learn' } });
-  } else if (/ops|booking|dispatch|driver|route|deliver/.test(g)) {
-    steps.push({ thought: 'Checking current ops state for pending bookings.', toolName: 'query_state', params: { entity: 'ops' } });
-    steps.push({ thought: 'Creating dispatch task for pending bookings.', toolName: 'create_task', params: { title: 'Assign drivers to pending bookings', detail: 'Review pending bookings without driver assignments and dispatch optimally.', priority: 'P0', bucket: 'today', assignee: 'Borga', tags: ['ops', 'dispatch'], due: 'Today' } });
-    steps.push({ thought: 'Logging ops review.', toolName: 'log_activity', params: { message: 'Ops dispatch review completed — pending booking tasks created.', kind: 'sync' } });
-  } else {
-    // Generic goal — query state, create task, log, store memory
-    steps.push({ thought: `Checking current state to understand the context for: ${goal.slice(0, 100)}`, toolName: 'query_state', params: { entity: 'tasks' } });
-    steps.push({ thought: 'Creating an action task for this goal.', toolName: 'create_task', params: { title: goal.slice(0, 100), detail: 'Task generated by autonomous agent run.', priority: 'P1', bucket: 'week', assignee: 'Borga', tags: ['agent-run'], due: 'This week' } });
-    steps.push({ thought: 'Logging this goal to the activity feed.', toolName: 'log_activity', params: { message: `Agent initiated autonomous run for: "${goal.slice(0, 100)}"`, kind: 'task' } });
-    steps.push({ thought: 'Storing this context for future reference.', toolName: 'store_memory', params: { content: `Ran autonomous goal: "${goal.slice(0, 200)}"`, kind: 'context', tags: ['agent-run'], confidence: 75 } });
-  }
-
-  return steps;
+/** Progress/stop hooks the run queue passes in so queued runs stream and cancel between steps. */
+export interface RunHooks {
+  /** Called once per appended step — lets a queue persist live progress. */
+  onStep?: (step: AgentRunStep) => void;
+  /** Polled between steps; a true return stops the run gracefully ('stopped'). */
+  shouldStop?: () => Promise<boolean> | boolean;
 }
 
 export async function persistRun(run: AgentRun, ws?: string | null, userId?: string | null): Promise<void> {
@@ -119,48 +89,59 @@ export async function executeAgentRun(
   ws: string | null = null,
   companyName: string = 'the company',
   userId: string | null = null,
+  hooks?: RunHooks,
 ): Promise<AgentRun> {
   const run: AgentRun = { id: runId, agentId, agentName, goal, status: 'running', steps: [], startedAt, triggeredBy };
   if (!ctx) { run.status = 'error'; run.summary = 'Agent context not found'; return run; }
+
+  const push = (step: AgentRunStep) => { run.steps.push(step); hooks?.onStep?.(step); };
+  const stopRequested = async () => (hooks?.shouldStop ? await hooks.shouldStop() : false);
 
   const provider = await resolveLlm(ctx?.agent?.model || null, ws, userId);
   const systemPrompt = buildSystemPrompt(ctx, goal, companyName);
   let stepCount = 0;
   let summary = '';
+  let stopped = false;
 
   if (!provider) {
     const plan = planFromGoal(goal);
     for (const step of plan.slice(0, maxSteps)) {
+      if (await stopRequested()) { stopped = true; break; }
       stepCount++;
-      run.steps.push({ type: 'thought', content: step.thought, at: new Date().toISOString() });
-      run.steps.push({ type: 'tool_call', content: `Calling ${step.toolName}`, tool: step.toolName, params: step.params, at: new Date().toISOString() });
+      push({ type: 'thought', content: step.thought, at: new Date().toISOString() });
+      push({ type: 'tool_call', content: `Calling ${step.toolName}`, tool: step.toolName, params: step.params, at: new Date().toISOString() });
       const result = await executeTool(step.toolName, step.params, agentId, agentName, ws, userId);
-      run.steps.push({ type: 'tool_result', content: result.ok ? (result.data === undefined ? '{}' : JSON.stringify(result.data)).slice(0, 300) : result.error ?? 'Error', tool: step.toolName, result: result.data, at: new Date().toISOString() });
+      push({ type: 'tool_result', content: result.ok ? (result.data === undefined ? '{}' : JSON.stringify(result.data)).slice(0, 300) : result.error ?? 'Error', tool: step.toolName, result: result.data, at: new Date().toISOString() });
     }
-    summary = `Completed ${stepCount} actions for: "${goal.slice(0, 80)}". Configure an LLM provider for AI-driven execution.`;
+    summary = stopped
+      ? 'Stopped by user between steps.'
+      : `Completed ${stepCount} actions for: "${goal.slice(0, 80)}". Configure an LLM provider for AI-driven execution.`;
   } else {
     let messages: { role: 'user' | 'assistant' | 'system'; content: string }[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `Execute this goal fully using the available tools.\n\nGoal: ${goal}` },
     ];
     for (let i = 0; i < maxSteps; i++) {
+      if (await stopRequested()) { stopped = true; break; }
       stepCount = i + 1;
       try {
         const llmResponse = await callLlm(messages, provider);
         const summaryMatch = llmResponse.match(/SUMMARY:\s*([\s\S]+?)(?:<tool_call>|$)/);
         if (summaryMatch) summary = summaryMatch[1].trim();
         const thought = llmResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').replace(/SUMMARY:[\s\S]*/g, '').trim();
-        if (thought) run.steps.push({ type: 'thought', content: thought.slice(0, 1000), at: new Date().toISOString() });
+        if (thought) push({ type: 'thought', content: thought.slice(0, 1000), at: new Date().toISOString() });
         const toolCalls = parseToolCalls(llmResponse);
         if (!toolCalls.length) break;
         const toolResults: string[] = [];
         for (const tc of toolCalls) {
-          run.steps.push({ type: 'tool_call', content: `Calling ${tc.tool}`, tool: tc.tool, params: tc.params, at: new Date().toISOString() });
+          if (await stopRequested()) { stopped = true; break; }
+          push({ type: 'tool_call', content: `Calling ${tc.tool}`, tool: tc.tool, params: tc.params, at: new Date().toISOString() });
           const result = await executeTool(tc.tool, tc.params, agentId, agentName, ws, userId);
           const resultStr = result.ok ? (result.data === undefined ? '{}' : JSON.stringify(result.data)).slice(0, 600) : `ERROR: ${result.error}`;
-          run.steps.push({ type: 'tool_result', content: resultStr, tool: tc.tool, result: result.data, at: new Date().toISOString() });
+          push({ type: 'tool_result', content: resultStr, tool: tc.tool, result: result.data, at: new Date().toISOString() });
           toolResults.push(`Tool: ${tc.tool}\nResult: ${resultStr}`);
         }
+        if (stopped) break;
         messages = [...messages, { role: 'assistant', content: llmResponse }, { role: 'user', content: `Tool results:\n${toolResults.join('\n\n')}\n\nContinue or write SUMMARY: if done.` }];
       } catch {
         run.status = 'error'; break;
@@ -168,9 +149,52 @@ export async function executeAgentRun(
     }
   }
 
-  if (!summary) summary = `${agentName} completed ${stepCount} step${stepCount !== 1 ? 's' : ''} for: "${goal.slice(0, 60)}"`;
-  run.steps.push({ type: 'summary', content: summary, at: new Date().toISOString() });
-  if (run.status !== 'error') run.status = 'complete';
+  if (stopped) run.status = 'stopped';
+  else if (run.status !== 'error') run.status = 'complete';
+  if (!summary) summary = stopped
+    ? `${agentName} stopped after ${stepCount} step${stepCount !== 1 ? 's' : ''}.`
+    : `${agentName} completed ${stepCount} step${stepCount !== 1 ? 's' : ''} for: "${goal.slice(0, 60)}"`;
+  push({ type: 'summary', content: summary, at: new Date().toISOString() });
+  run.completedAt = new Date().toISOString();
+  run.summary = summary;
+  return run;
+}
+
+/**
+ * Executes an exact, human-edited plan from the Planner's "execute as-is"
+ * mode: the steps run verbatim (real tool calls, in order), regardless of
+ * whether an LLM is configured — the plan IS the intelligence here.
+ */
+export async function executePlannedSteps(
+  runId: string, agentId: string, agentName: string, goal: string,
+  plan: PlannedStep[], ctx: Awaited<ReturnType<typeof buildAgentContext>>,
+  triggeredBy: AgentRun['triggeredBy'], startedAt: string,
+  ws: string | null = null,
+  userId: string | null = null,
+  hooks?: RunHooks,
+): Promise<AgentRun> {
+  const run: AgentRun = { id: runId, agentId, agentName, goal, status: 'running', steps: [], startedAt, triggeredBy };
+  if (!ctx) { run.status = 'error'; run.summary = 'Agent context not found'; return run; }
+  const push = (step: AgentRunStep) => { run.steps.push(step); hooks?.onStep?.(step); };
+  const stopRequested = async () => (hooks?.shouldStop ? await hooks.shouldStop() : false);
+  let stopped = false;
+  let done = 0;
+
+  for (const step of plan) {
+    if (await stopRequested()) { stopped = true; break; }
+    push({ type: 'thought', content: step.thought.slice(0, 1000), at: new Date().toISOString() });
+    push({ type: 'tool_call', content: `Calling ${step.toolName}`, tool: step.toolName, params: step.params, at: new Date().toISOString() });
+    const result = await executeTool(step.toolName, step.params, agentId, agentName, ws, userId);
+    const resultStr = result.ok ? (result.data === undefined ? '{}' : JSON.stringify(result.data)).slice(0, 600) : `ERROR: ${result.error}`;
+    push({ type: 'tool_result', content: resultStr, tool: step.toolName, result: result.data, at: new Date().toISOString() });
+    done++;
+  }
+
+  const summary = stopped
+    ? `Stopped by user after ${done} of ${plan.length} planned steps.`
+    : `Executed the ${plan.length}-step plan for: "${goal.slice(0, 60)}"`;
+  run.status = stopped ? 'stopped' : 'complete';
+  push({ type: 'summary', content: summary, at: new Date().toISOString() });
   run.completedAt = new Date().toISOString();
   run.summary = summary;
   return run;

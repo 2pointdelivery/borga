@@ -35,6 +35,9 @@ const eslintConfig = defineConfig([
     // Standalone static-export project with its own toolchain/tsconfig —
     // see landing-site/README.md.
     'landing-site/**',
+    // Nested agent worktrees are separate checkouts with their own lifecycle,
+    // not part of this tree's lint/build.
+    '.claude/**',
   ]),
 ]);
 

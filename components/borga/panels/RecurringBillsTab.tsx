@@ -16,6 +16,7 @@ import { FREQUENCY_LABEL, TERMS_DAYS, isFinished, nextRunIso, type RecurringBill
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
 import { AccountSelect, DateInput, Field, ProjectSelect, TaxProfilesMultiSelect } from '../form-widgets';
 
 type EndMode = 'never' | 'date' | 'count';
@@ -202,10 +203,14 @@ export function RecurringBillsTab() {
           <div className="grid gap-3">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Vendor">
-                <Select value={form.vendorId || undefined} onValueChange={pickVendor}>
-                  <SelectTrigger><SelectValue placeholder="Choose a vendor" /></SelectTrigger>
-                  <SelectContent>{vendors.map((v) => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}</SelectContent>
-                </Select>
+                <SearchSelect
+                  options={vendors.map((v) => ({ value: v.id, label: v.name, detail: v.service }))}
+                  value={form.vendorId}
+                  onChange={pickVendor}
+                  placeholder="Choose a vendor"
+                  searchPlaceholder="Search vendors"
+                  clearable={false}
+                />
               </Field>
               <Field label="Schedule name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Office rent" /></Field>
             </div>

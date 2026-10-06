@@ -13,7 +13,7 @@ export function OverviewPage({ initialTab }: { initialTab?: string }) {
       <TabsList>
         <TabsTrigger value="command">Command Center</TabsTrigger>
         <TabsTrigger value="analytics">Analytics</TabsTrigger>
-        <TabsTrigger value="kpis">KPIs &amp; Reports</TabsTrigger>
+        <TabsTrigger value="kpis">KPIs</TabsTrigger>
       </TabsList>
       <TabsContent value="command"><CommandCenter /></TabsContent>
       <TabsContent value="analytics"><AnalyticsTab /></TabsContent>

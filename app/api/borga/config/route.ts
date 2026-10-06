@@ -54,6 +54,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });
   } catch (err: any) {
     console.error('Config API error:', err);
-    return NextResponse.json({ ok: false, error: err.message ?? 'An error occurred while saving the configuration.' }, { status: 500 });
+    return NextResponse.json({ ok: false, error: 'An error occurred while saving the configuration.' }, { status: 500 });
   }
 }

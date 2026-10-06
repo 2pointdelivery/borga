@@ -6,6 +6,7 @@ import {
   computeSla,
   fmtDuration,
   policyFor,
+  ticketInsights,
   type SlaClock,
   type SlaState,
   type Ticket,
@@ -81,6 +82,28 @@ export function SlaBadge({ t, settings, nowMs }: { t: TicketSummary | Ticket; se
     <Pill className={cn('normal-case', SLA_STYLE[sla.worst])}>
       {SLA_LABEL[sla.worst]} · {clockText(clock, nowMs)}
     </Pill>
+  );
+}
+
+/** Rule-based readout for one ticket: risks and next actions, derived only from its own fields and live SLA clocks. */
+export function TicketInsightBox({ t, settings, nowMs }: { t: Ticket; settings: TicketSettings; nowMs: number }) {
+  const insights = ticketInsights(t, slaFor(t, settings, nowMs), nowMs);
+  if (!insights.length) return null;
+  return (
+    <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+      <p className="mb-2 text-xs font-medium">Ticket insight</p>
+      <ul className="space-y-1.5">
+        {insights.map((i, n) => (
+          <li key={n} className="flex items-start gap-1.5 text-[11px] leading-snug text-muted-foreground">
+            <span className={cn(
+              'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
+              i.tone === 'danger' ? 'bg-rose-500' : i.tone === 'warn' ? 'bg-amber-500' : 'bg-sky-500',
+            )} />
+            <span className="text-foreground/90">{i.text}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

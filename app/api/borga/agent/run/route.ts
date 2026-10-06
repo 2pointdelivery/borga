@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { buildAgentContext, buildSystemPrompt, resolveLlm, callLlm } from '@/lib/borga/agent-context';
-import { executeTool, parseToolCalls } from '@/lib/borga/tools';
-import { executeAgentRun, persistRun, auditRun, planFromGoal } from '@/lib/borga/agent-runner';
+import { buildAgentContext } from '@/lib/borga/agent-context';
+import { enqueueRun, getJob } from '@/lib/borga/run-queue';
+import { isTerminal } from '@/lib/borga/run-queue-core';
 import { getBorgaState, scopedKey } from '@/lib/borga/persistence';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWsKey } from '@/lib/borga/keys';
-import type { AgentRun, AgentRunStep } from '@/lib/borga/data';
+import { paymentRequired } from '@/lib/borga/billing-server';
+import type { AgentRun, RunJob, AgentRunStep } from '@/lib/borga/data';
 
 function isValidWsId(ws: unknown): ws is string {
   return typeof ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(ws);
@@ -19,13 +20,30 @@ async function getUserId(req: NextRequest): Promise<string | null> {
 
 export const runtime = 'nodejs';
 
-// Non-streaming execution, persistence, and audit live in lib/borga/agent-runner.ts
-// (shared with the heartbeat lib and cron — one implementation everywhere).
+// Execution, persistence, and audit live in lib/borga (runner + queue) —
+// this route only enqueues and streams. Every run (manual, scheduled,
+// webhook, plan) goes through the same worker pool.
 const MAX_STEPS = 8;
+const POLL_MS = 400;
+const STREAM_DEADLINE_MS = 10 * 60_000;
+const KEEPALIVE_MS = 15_000;
 
 function sendEvent(controller: ReadableStreamDefaultController, data: object): void {
   const encoded = new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
   controller.enqueue(encoded);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Translate one persisted job step into the SSE event shape the dashboard reader expects. */
+function stepEvent(step: AgentRunStep): Record<string, unknown> | null {
+  switch (step.type) {
+    case 'thought': return { type: 'thought', content: step.content };
+    case 'tool_call': return { type: 'tool_call', tool: step.tool, params: step.params };
+    case 'tool_result': return { type: 'tool_result', tool: step.tool, ok: !/^ERROR:/.test(step.content), data: step.result };
+    case 'summary': return { type: 'summary', content: step.content };
+    default: return null;
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -34,8 +52,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 });
   }
   const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
-  let body: { agentId?: string; goal?: string; maxSteps?: number; stream?: boolean; triggeredBy?: string; ws?: string; companyName?: string } = {};
+  let body: { agentId?: string; goal?: string; maxSteps?: number; stream?: boolean; triggeredBy?: string; ws?: string; companyName?: string; urgent?: boolean } = {};
   try {
     body = await req.json();
   } catch {
@@ -43,7 +62,7 @@ export async function POST(req: NextRequest) {
   }
 
   const agentId = body.agentId ?? 'a-borga';
-  const goal = (body.goal ?? '').trim();
+  const goal = String(body.goal ?? '').trim().slice(0, 4000);
   const maxSteps = Math.min(body.maxSteps ?? MAX_STEPS, MAX_STEPS);
   const stream = body.stream !== false;
   const triggeredBy = (body.triggeredBy as AgentRun['triggeredBy']) ?? 'user';
@@ -54,168 +73,98 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'goal is required' }, { status: 400 });
   }
 
-  const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  const startedAt = new Date().toISOString();
+  // An unpaid workspace may not spend LLM calls: the paywall in the dashboard is not the only gate.
+  if (userId && ws) {
+    const unpaid = await paymentRequired(userId, ws);
+    if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
+  }
 
-  // Load agent context
+  // Load agent context — a run against a missing agent 404s here, before queueing.
   const ctx = await buildAgentContext(agentId, ws, userId, goal);
   if (!ctx) {
     return NextResponse.json({ ok: false, error: `Agent "${agentId}" not found` }, { status: 404 });
   }
 
-  const { agent } = ctx;
+  const job = await enqueueRun({
+    agentId,
+    agentName: ctx.agent.name,
+    goal,
+    triggeredBy,
+    ws,
+    userId,
+    companyName,
+    maxSteps,
+    urgent: body.urgent === true,
+  });
 
   if (!stream) {
-    // Non-streaming: run synchronously and return JSON (shared lib runner)
-    const run = await executeAgentRun(runId, agentId, agent.name, goal, maxSteps, ctx, triggeredBy, startedAt, ws, companyName, userId);
-    await persistRun(run, ws, userId);
-    const provider = await resolveLlm(ctx.agent.model || null, ws, userId);
-    await auditRun(run, provider?.model ?? null, provider?.providerId ?? null, goal.length, ws, userId);
-    return NextResponse.json({ ok: true, run });
+    // Non-streaming: wait for the worker to finish (bounded), then return the job.
+    const deadline = Date.now() + STREAM_DEADLINE_MS;
+    let current: RunJob | null = job;
+    while (current && !isTerminal(current) && Date.now() < deadline && !req.signal.aborted) {
+      await sleep(POLL_MS);
+      current = await getJob(job.id, ws, userId);
+    }
+    return NextResponse.json({ ok: true, job: current ?? job });
   }
 
-  // Streaming SSE response
+  // Streaming SSE: follow the queued job's persisted progress step by step.
   const readable = new ReadableStream({
     async start(controller) {
-      const run: AgentRun = {
-        id: runId,
-        agentId,
-        agentName: agent.name,
-        goal,
-        status: 'running',
-        steps: [],
-        startedAt,
-        triggeredBy,
-      };
-
+      const startedAt = Date.now();
+      let emittedSteps = 0;
+      let lastKeepalive = Date.now();
       try {
-        sendEvent(controller, { type: 'start', runId, agentId, agentName: agent.name, goal });
+        sendEvent(controller, { type: 'start', runId: job.id, jobId: job.id, agentId, agentName: ctx.agent.name, goal });
 
-        const provider = await resolveLlm(agent.model || null, ws, userId);
-        const systemPrompt = buildSystemPrompt(ctx, goal, companyName);
-
-        let messages: { role: 'user' | 'assistant' | 'system'; content: string }[] = [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Execute this goal fully. Use the available tools to take real actions.\n\nGoal: ${goal}` },
-        ];
-
-        let stepCount = 0;
-        let summary = '';
-
-        if (!provider) {
-          // No LLM configured — use structured fallback plan with real tool execution
-          sendEvent(controller, { type: 'thought', content: `No LLM configured. Executing structured plan for: "${goal.slice(0, 80)}"` });
-          const plan = planFromGoal(goal);
-
-          for (const step of plan.slice(0, maxSteps)) {
-            stepCount++;
-            const thoughtStep: AgentRunStep = { type: 'thought', content: step.thought, at: new Date().toISOString() };
-            run.steps.push(thoughtStep);
-            sendEvent(controller, { type: 'thought', step: stepCount, content: step.thought });
-
-            const callStep: AgentRunStep = {
-              type: 'tool_call', content: `Calling ${step.toolName}`, tool: step.toolName,
-              params: step.params, at: new Date().toISOString(),
-            };
-            run.steps.push(callStep);
-            sendEvent(controller, { type: 'tool_call', step: stepCount, tool: step.toolName, params: step.params });
-
-            const result = await executeTool(step.toolName, step.params, agentId, agent.name, ws, userId);
-            const resultStep: AgentRunStep = {
-              type: 'tool_result', content: result.ok ? JSON.stringify(result.data).slice(0, 300) : result.error ?? 'Error',
-              tool: step.toolName, result: result.data, at: new Date().toISOString(),
-            };
-            run.steps.push(resultStep);
-            sendEvent(controller, { type: 'tool_result', step: stepCount, tool: step.toolName, ok: result.ok, data: result.data, error: result.error });
+        for (;;) {
+          if (req.signal.aborted) break;
+          const current = await getJob(job.id, ws, userId);
+          if (!current) {
+            sendEvent(controller, { type: 'error', error: 'Job disappeared from the queue.' });
+            break;
           }
 
-          summary = `Completed ${stepCount} actions for goal: "${goal.slice(0, 80)}". No LLM configured — used structured plan. Configure a provider in Tools tab for AI-driven execution.`;
-        } else {
-          // LLM-driven agentic loop
-          for (let i = 0; i < maxSteps; i++) {
-            stepCount = i + 1;
-            sendEvent(controller, { type: 'thinking', step: stepCount });
-
-            let llmResponse: string;
-            try {
-              llmResponse = await callLlm(messages, provider);
-            } catch (e) {
-              sendEvent(controller, { type: 'error', error: `LLM call failed: ${(e as Error).message}` });
-              run.status = 'error';
-              break;
-            }
-
-            // Extract the summary if present
-            const summaryMatch = llmResponse.match(/SUMMARY:\s*([\s\S]+?)(?:<tool_call>|$)/);
-            if (summaryMatch) summary = summaryMatch[1].trim();
-
-            // Extract thought (everything before first tool_call)
-            const thoughtText = llmResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').replace(/SUMMARY:[\s\S]*/g, '').trim();
-            if (thoughtText) {
-              const thoughtStep: AgentRunStep = { type: 'thought', content: thoughtText.slice(0, 1000), at: new Date().toISOString() };
-              run.steps.push(thoughtStep);
-              sendEvent(controller, { type: 'thought', step: stepCount, content: thoughtText.slice(0, 500) });
-            }
-
-            // Parse and execute tool calls
-            const toolCalls = parseToolCalls(llmResponse);
-            if (!toolCalls.length) {
-              // No more tool calls — done
-              break;
-            }
-
-            const toolResults: string[] = [];
-            for (const tc of toolCalls) {
-              const callStep: AgentRunStep = {
-                type: 'tool_call', content: `Calling ${tc.tool}`, tool: tc.tool,
-                params: tc.params, at: new Date().toISOString(),
-              };
-              run.steps.push(callStep);
-              sendEvent(controller, { type: 'tool_call', step: stepCount, tool: tc.tool, params: tc.params });
-
-              const result = await executeTool(tc.tool, tc.params, agentId, agent.name, ws, userId);
-              const resultStr = result.ok
-                ? (result.data === undefined ? '{}' : JSON.stringify(result.data)).slice(0, 600)
-                : `ERROR: ${result.error}`;
-
-              const resultStep: AgentRunStep = {
-                type: 'tool_result', content: resultStr, tool: tc.tool,
-                result: result.data, at: new Date().toISOString(),
-              };
-              run.steps.push(resultStep);
-              sendEvent(controller, { type: 'tool_result', step: stepCount, tool: tc.tool, ok: result.ok, data: result.data, error: result.error });
-              toolResults.push(`Tool: ${tc.tool}\nResult: ${resultStr}`);
-            }
-
-            // Feed results back to LLM
-            messages = [
-              ...messages,
-              { role: 'assistant', content: llmResponse },
-              { role: 'user', content: `Tool results:\n${toolResults.join('\n\n')}\n\nContinue executing the goal. If the goal is fully complete, write your SUMMARY: and stop calling tools.` },
-            ];
+          const steps = current.steps ?? [];
+          while (emittedSteps < steps.length) {
+            const evt = stepEvent(steps[emittedSteps]);
+            if (evt) sendEvent(controller, evt);
+            emittedSteps++;
           }
+
+          if (isTerminal(current)) {
+            const summaryStep = [...steps].reverse().find((s) => s.type === 'summary');
+            const summary = summaryStep?.content ?? current.error ?? '';
+            if (current.status === 'error') {
+              sendEvent(controller, { type: 'error', error: current.error ?? 'Run failed' });
+            } else {
+              // The summary step was already streamed as it landed — only
+              // emit it here when no summary step ever arrived (e.g. a stop).
+              if (!summaryStep) sendEvent(controller, { type: 'summary', content: summary });
+              sendEvent(controller, {
+                type: 'complete',
+                runId: current.runId ?? current.id,
+                jobId: current.id,
+                summary,
+                steps: steps.length,
+                status: current.status === 'cancelled' ? 'cancelled' : 'complete',
+              });
+            }
+            break;
+          }
+
+          if (Date.now() - startedAt > STREAM_DEADLINE_MS) {
+            sendEvent(controller, { type: 'error', error: 'Run exceeded the 10-minute streaming window — it keeps running in the queue.' });
+            break;
+          }
+          if (Date.now() - lastKeepalive > KEEPALIVE_MS) {
+            controller.enqueue(new TextEncoder().encode(': keepalive\n\n'));
+            lastKeepalive = Date.now();
+          }
+          await sleep(POLL_MS);
         }
-
-        if (!summary) {
-          summary = `${agent.name} completed ${stepCount} step${stepCount !== 1 ? 's' : ''} for: "${goal.slice(0, 60)}"`;
-        }
-
-        const summaryStep: AgentRunStep = { type: 'summary', content: summary, at: new Date().toISOString() };
-        run.steps.push(summaryStep);
-        run.status = 'complete';
-        run.completedAt = new Date().toISOString();
-        run.summary = summary;
-
-        sendEvent(controller, { type: 'summary', content: summary });
-        sendEvent(controller, { type: 'complete', runId, summary, steps: run.steps.length });
-
-        await persistRun(run, ws, userId);
-        await auditRun(run, provider?.model ?? null, provider?.providerId ?? null, messages.reduce((n, m) => n + m.content.length, 0), ws, userId);
       } catch (e) {
-        const errMsg = (e as Error).message;
-        sendEvent(controller, { type: 'error', error: errMsg });
-        const run2 = { id: runId, agentId, agentName: agent.name, goal, status: 'error' as const, steps: [], startedAt, triggeredBy };
-        await persistRun(run2, ws, userId);
+        try { sendEvent(controller, { type: 'error', error: (e as Error).message }); } catch { /* stream already closed */ }
       } finally {
         controller.close();
       }

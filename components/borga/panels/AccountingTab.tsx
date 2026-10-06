@@ -16,6 +16,7 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
@@ -38,12 +39,19 @@ import {
   type AccountType,
   type GlAccount,
 } from '@/lib/borga/data';
+import {
+  ACCOUNT_SIDE_HINT,
+  DR_CR_LEGEND,
+  NORMAL_SIDE_SHORT,
+  journalLineHint,
+  splitDrCr,
+} from '@/lib/borga/accounting-labels';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
-import { ProjectSelect } from '../form-widgets';
+import { ProjectSelect, AccountSelect } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { toast } from '@/lib/toast-bus';
 import { cn } from '@/lib/utils';
-
-const DEBIT_NORMAL: AccountType[] = ['asset', 'expense'];
 
 type LineDraft = { accountId: string; debit: string; credit: string };
 
@@ -70,7 +78,9 @@ export function AccountingTab() {
 
   const [accountOpen, setAccountOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<string | null>(null);
-  const [accountForm, setAccountForm] = useState({ code: '', name: '', type: 'expense' as AccountType, description: '' });
+  const [accountForm, setAccountForm] = useState<{ code: string; name: string; type: AccountType; description: string }>({ code: '', name: '', type: 'expense', description: '' });
+  const [confirmTarget, setConfirmTarget] = useState<{ kind: 'account' | 'journal'; id: string; name: string } | null>(null);
+
   const [journalOpen, setJournalOpen] = useState(false);
   const [journalForm, setJournalForm] = useState({
     date: new Date().toISOString().slice(0, 10),
@@ -95,6 +105,8 @@ export function AccountingTab() {
     .filter((g) => g.accounts.length > 0);
 
   // ── Trial balance from posted entries ─────────────────────────────────────
+  // Double-entry (IFRS): each account lands in Dr or Cr by the *sign* of its
+  // net balance, so total Dr always equals total Cr on balanced books.
   const trialBalance = useMemo(() => {
     const deltas = new Map<string, number>();
     journals
@@ -103,10 +115,8 @@ export function AccountingTab() {
         j.lines.forEach((l) => deltas.set(l.accountId, (deltas.get(l.accountId) ?? 0) + l.debit - l.credit)),
       );
     const rows = coa.map((a) => {
-      const delta = deltas.get(a.id) ?? 0;
-      const debitNormal = DEBIT_NORMAL.includes(a.type);
-      const balance = debitNormal ? delta : -delta; // positive in the account's normal side
-      return { account: a, debits: balance > 0 ? balance : 0, credits: balance < 0 ? -balance : 0 };
+      const { dr, cr } = splitDrCr(deltas.get(a.id) ?? 0);
+      return { account: a, debits: dr, credits: cr };
     });
     const totalDebits = rows.reduce((s, r) => s + r.debits, 0);
     const totalCredits = rows.reduce((s, r) => s + r.credits, 0);
@@ -125,7 +135,10 @@ export function AccountingTab() {
   const submitAccount = () => {
     if (!accountForm.code.trim() || !accountForm.name.trim()) return;
     const duplicate = coa.some((a) => a.code === accountForm.code.trim() && a.id !== editingAccount);
-    if (duplicate) return;
+    if (duplicate) {
+      toast({ title: 'Code already in use', description: `An account with code ${accountForm.code.trim()} already exists.`, variant: 'error' });
+      return;
+    }
     if (editingAccount) {
       updateAccount(editingAccount, {
         code: accountForm.code.trim(),
@@ -214,27 +227,30 @@ export function AccountingTab() {
         <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2.5">
           <div>
             <p className="flex items-center gap-1.5 text-sm font-semibold"><FileCheck className="h-3.5 w-3.5" /> Trial balance</p>
-            <p className="text-[11px] text-muted-foreground">Posted entries only</p>
+            <p className="text-[11px] text-muted-foreground">Posted entries only · double-entry (IFRS): total Dr must equal total Cr</p>
           </div>
           <Badge className={cn(trialBalance.balanced ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-600')}>
             {trialBalance.balanced ? 'Balanced' : `Out by ${money(Math.abs(trialBalance.totalDebits - trialBalance.totalCredits))}`}
           </Badge>
         </div>
+        <p className="border-b bg-muted/20 px-4 py-1.5 text-[11px] text-muted-foreground" title={DR_CR_LEGEND}>
+          {DR_CR_LEGEND}
+        </p>
         <table className="w-full text-sm">
           <thead className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-4 py-2 font-medium">Code</th>
               <th className="px-4 py-2 font-medium">Account</th>
               <th className="hidden px-4 py-2 font-medium sm:table-cell">Type</th>
-              <th className="px-4 py-2 text-right font-medium">Increases</th>
-              <th className="px-4 py-2 text-right font-medium">Decreases</th>
+              <th className="px-4 py-2 text-right font-medium" title="Debit: increases assets, costs and expenses; decreases liabilities, equity and revenue">Dr — debit</th>
+              <th className="px-4 py-2 text-right font-medium" title="Credit: increases liabilities, equity and revenue; decreases assets, costs and expenses">Cr — credit</th>
             </tr>
           </thead>
           <tbody>
             {trialBalance.rows.map((r) => (
               <tr key={r.account.id} className="border-b last:border-0 hover:bg-muted/20">
                 <td className="px-4 py-2 font-mono text-xs">{r.account.code}</td>
-                <td className="px-4 py-2">{r.account.name}</td>
+                <td className="px-4 py-2" title={ACCOUNT_SIDE_HINT[r.account.type]}>{r.account.name}</td>
                 <td className="hidden px-4 py-2 sm:table-cell">
                   <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold capitalize ring-1', ACCOUNT_TYPE_STYLE[r.account.type])}>
                     {r.account.type}
@@ -256,7 +272,7 @@ export function AccountingTab() {
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Balances chart */}
         <Card className="p-5">
-          <SectionTitle title="Balance distribution" sub="Increase / decrease balances per account" />
+          <SectionTitle title="Balance distribution" sub="Debit / credit balances per account" />
           <div className="mt-3 h-52">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ left: -8, right: 4, top: 4 }}>
@@ -305,6 +321,9 @@ export function AccountingTab() {
                   <span className="text-xs text-muted-foreground">
                     {ACCOUNT_TYPE_LABEL[g.type]} — {g.accounts.length} account{g.accounts.length === 1 ? '' : 's'}
                   </span>
+                  <span className="ml-auto text-[10px] text-muted-foreground" title={ACCOUNT_SIDE_HINT[g.type]}>
+                    {NORMAL_SIDE_SHORT[g.type]}
+                  </span>
                 </button>
                 {openTypes[g.type] && (
                   <table className="w-full text-sm">
@@ -326,7 +345,7 @@ export function AccountingTab() {
                                 <Pencil className="h-3 w-3" />
                               </button>
                               <button
-                                onClick={() => deleteAccount(a.id)}
+                                onClick={() => setConfirmTarget({ kind: 'account', id: a.id, name: a.name })}
                                 disabled={journals.some((j) => j.lines.some((l) => l.accountId === a.id))}
                                 title={journals.some((j) => j.lines.some((l) => l.accountId === a.id)) ? 'Account is used by journal entries' : 'Delete account'}
                                 className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground enabled:hover:bg-destructive/10 enabled:hover:text-destructive disabled:opacity-30"
@@ -384,8 +403,12 @@ export function AccountingTab() {
                     {j.lines.map((l, i) => {
                       const acct = coa.find((a) => a.id === l.accountId);
                       return (
-                        <span key={i} className="mr-2 whitespace-nowrap text-[11px]">
-                          {acct?.code} {l.debit > 0 ? `+${fmtNum(l.debit)}` : ''}{l.credit > 0 ? `−${fmtNum(l.credit)}` : ''}
+                        <span
+                          key={i}
+                          className="mr-2 whitespace-nowrap text-[11px]"
+                          title={acct ? journalLineHint(acct.name, acct.type) : undefined}
+                        >
+                          {acct?.code} {l.debit > 0 ? `Dr ${fmtNum(l.debit)}` : ''}{l.credit > 0 ? `Cr ${fmtNum(l.credit)}` : ''}
                         </span>
                       );
                     })}
@@ -429,7 +452,7 @@ export function AccountingTab() {
                       {/* Lock rule: drafts delete; posted entries are voided in place with a linked reversal (audit trace). */}
                       {j.status === 'draft' && (
                         <button
-                          onClick={() => { if (deleteJournalEntry(j.id)) log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Draft journal deleted: ${j.memo}.` }); }}
+                          onClick={() => setConfirmTarget({ kind: 'journal', id: j.id, name: j.memo })}
                           disabled={isLocked(j.dateIso)}
                           className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground enabled:hover:bg-destructive/10 enabled:hover:text-destructive disabled:opacity-30"
                           title={isLocked(j.dateIso) ? 'Period is closed — reopen in Book Closure to delete' : 'Delete draft entry'}
@@ -485,6 +508,9 @@ export function AccountingTab() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="mt-1 text-[11px] text-muted-foreground" title={ACCOUNT_SIDE_HINT[accountForm.type]}>
+                {NORMAL_SIDE_SHORT[accountForm.type]}
+              </p>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Description</label>
@@ -495,6 +521,7 @@ export function AccountingTab() {
             )}
           </div>
           <DialogFooter>
+            <Button variant="ghost" onClick={() => { setAccountOpen(false); setEditingAccount(null); }}>Cancel</Button>
             <Button onClick={submitAccount} disabled={!accountForm.code.trim() || !accountForm.name.trim() || coa.some((a) => a.code === accountForm.code.trim() && a.id !== editingAccount)}>
               {editingAccount ? 'Save changes' : 'Create account'}
             </Button>
@@ -526,7 +553,7 @@ export function AccountingTab() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Memo</label>
-                <Input value={journalForm.memo} onChange={(e) => setJournalForm({ ...journalForm, memo: e.target.value })} placeholder="August payroll run" className="mt-1" />
+                <Textarea rows={2} value={journalForm.memo} onChange={(e) => setJournalForm({ ...journalForm, memo: e.target.value })} placeholder="August payroll run" className="mt-1" />
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Project</label>
@@ -537,7 +564,8 @@ export function AccountingTab() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Transaction description</label>
-              <Input
+              <Textarea
+                rows={2}
                 value={journalForm.description}
                 onChange={(e) => setJournalForm({ ...journalForm, description: e.target.value })}
                 placeholder="Full description of the transaction for the audit trail"
@@ -547,27 +575,24 @@ export function AccountingTab() {
 
             <div className="rounded-xl border p-3">
               <div className="grid grid-cols-[1fr_84px_84px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <span>Account</span><span>Increase ({currency})</span><span>Decrease</span><span />
+                <span>Account</span>
+                <span title="Debit: increases assets, costs and expenses; decreases liabilities, equity and revenue">Dr — debit ({currency})</span>
+                <span title="Credit: increases liabilities, equity and revenue; decreases assets, costs and expenses">Cr — credit</span>
+                <span />
               </div>
               <div className="space-y-2">
                 {journalForm.lines.map((line, idx) => (
                   <div key={idx} className="grid grid-cols-[1fr_84px_84px_28px] items-center gap-2">
-                    <Select
+                    <AccountSelect
                       value={line.accountId}
-                      onValueChange={(v) =>
+                      onChange={(v) =>
                         setJournalForm({
                           ...journalForm,
-                          lines: journalForm.lines.map((l, i) => (i === idx ? { ...l, accountId: v } : l)),
+                          lines: journalForm.lines.map((l, i) => (i === idx ? { ...l, accountId: v ?? '' } : l)),
                         })
                       }
-                    >
-                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select account…" /></SelectTrigger>
-                      <SelectContent>
-                        {coa.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      placeholder="Select account…"
+                    />
                     <Input
                       type="number"
                       min={0}
@@ -622,27 +647,65 @@ export function AccountingTab() {
                 <Button size="sm" variant="ghost" className="h-7 gap-1" onClick={() => setJournalForm({ ...journalForm, lines: [...journalForm.lines, { accountId: '', debit: '', credit: '' }] })}>
                   <Plus className="h-3 w-3" /> Add line
                 </Button>
-                <p className={cn('font-mono', draftTotals.balanced ? 'text-emerald-600' : 'text-muted-foreground')}>
-                  ↑ {money(draftTotals.debits)} / ↓ {money(draftTotals.credits)}
+                <p className={cn('font-mono', draftTotals.balanced ? 'text-emerald-600' : 'text-muted-foreground')} title="Double-entry: total debits must equal total credits before posting">
+                  Dr {money(draftTotals.debits)} / Cr {money(draftTotals.credits)}
                   {draftTotals.balanced ? ' ✓' : ''}
                 </p>
               </div>
             </div>
 
+            {/* Which side increases each chosen account — read from the account type. */}
+            {journalForm.lines.some((l) => l.accountId) && (
+              <div className="space-y-0.5 rounded-xl bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+                {[...new Map(
+                  journalForm.lines
+                    .filter((l) => l.accountId)
+                    .map((l) => coa.find((a) => a.id === l.accountId))
+                    .filter((a): a is GlAccount => !!a)
+                    .map((a) => [a.id, a] as const),
+                ).values()].map((a) => (
+                  <p key={a.id}><span className="font-medium text-foreground">{a.code} — {a.name}:</span> {ACCOUNT_SIDE_HINT[a.type]}</p>
+                ))}
+              </div>
+            )}
+
             <div>
               <label className="text-xs font-medium text-muted-foreground">
-                Note: entering an increase clears the decrease on the same line (single-sided per line). Totals must match before posting.
+                Note: entering a debit clears the credit on the same line (single-sided per line). Total Dr must equal total Cr before posting.
               </label>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => submitJournal(false)} disabled={!draftTotals.balanced}>Save draft</Button>
+            <Button variant="ghost" onClick={() => setJournalOpen(false)}>Cancel</Button>
             <Button onClick={() => submitJournal(true)} disabled={!draftTotals.balanced}>
               <SendHorizontal className="mr-1 h-3.5 w-3.5" /> Post to GL
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmTarget}
+        onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
+        title={confirmTarget?.kind === 'account' ? `Delete account "${confirmTarget?.name ?? ''}"?` : `Delete journal "${confirmTarget?.name ?? ''}"?`}
+        description={confirmTarget?.kind === 'account'
+          ? 'The unused account is removed. Journal entries are untouched — accounts in use cannot be deleted.'
+          : 'The draft journal entry is removed. Posted entries are never deleted — void them instead.'}
+        confirmLabel={confirmTarget?.kind === 'account' ? 'Delete account' : 'Delete draft'}
+        onConfirm={() => {
+          if (!confirmTarget) return;
+          if (confirmTarget.kind === 'account') {
+            deleteAccount(confirmTarget.id);
+            log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Chart of accounts: removed "${confirmTarget.name}".` });
+          } else {
+            if (deleteJournalEntry(confirmTarget.id)) {
+              log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Draft journal deleted: ${confirmTarget.name}.` });
+            }
+          }
+          setConfirmTarget(null);
+        }}
+      />
     </div>
   );
 }

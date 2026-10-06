@@ -26,6 +26,7 @@ import { notifyEmail } from '@/lib/borga/email-client';
 import { useFeatures } from '@/lib/borga/features-client';
 import { ThemeProvider, useTheme } from './theme-provider';
 import { CommandPalette } from './CommandPalette';
+import { AdvisoryWidget } from './AdvisoryWidget';
 import { VoiceAssistant } from './VoiceAssistant';
 import { useVoice } from './use-voice';
 import { BorgaOrb } from './BorgaOrb';
@@ -38,15 +39,20 @@ import { MarketingPage } from './pages/MarketingPage';
 import { CommunicationsPage } from './pages/CommunicationsPage';
 import { SupportPage } from './pages/SupportPage';
 import { FinancePage } from './pages/FinancePage';
+import { InventoryPage } from './pages/InventoryPage';
 import { ProjectsTab } from './panels/ProjectsTab';
 import { HRPage } from './pages/HRPage';
 import { CompanyPage } from './pages/CompanyPage';
 import { AIPlatformPage } from './pages/AIPlatformPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
+import { DevelopersPage } from './pages/DevelopersPage';
 import { SettingsTab } from './panels/SettingsTab';
 import { OnboardingStatus } from './OnboardingStatus';
-import { SaveConflictBanner } from './SaveConflictBanner';
+import { UserMenu } from './UserMenu';
+import { CalendarWidget, GetStartedWidget, RightRail, StatusBar } from './SidebarWidgets';
 
+import { SaveConflictBanner } from './SaveConflictBanner';
+import { ConsentBanner } from './ConsentBanner';
 interface ActiveRoute {
   page: PageId;
   tab?: string;
@@ -57,10 +63,16 @@ function ShellInner() {
     userName, log, voice, hydrate, synced, dbAvailable, activeWorkspaceId, activeWorkspace,
     finance, invoices, bills, vendors, customers, leads, goals, journals, bankTxns, bankAccounts, employees,
     memories, addMemory, knowledge, setKnowledge, settings, setSettings, agents, llm, llmCatalog,
+    projects, tasks, ads, inventoryItems, stockMovements, chats, calls, leaveRequests, fundraising,
+    kbQuestions, revenueTracks, budgets, filings, posts, webhooks, mcpServers, kpiGroups,
+    scheduledTasks, agentRuns, loadedWorkspaceId,
   } = useBorga();
+  // `synced` turns true once the company list is known; the company's own data arrives after. Background jobs that read or write
+  // that data must wait for it, or they act on seed values and their saves are refused (or worse, overwrite real data).
+  const dataReady = synced && !!activeWorkspaceId && loadedWorkspaceId === activeWorkspaceId;
   const { setMode, resolvedDark } = useTheme();
-  // What the AI actually is right now: the selected provider, or the built-in demo that needs no key.
-  const aiLabel = llm.providerId === 'llm-demo' ? 'Demo' : (llmCatalog.find((p) => p.id === llm.providerId)?.label ?? llm.providerId);
+  // What the AI actually is right now: the selected provider (Pollinations works out of the box, no key).
+  const aiLabel = llmCatalog.find((p) => p.id === llm.providerId)?.label ?? llm.providerId;
   const { startListening, stopListening } = useVoice();
   const [route, setRoute] = useState<ActiveRoute>({ page: 'overview' });
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -78,17 +90,17 @@ function ShellInner() {
 
   // Company Engine: keep customers and deals in step with the company CRM while the dashboard is open.
   useEffect(() => {
-    if (!synced || !crmAutoPull) return;
+    if (!dataReady || !crmAutoPull) return;
     const t0 = setTimeout(() => void pullCrm(), 4000);
     const t = setInterval(() => void pullCrm(), 30 * 60_000);
     return () => { clearTimeout(t0); clearInterval(t); };
-  }, [synced, crmAutoPull, activeWorkspaceId, pullCrm]);
+  }, [dataReady, crmAutoPull, activeWorkspaceId, pullCrm]);
 
   // Recurring billing: create any invoices that came due. It runs when the dashboard opens, every
   // 30 minutes while it stays open, and when the tab regains focus. The schedule is advanced and the
   // draft invoices are written in the same store update, so a repeat run never duplicates one.
   useEffect(() => {
-    if (!synced) return;
+    if (!dataReady) return;
     const tick = () => {
       const bills = runRecurringBills();
       if (bills.created) notifyEmail(activeWorkspaceId, 'recurring_bills', { numbers: bills.bills });
@@ -102,7 +114,7 @@ function ShellInner() {
     const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
-  }, [synced, activeWorkspaceId, runRecurringInvoices, runRecurringBills]);
+  }, [dataReady, activeWorkspaceId, runRecurringInvoices, runRecurringBills]);
   const voiceEnabled = useFeatures((s) => s.flags.voice);
   const loadFeatures = useFeatures((s) => s.load);
   const greeted = useRef(false);
@@ -122,11 +134,19 @@ function ShellInner() {
   // the system keeps improving from what the company's own data shows,
   // without requiring a manual "Train fleet" click every time.
   useEffect(() => {
-    if (!synced || autoTrainRef.current) return;
+    if (!dataReady || autoTrainRef.current) return;
     autoTrainRef.current = true;
     const last = settings.lastAutoTrainAt ? new Date(settings.lastAutoTrainAt).getTime() : 0;
     if (Date.now() - last < 24 * 3600_000) return;
-    const insights = deriveBusinessInsights({ finance, invoices, bills, vendors, customers, leads, goals, journals, bankTxns, bankAccounts, employees });
+    const insights = deriveBusinessInsights({
+      finance, invoices, bills, vendors, customers, leads, goals, journals, bankTxns, bankAccounts, employees, projects, tasks, ads, inventoryItems, stockMovements,
+      chats, calls, leaveRequests, fundraising, knowledge, kbOpenQuestions: kbQuestions.length,
+      runsSummary: {
+        failed: agentRuns.filter((r) => r.status === 'error').length,
+        scheduledActive: scheduledTasks.filter((t) => t.enabled).length,
+      },
+      revenueTracks, budgets, filings, posts, webhooks, mcpServers, kpiGroups,
+    });
     if (insights.length === 0) return;
     const wsName = activeWorkspace()?.name ?? 'the company';
     const freshMemories = insightsToMemories(insights, wsName).filter((m) => !memories.some((x) => x.content === m.content));
@@ -137,7 +157,7 @@ function ShellInner() {
       log({ agentId: 'a-fundraising', agentName: 'Nadia', actor: 'system', kind: 'learn', message: `Daily auto-training: learned ${freshMemories.length} new insight(s) and refreshed ${insights.length} knowledge-base entries from live data.` });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [synced]);
+  }, [dataReady]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -159,7 +179,7 @@ function ShellInner() {
   // not a true server cron — a task due while nobody has the dashboard open waits
   // until the next time someone opens it.
   useEffect(() => {
-    if (!synced || !activeWorkspaceId) return;
+    if (!dataReady) return;
     const runTick = () => {
       fetch('/api/borga/scheduler', {
         method: 'POST',
@@ -170,7 +190,7 @@ function ShellInner() {
     runTick();
     const id = window.setInterval(runTick, 5 * 60_000);
     return () => window.clearInterval(id);
-  }, [synced, activeWorkspaceId]);
+  }, [dataReady, activeWorkspaceId]);
 
   // Hydrate DB-backed state (workspaces + the active company's entities).
   useEffect(() => {
@@ -189,7 +209,7 @@ function ShellInner() {
     greeted.current = true;
     const h = new Date().getHours();
     const part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Awakened — ${part}, ${userName}.` });
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Awakened — ${part}, ${userName}.` });
   }, [userName, log]);
 
   // Spoken greeting: only for people who turned voice on (Settings). Nothing plays, and no microphone is requested, on a fresh install.
@@ -261,6 +281,7 @@ function ShellInner() {
   return (
     <div className="flex min-h-screen bg-background text-foreground">
       <SaveConflictBanner />
+      <ConsentBanner />
       {/* Sidebar */}
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r bg-sidebar text-sidebar-foreground lg:flex">
         <div className="flex items-center gap-2 px-5 py-5">
@@ -291,6 +312,10 @@ function ShellInner() {
             );
           })}
         </nav>
+        <div className="space-y-3 px-3 pb-3 2xl:hidden">
+          <GetStartedWidget />
+          <CalendarWidget />
+        </div>
         <div className="border-t p-4 text-xs text-sidebar-foreground/60">
           <div className="flex items-center gap-2">
             <span className={cn('h-2 w-2 rounded-full', dbAvailable ? 'bg-emerald-500' : 'bg-amber-500')} />
@@ -344,6 +369,7 @@ function ShellInner() {
             >
               {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
+            <UserMenu />
           </div>
         </header>
 
@@ -368,7 +394,8 @@ function ShellInner() {
 
         <OnboardingStatus />
 
-        <main className="flex-1 px-4 py-6 lg:px-8">
+        <div className="flex flex-1">
+        <main className="min-w-0 flex-1 px-4 py-6 lg:px-8">
           <div className="mx-auto max-w-7xl">
             <BillingBanner />
             {billing?.access === 'blocked' ? <BillingPaywall /> : (
@@ -379,16 +406,21 @@ function ShellInner() {
               {route.page === 'communications' && <CommunicationsPage key={`co-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'support' && <SupportPage key={`su-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'finance' && <FinancePage key={`fi-${route.tab ?? ''}`} initialTab={route.tab} />}
+              {route.page === 'inventory' && <InventoryPage key={`inv-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'projects' && <ProjectsTab key={`pr-${route.tab ?? ''}`} initialProjectId={route.tab} />}
               {route.page === 'hr' && <HRPage key={`hr-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'company' && <CompanyPage key={`cp-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'ai' && <AIPlatformPage key={`ai-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'integrations' && <IntegrationsPage key={`in-${route.tab ?? ''}`} initialTab={route.tab} />}
+              {route.page === 'developers' && <DevelopersPage key={`dev-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'settings' && <SettingsTab />}
             </PageErrorBoundary>
             )}
           </div>
         </main>
+        <RightRail />
+        </div>
+        <StatusBar />
       </div>
 
       {voiceEnabled && (
@@ -425,6 +457,7 @@ function ShellInner() {
       )}
 
       <CommandPalette onOpenVoice={() => setVoiceOpen(true)} />
+      <AdvisoryWidget page={route.page} tab={route.tab} />
     </div>
   );
 }
