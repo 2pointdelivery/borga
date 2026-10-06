@@ -341,6 +341,14 @@ export async function GET(req: NextRequest) {
 // 64 MB by default on MySQL 8.4) and still small enough that one request cannot exhaust memory.
 const MAX_PAYLOAD_BYTES = 8_000_000;
 
+/** Saving leads, tasks or invoices can hand work to an agent (see lib/borga/automations.ts). Never delays or fails the save. */
+const AUTOMATION_SCOPE: Record<string, 'leads' | 'tasks' | 'invoices'> = { leads: 'leads', tasks: 'tasks', invoices: 'invoices' };
+function handOffSoon(userId: string, ws: unknown, entity: string): void {
+  const scope = AUTOMATION_SCOPE[entity];
+  if (!scope || !isValidWsId(ws)) return;
+  void import('@/lib/borga/automations').then((m) => m.runAutomationsSoon(userId, ws as string, [scope])).catch(() => undefined);
+}
+
 export async function POST(req: NextRequest) {
   const userId = await getUserId(req);
   if (!userId || !isValidUserId(userId)) {
@@ -390,10 +398,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
       }
       if (!r.ok) return NextResponse.json({ ok: false, saved: false, error: 'conflict', current: r.current }, { status: 409 });
+      handOffSoon(userId, body.ws, entity);
       return NextResponse.json({ ok: true, saved: true, version: r.version });
     }
     const ok = await setBorgaState(key, body.value ?? null);
     if (!ok) return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
+    handOffSoon(userId, body.ws, entity);
     return NextResponse.json({ ok: true, saved: true });
   } catch {
     return NextResponse.json({ ok: false, error: 'Invalid body' }, { status: 400 });

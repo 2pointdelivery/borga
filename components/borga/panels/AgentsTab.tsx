@@ -16,13 +16,15 @@ import { AgentAvatar, StatusPill, SectionTitle } from '../bits';
 import { AgentEditDialog } from './AgentEditDialog';
 import { SearchSelect } from '../SearchSelect';
 import { toast } from '@/lib/toast-bus';
+import { AUTOMATION_LABELS, resolveAutomations } from '@/lib/borga/automation-core';
 import { cn } from '@/lib/utils';
 
 const PALETTE = ['#6366f1', '#22d3ee', '#f472b6', '#f59e0b', '#34d399', '#a78bfa', '#fb7185', '#38bdf8'];
 
 export function AgentsTab() {
   const { agents, updateAgent, addAgent, addMemory, memories, log, activeAgentId, setActiveAgentId, placeCall, elevenlabs, leads,
-    finance, invoices, bills, vendors, customers, goals, journals, bankTxns, bankAccounts, employees, activeWorkspace, llm, agentRuns } = useBorga();
+    finance, invoices, bills, vendors, customers, goals, journals, bankTxns, bankAccounts, employees, activeWorkspace, llm, agentRuns, settings, setSettings } = useBorga();
+  const automations = resolveAutomations(settings.automations);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
@@ -163,6 +165,23 @@ export function AgentsTab() {
           <Plus className="h-4 w-4" /> Add agent
         </Button>
       </div>
+
+      {/* Automatic delegation: which events are handed to an agent without anyone asking */}
+      <Card className="p-4">
+        <p className="flex items-center gap-1.5 text-sm font-semibold"><Zap className="h-4 w-4 text-amber-500" /> Automatic delegation</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">Events are handed to the agent that owns them. Their runs show under Runs &amp; Queue, anything that sends or spends waits for your approval, and each company is capped at 30 automatic runs a day.</p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {AUTOMATION_LABELS.map((a) => (
+            <label key={a.id} className="flex items-start justify-between gap-3 rounded-lg border bg-muted/10 p-2.5">
+              <span>
+                <span className="block text-xs font-semibold">{a.label}</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">{a.detail}</span>
+              </span>
+              <Switch checked={automations[a.id]} onCheckedChange={(v) => setSettings({ automations: { ...settings.automations, [a.id]: v } })} aria-label={a.label} />
+            </label>
+          ))}
+        </div>
+      </Card>
 
       {/* Business intelligence feed — what the fleet has learned from every module */}
       <Card className="p-4">

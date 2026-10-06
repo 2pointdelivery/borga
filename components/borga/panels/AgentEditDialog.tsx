@@ -1,5 +1,6 @@
 'use client';
 
+import { personaInstructions } from '@/lib/borga/agent-personas';
 import { useEffect, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -144,8 +145,16 @@ export function AgentEditDialog({ agent, open, onOpenChange }: { agent: Agent | 
                 <Textarea rows={2} className="mt-1" value={editing.description} onChange={(e) => patch({ description: e.target.value })} />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Operating instructions</label>
-                <Textarea rows={3} className="mt-1" value={editing.instructions} onChange={(e) => patch({ instructions: e.target.value })} />
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-muted-foreground">Operating instructions</label>
+                  {personaInstructions(editing) && (editing.instructions ?? '').trim() !== personaInstructions(editing) && (
+                    <button type="button" className="text-[11px] text-primary hover:underline" onClick={() => patch({ instructions: personaInstructions(editing) })}>
+                      Reset to the default for this role
+                    </button>
+                  )}
+                </div>
+                <Textarea rows={5} className="mt-1" value={editing.instructions ?? ''} onChange={(e) => patch({ instructions: e.target.value })} placeholder="What this agent owns, what to check first, what to record, and what always needs a person's approval." />
+                <p className="mt-1 text-[11px] text-muted-foreground">Used in every run this agent makes. Leave it empty to fall back to the default for its role.</p>
               </div>
               <div className="flex items-center gap-2 pt-1">
                 <Button variant="outline" size="icon" className="h-9 w-9" onClick={remove} title="Delete agent">

@@ -7,9 +7,10 @@ import { userWsKey } from './keys';
 import { getApiKey, decryptSecret } from './secrets';
 import { mcpCallTool } from './mcp-client';
 import { assertPublicUrl, fetchPublic, readTextCapped } from './safe-url';
+import { parseToolCalls } from './tool-parse';
 import { composioScope, inScope } from './composio-scope';
-import type { Task, Lead, AgentMemory, Approval, KnowledgeEntry, ActivityEvent, SettingsState, McpServer, ScheduledTask } from './data';
-import { INITIAL_TASKS, INITIAL_LEADS, KNOWLEDGE_SEED, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from './data';
+import type { KpiGroup, Task, Lead, AgentMemory, Approval, KnowledgeEntry, ActivityEvent, SettingsState, McpServer, ScheduledTask } from './data';
+import { INITIAL_TASKS, INITIAL_LEADS, KNOWLEDGE_SEED, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD, completeKpiGroups } from './data';
 import { analyzeOpportunity, draftApplication as draftFundingApplication, loadOpportunities, runFullPipeline } from './fundraising-pipeline';
 import { TOOL_NAMES as TOOL_NAMES_CLIENT } from './tool-names';
 import { recomputeCosting, stockByWarehouse, stockStatus, valuation, type InventoryItem, type StockMovement, type Warehouse } from './inventory';
@@ -32,8 +33,8 @@ const priorityEnum = z.enum(['P0', 'P1', 'P2', 'P3']);
 const bucketEnum = z.enum(['today', 'week', 'month']);
 
 export const TOOL_DEFS: ToolDef[] = [
-  { name: 'create_task', description: 'Use this to create a follow-up or action task (e.g. pipeline follow-up, KPI fix).', schema: z.object({ title: z.string().min(1).max(200), detail: z.string().max(500).optional(), priority: priorityEnum.optional(), bucket: bucketEnum.optional(), assignee: z.string().max(50).optional(), tags: z.array(z.string()).max(8).optional(), due: z.string().max(50).optional() }).passthrough(), needsConfirm: false },
-  { name: 'update_task', description: 'Use this to advance a task by id (status, progress, priority).', schema: z.object({ id: z.string().min(1), patch: z.object({ status: z.enum(['todo', 'in-progress', 'done']).optional(), progress: z.number().optional(), priority: priorityEnum.optional(), detail: z.string().max(500).optional() }).passthrough() }).passthrough(), needsConfirm: false },
+  { name: 'create_task', description: 'Use this to create a follow-up or action task (e.g. pipeline follow-up, KPI fix).', schema: z.object({ title: z.string().min(1).max(200), detail: z.string().max(1500).optional(), priority: priorityEnum.optional(), bucket: bucketEnum.optional(), assignee: z.string().max(50).optional(), tags: z.array(z.string()).max(8).optional(), due: z.string().max(50).optional() }).passthrough(), needsConfirm: false },
+  { name: 'update_task', description: 'Use this to advance a task by id (status, progress, priority).', schema: z.object({ id: z.string().min(1), patch: z.object({ status: z.enum(['todo', 'in-progress', 'done']).optional(), progress: z.number().optional(), priority: priorityEnum.optional(), detail: z.string().max(1500).optional() }).passthrough() }).passthrough(), needsConfirm: false },
   { name: 'update_lead', description: 'Use this to move a sales lead to a new stage or update its value/priority.', schema: z.object({ id: z.string().min(1), patch: z.object({ stage: z.enum(['new', 'qualified', 'proposal', 'won', 'lost']).optional(), value: z.number().nonnegative().optional(), priority: priorityEnum.optional() }).passthrough() }).passthrough(), needsConfirm: false },
   { name: 'store_memory', description: 'Use this to remember a durable fact about the user or business for future sessions.', schema: z.object({ content: z.string().min(1).max(2000), kind: z.enum(['fact', 'context', 'instruction', 'observation']).optional(), tags: z.array(z.string()).max(10).optional(), confidence: z.number().min(0).max(100).optional() }).passthrough(), needsConfirm: false },
   { name: 'search_knowledge', description: 'Use this to look up the company knowledge base for services, policies, or facts.', schema: z.object({ query: z.string().min(1) }).passthrough(), needsConfirm: false },
@@ -207,7 +208,7 @@ export async function executeTool(
       const newTask: Task = {
         id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
         title: String(params.title ?? 'New task').slice(0, 200),
-        detail: String(params.detail ?? '').slice(0, 500),
+        detail: String(params.detail ?? '').slice(0, 1500),
         priority: (['P0', 'P1', 'P2', 'P3'].includes(String(params.priority))
           ? params.priority
           : 'P1') as Task['priority'],
@@ -219,6 +220,7 @@ export async function executeTool(
         tags: Array.isArray(params.tags) ? params.tags.map(String).slice(0, 8) : [],
         due: String(params.due ?? 'This week').slice(0, 50),
         progress: 0,
+        source: 'agent',
       };
       await setBorgaState(key('tasks'), [newTask, ...tasks].slice(0, 200));
       await appendActivity(agentId, agentName, ws, userId, 'task', `Created task: "${newTask.title}" [${newTask.priority}]`);
@@ -463,7 +465,7 @@ export async function executeTool(
             subject: String(params.subject), description: String(params.description ?? ''),
             priority: (params.priority as 'medium') ?? 'medium', type: (params.type as 'request') ?? 'request',
             requesterEmail: String(params.requesterEmail ?? '').trim().toLowerCase(), requesterName: String(params.requesterName ?? ''),
-          }, { source: 'api', actor: agentName });
+          }, { source: 'api', actor: agentName, fromAgent: true });
           await appendActivity(agentId, agentName, ws, userId, 'task', `Opened ticket ${t.id}: "${t.subject}"`);
           return { ok: true, data: { id: t.id } };
         }
@@ -545,7 +547,8 @@ ${String(params.body)}`, author: agentName });
       const all = ws
         ? await getBorgaState<Record<string, unknown>>(key(entity))
         : (await getAllBorgaStates())[entity];
-      let data: unknown = all;
+      // KPIs are always the full best-practice set (a company that never opened its dashboard has nothing stored); nothing else returns null
+      let data: unknown = entity === 'kpis' ? completeKpiGroups(all as unknown as KpiGroup[] | null).groups : (all ?? []);
       if (filter && Array.isArray(data)) {
         data = (data as Record<string, unknown>[])
           .filter((item) => JSON.stringify(item).toLowerCase().includes(filter))
@@ -851,22 +854,7 @@ ${String(params.body)}`, author: agentName });
   }
 }
 
-export function parseToolCalls(text: string): Array<{ tool: string; params: Record<string, unknown> }> {
-  const calls: Array<{ tool: string; params: Record<string, unknown> }> = [];
-  const regex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
-  let m: RegExpExecArray | null;
-  while ((m = regex.exec(text)) !== null) {
-    try {
-      const parsed = JSON.parse(m[1]) as { tool?: string; params?: Record<string, unknown> };
-      if (parsed.tool && typeof parsed.tool === 'string') {
-        calls.push({ tool: parsed.tool, params: parsed.params ?? {} });
-      }
-    } catch {
-      // Malformed tool call — skip
-    }
-  }
-  return calls;
-}
+export { parseToolCalls } from './tool-parse';
 
 async function appendActivity(
   agentId: string,

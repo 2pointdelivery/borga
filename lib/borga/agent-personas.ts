@@ -107,7 +107,22 @@ export const PERSONA_INSTRUCTIONS: Record<string, string> = {
   'healthcare/healthcare-innovation-strategist.md': 'You balance narrative with credibility: product claims tie to evidence, regulatory timing is known, and clinical translation comes before the pitch.',
 };
 
-/** Operating instructions for one agent, looked up by its persona file. */
+/** The default operating instructions for one agent, looked up by its persona file. */
 export function personaInstructions(agent: Agent): string {
   return PERSONA_INSTRUCTIONS[agent.persona ?? ''] ?? '';
+}
+
+/**
+ * The instructions an agent actually runs with: what the company wrote for it, else the default for its role. A company's own
+ * text wins, so editing an agent takes effect (it used to be overridden by the default every run).
+ */
+export function effectiveInstructions(agent: Pick<Agent, 'persona' | 'instructions'>): string {
+  return (agent.instructions ?? '').trim() || PERSONA_INSTRUCTIONS[agent.persona ?? ''] || '';
+}
+
+/** Fills in the role's default instructions where an agent has none, so they show in the editor and are saved with the agent. */
+export function withPersonaInstructions<T extends Pick<Agent, 'persona' | 'instructions'>>(agent: T): T {
+  if ((agent.instructions ?? '').trim()) return agent;
+  const text = PERSONA_INSTRUCTIONS[agent.persona ?? ''];
+  return text ? { ...agent, instructions: text } : agent;
 }

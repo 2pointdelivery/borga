@@ -24,7 +24,8 @@ const TRIGGER_RANK: Record<RunJob['triggeredBy'], number> = {
   user: 0,
   scheduler: 1,
   webhook: 2,
-  handoff: 3,
+  automation: 3,
+  handoff: 4,
 };
 
 /** Lower sorts first: urgent jobs, then user > scheduler > webhook > handoff, then FIFO. */

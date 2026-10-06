@@ -15,9 +15,9 @@ import type {
 } from './data';
 import type { FilingsState } from './filing-catalog';
 import type { InventoryItem, StockMovement } from './inventory';
-import { AGENTS, KNOWLEDGE_SEED, INITIAL_TASKS, INITIAL_LEADS, LLM_PROVIDERS, RETIRED_LLM_PROVIDERS, kpiAttainment, kpiMeasured, type LlmProvider } from './data';
+import { AGENTS, DEFAULT_LLM, completeKpiGroups, KNOWLEDGE_SEED, INITIAL_TASKS, INITIAL_LEADS, LLM_PROVIDERS, RETIRED_LLM_PROVIDERS, kpiAttainment, kpiMeasured, type LlmProvider } from './data';
 import { friendlyLlmError, isRetryableLlmStatus, LLM_MAX_ATTEMPTS, llmRetryDelayMs } from './llm-errors';
-import { personaInstructions } from './agent-personas';
+import { effectiveInstructions } from './agent-personas';
 import { deriveBusinessInsights } from './insights';
 import { smPromptContext, EMPTY_SM_CONTEXT, type SmPromptContext } from './supermemory-context';
 
@@ -109,7 +109,8 @@ export async function buildAgentContext(agentId: string, ws?: string | null, use
     .filter((l) => l.stage !== 'won' && l.stage !== 'lost')
     .slice(0, 10);
   const activity = (read<ActivityEvent[]>('activity') ?? []).slice(0, 8);
-  const kpiGroups = read<KpiGroup[]>('kpis') ?? [];
+  // a company that has not opened its dashboard since KPIs existed still has the best-practice set
+  const kpiGroups = completeKpiGroups(read<KpiGroup[]>('kpis')).groups;
   const finance = read<FinanceEntry[]>('finance') ?? [];
 
   // Optional long-term memory layer. Never throws; returns empty values when off or unavailable.
@@ -229,7 +230,7 @@ export function buildSystemPrompt(ctx: AgentContext, goal: string, companyName =
   return `You are ${agent.name}, the ${agent.role} at ${companyName}, an autonomous business command center.
 
 ${agent.description}
-${personaInstructions(agent) || agent.instructions ? `\nOperating instructions:\n${personaInstructions(agent) || agent.instructions || ''}\n` : ''}
+${effectiveInstructions(agent) ? `\nOperating instructions:\n${effectiveInstructions(agent)}\n` : ''}
 Your skills: ${agent.skills.join(', ')}
 
 ## Current Goal
@@ -382,8 +383,9 @@ export async function getConfiguredLlm(ws?: string | null, userId?: string | nul
   try {
     // One keyed read. (This used to load every row in the database on every LLM call.)
     const llm = await getBorgaState<{ providerId?: string; model?: string }>(ws ? (userId ? userWsKey(userId, ws, 'llm') : scopedKey(ws, 'llm')) : 'llm');
-    if (!llm?.providerId || RETIRED_LLM_PROVIDERS.includes(llm.providerId)) return null;
-    return await buildLlm(llm.providerId, llm.model ?? '', ws, userId);
+    // Nothing saved yet means the company is on the same default the dashboard shows (a keyless model), not "no model".
+    const chosen = llm?.providerId && !RETIRED_LLM_PROVIDERS.includes(llm.providerId) ? { providerId: llm.providerId, model: llm.model ?? '' } : { providerId: DEFAULT_LLM.providerId, model: DEFAULT_LLM.model };
+    return await buildLlm(chosen.providerId, chosen.model, ws, userId);
   } catch {
     return null;
   }
@@ -425,7 +427,8 @@ export async function callLlm(
       if (res.ok || !isRetryableLlmStatus(res.status) || attempt >= LLM_MAX_ATTEMPTS) return res;
       // Drain the error body so the connection can be reused, then back off and retry.
       await res.text().catch(() => '');
-      await new Promise((r) => setTimeout(r, llmRetryDelayMs(attempt)));
+      // a rate limit resets by the minute: a half-second pause only burns the attempts
+      await new Promise((r) => setTimeout(r, res.status === 429 ? 4000 * attempt : llmRetryDelayMs(attempt)));
     }
   };
 

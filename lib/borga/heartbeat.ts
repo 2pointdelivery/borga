@@ -95,6 +95,8 @@ export async function tickWorkspace(ws: string | null, userId: string | null): P
   if (settings?.heartbeatPaused === true) {
     return { paused: true, triggered: [], held: [], skippedOverlap: [], checked: 0 };
   }
+  // Hand fresh work to the agents that own it (stale leads, overdue invoices, unowned tickets). Never blocks the beat.
+  if (ws && userId) void import('./automations').then((m) => m.runAutomations(userId, ws)).catch((e) => console.error('[automation] scan failed', e));
   const tasks = await loadTasks(ws, userId);
   const due = tasks.filter((t) => t.enabled && t.nextRun && new Date(t.nextRun) <= now);
   if (!due.length) return { triggered: [], held: [], skippedOverlap: [], checked: tasks.length };

@@ -148,6 +148,7 @@ INITIAL_APPROVALS,
   INITIAL_RECONCILIATION_RULES,
   normalizeReconciliationPattern,
   withBrainDefaults,
+  completeKpiGroups,
 } from './data';
 import type { InventoryItem, Warehouse, StockMovement, PosSale } from './inventory';
 import { INITIAL_WAREHOUSES, refundMovements, serviceItemsFromTracks, refundFinanceEntries, refundJournals } from './inventory';
@@ -156,6 +157,7 @@ import { mergeLoadedModels, repairCatalog } from './model-catalog';
 import { SaveQueue, unionAppendOnly } from './save-queue';
 import { fmtMoneyFull } from './currencies';
 import type { BillingInfo } from './billing';
+import { withPersonaInstructions } from './agent-personas';
 import { mergeBankFeed, markFeedDisconnected, type MergeStats } from './bank-feed';
 import type { BankFeed } from './saltedge';
 import { EMPTY_FILINGS, normalizeFilings, type FilingProfile, type FilingRecord, type FilingsState } from './filing-catalog';
@@ -3125,8 +3127,12 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       // Remember which version of every entity this tab now holds; saves are refused if it has moved on by then.
       SAVES.setVersions(`${wsId}|`, (d.versions ?? {}) as Record<string, number>);
       const dbAgents = Array.isArray(d.agents) && d.agents.length ? (d.agents as Agent[]) : null;
-      const agents = dbAgents ? ensureNadia(dbAgents).map(withBrainDefaults) : AGENTS;
-      const agentsChanged = !!dbAgents && agents !== dbAgents;
+      const agents = dbAgents ? ensureNadia(dbAgents).map(withBrainDefaults).map(withPersonaInstructions) : AGENTS;
+      // saved back only when something was actually added (a missing agent, or a role's default instructions)
+      // The KPI set is completed against the best-practice baseline (missing KPIs added, unset targets filled) and saved back,
+      // so every company has the full set, in the database as well as on screen.
+      const kpiSet = completeKpiGroups(d.kpis as KpiGroup[] | undefined);
+      const agentsChanged = !!dbAgents && JSON.stringify(agents) !== JSON.stringify(dbAgents);
       set({
         synced: true,
         loadedWorkspaceId: wsId,
@@ -3150,7 +3156,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         ads: d.ads ?? INITIAL_ADS,
         webhooks: d.webhooks ?? INITIAL_WEBHOOKS,
         mcpServers: d.mcpServers ?? INITIAL_MCP_SERVERS,
-        kpiGroups: d.kpis ?? INITIAL_KPI_GROUPS,
+        kpiGroups: kpiSet.groups,
         llm: normalizeLlmSelection(d.llm ?? DEFAULT_LLM),
         llmCatalog: Array.isArray(d.llmCatalog) && d.llmCatalog.length ? repairCatalog(d.llmCatalog, LLM_PROVIDERS) : LLM_PROVIDERS,
         valuation: d.valuation ?? VALUATION_CONFIG_SEED,
@@ -3227,6 +3233,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       }
       // Persist the corrected agent list (with Nadia) back to the cloud DB.
       if (agentsChanged) persist('agents', agents);
+      if (kpiSet.changed) persist('kpis', kpiSet.groups);
     } catch {
       // Never leave the shell stuck on the loading spinner. Surface the app
       // with whatever local state we have so the user can recover.
@@ -3312,11 +3319,12 @@ export const useBorga = create<BorgaStore>((set, get) => ({
 
   leads: INITIAL_LEADS,
   addLead: (l) => {
-    set((s) => ({ leads: [l, ...s.leads] }));
+    const stamped = { ...l, createdAt: l.createdAt ?? new Date().toISOString() };
+    set((s) => ({ leads: [stamped, ...s.leads] }));
     persist('leads', get().leads);
   },
   moveLeadStage: (id, stage) => {
-    set((s) => ({ leads: s.leads.map((l) => (l.id === id ? { ...l, stage } : l)) }));
+    set((s) => ({ leads: s.leads.map((l) => (l.id === id ? { ...l, stage, lastContactAt: new Date().toISOString() } : l)) }));
     persist('leads', get().leads);
   },
   updateLead: (id, patch) => {

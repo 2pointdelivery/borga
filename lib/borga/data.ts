@@ -1,5 +1,6 @@
 ﻿// Borga — core domain types and seed data.
 import { currencySymbol } from './currencies';
+import { withPersonaInstructions } from './agent-personas';
 
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
@@ -40,7 +41,7 @@ export type KpiDirection = 'higher' | 'lower';
 export interface Department {
   id: string;
   name: string;
-  kpis: { label: string; value: number; target: number; unit: string; delta: number; direction?: KpiDirection; benchmark?: string }[];
+  kpis: { label: string; value: number; target: number; unit: string; delta: number; direction?: KpiDirection; benchmark?: string; zeroTarget?: boolean }[];
 }
 
 export interface Task {
@@ -56,6 +57,8 @@ export interface Task {
   progress: number; // 0-100
   projectId?: string; // links this task to a Project
   customerId?: string; // links this task to a Customer account
+  /** Set when an agent created the task. Such tasks are never handed back to an agent automatically (that would loop). */
+  source?: 'agent';
 }
 
 export interface ActivityEvent {
@@ -111,6 +114,9 @@ export interface Lead {
   ownerId: string;
   priority: Priority;
   customerId?: string; // links this deal to a Customer account once converted/matched
+  /** When the lead was captured (ISO) and when someone last made contact (ISO). Drive the automatic follow-up. */
+  createdAt?: string;
+  lastContactAt?: string;
   crmId?: string; // id of this deal in the company CRM (Company Engine pull)
   /** Three-question need diagnosis asked when the lead is captured. All optional — a lead without answers simply shows none. */
   diagnosis?: {
@@ -577,7 +583,7 @@ const RAW_AGENTS: Agent[] = [
 // Seeded agents also carried model ids that exist in no provider's catalog (for example "nvidia/mixtral-8x22b"), which would fail
 // as soon as an NVIDIA key was saved. The raw model is dropped here — an empty model means "use the workspace
 // default", which is what a new agent should do.
-export const AGENTS: Agent[] = RAW_AGENTS.map((a) => withBrainDefaults({ ...a, model: undefined, tasksCompleted: 0, accuracy: 0 }));
+export const AGENTS: Agent[] = RAW_AGENTS.map((a) => withBrainDefaults(withPersonaInstructions({ ...a, model: undefined, tasksCompleted: 0, accuracy: 0 })));
 
 // Workspace-default model, brain-linked, orchestrated by the command center — a fresh department never becomes a disconnected leaf.
 export function withBrainDefaults(a: Omit<Agent, 'model' | 'brainLinked' | 'orchestratorId'> & Partial<Agent>): Agent & { model: string; brainLinked: true; orchestratorId: 'a-borga' } {
@@ -596,45 +602,45 @@ export const DEPARTMENTS: Department[] = [
       { label: 'Pipeline Coverage', value: 0, target: 300, unit: '%', delta: 0, direction: 'higher', benchmark: 'Aim for 3–4× pipeline-to-quota coverage.' },
       { label: 'Win Rate', value: 0, target: 30, unit: '%', delta: 0, direction: 'higher', benchmark: '20–30% is typical for B2B; 40%+ is strong.' },
       { label: 'Sales Cycle', value: 0, target: 30, unit: '', delta: 0, direction: 'lower', benchmark: 'Shorter is better — set to your target cycle in days.' },
-      { label: 'Avg Deal Size', value: 0, target: 0, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your average contract value target.' },
-      { label: 'Deals Closed', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your quota for the period.' },
+      { label: 'Avg Deal Size', value: 0, target: 5000, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your average contract value target. Starter target: adjust it to your own plan.' },
+      { label: 'Deals Closed', value: 0, target: 5, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your quota for the period. Starter target: adjust it to your own plan.' },
     ] },
   { id: 'marketing', name: 'Marketing', kpis: [
-      { label: 'MQLs', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your monthly qualified-lead goal.' },
+      { label: 'MQLs', value: 0, target: 100, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your monthly qualified-lead goal. Starter target: adjust it to your own plan.' },
       { label: 'Conv. Rate', value: 0, target: 3, unit: '%', delta: 0, direction: 'higher', benchmark: '2–5% landing-page conversion is typical.' },
-      { label: 'Reach', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your audience reach goal.' },
-      { label: 'CAC', value: 0, target: 0, unit: '$', delta: 0, direction: 'lower', benchmark: 'Keep LTV:CAC at 3:1 or better.' },
-      { label: 'Pipeline Influence', value: 0, target: 0, unit: '%', delta: 0, direction: 'higher', benchmark: 'Share of pipeline touched by marketing.' },
+      { label: 'Reach', value: 0, target: 10000, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your audience reach goal. Starter target: adjust it to your own plan.' },
+      { label: 'CAC', value: 0, target: 300, unit: '$', delta: 0, direction: 'lower', benchmark: 'Keep LTV:CAC at 3:1 or better. Starter target: adjust it to your own plan.' },
+      { label: 'Pipeline Influence', value: 0, target: 50, unit: '%', delta: 0, direction: 'higher', benchmark: 'Share of pipeline touched by marketing. Starter target: adjust it to your own plan.' },
     ] },
   { id: 'finance', name: 'Finance', kpis: [
-      { label: 'Revenue', value: 0, target: 0, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your period revenue plan.' },
-      { label: 'Burn Rate', value: 0, target: 0, unit: '$', delta: 0, direction: 'lower', benchmark: 'Net monthly cash burn — lower is better.' },
+      { label: 'Revenue', value: 0, target: 50000, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your period revenue plan. Starter target: adjust it to your own plan.' },
+      { label: 'Burn Rate', value: 0, target: 40000, unit: '$', delta: 0, direction: 'lower', benchmark: 'Net monthly cash burn — lower is better. Starter target: adjust it to your own plan.' },
       { label: 'Gross Margin', value: 0, target: 45, unit: '%', delta: 0, direction: 'higher', benchmark: 'Services 30–50%; SaaS best-in-class 70%+.' },
       { label: 'Runway', value: 0, target: 18, unit: '', delta: 0, direction: 'higher', benchmark: 'Keep at least 12–18 months of runway.' },
       { label: 'DPO', value: 0, target: 45, unit: '', delta: 0, direction: 'higher', benchmark: 'Pay suppliers later to protect cash — longer is better.' },
     ] },
   { id: 'support', name: 'Support', kpis: [
       { label: 'CSAT', value: 0, target: 4.8, unit: '', delta: 0, direction: 'higher', benchmark: '4.5+ out of 5 is a strong benchmark.' },
-      { label: 'Tickets Resolved', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your resolution volume goal.' },
+      { label: 'Tickets Resolved', value: 0, target: 100, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your resolution volume goal. Starter target: adjust it to your own plan.' },
       { label: 'SLA Met', value: 0, target: 98, unit: '%', delta: 0, direction: 'higher', benchmark: 'Target 95–99% SLA compliance.' },
       { label: 'FRT (min)', value: 0, target: 8, unit: '', delta: 0, direction: 'lower', benchmark: 'First response time — faster is better.' },
       { label: 'NPS', value: 0, target: 50, unit: '', delta: 0, direction: 'higher', benchmark: '50+ is excellent; 30+ is good.' },
     ] },
   { id: 'engineering', name: 'Engineering', kpis: [
       { label: 'Velocity', value: 0, target: 100, unit: '%', delta: 0, direction: 'higher', benchmark: 'Sprint commitment completed (aim ~100%).' },
-      { label: 'Deploys', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your deploy frequency goal.' },
+      { label: 'Deploys', value: 0, target: 20, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your deploy frequency goal. Starter target: adjust it to your own plan.' },
       { label: 'Bug Density', value: 0, target: 2.5, unit: '', delta: 0, direction: 'lower', benchmark: 'Lower defects per unit of work is better.' },
       { label: 'Uptime', value: 0, target: 99.95, unit: '%', delta: 0, direction: 'higher', benchmark: '99.9%+ ("three nines") is the usual floor.' },
       { label: 'Lead Time', value: 0, target: 3, unit: '', delta: 0, direction: 'lower', benchmark: 'Shorter time from commit to production.' },
     ] },
   { id: 'design', name: 'Design', kpis: [
       { label: 'Adoption', value: 0, target: 90, unit: '%', delta: 0, direction: 'higher', benchmark: 'Share of users on the current design system.' },
-      { label: 'Components', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your component coverage goal.' },
-      { label: 'Reviews', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your design-review throughput goal.' },
+      { label: 'Components', value: 0, target: 40, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your component coverage goal. Starter target: adjust it to your own plan.' },
+      { label: 'Reviews', value: 0, target: 10, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your design-review throughput goal. Starter target: adjust it to your own plan.' },
       { label: 'A11y Score', value: 0, target: 95, unit: '%', delta: 0, direction: 'higher', benchmark: 'Aim for WCAG 2.1 AA (90+).' },
     ] },
   { id: 'people', name: 'People (HR)', kpis: [
-      { label: 'Headcount', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your hiring plan.' },
+      { label: 'Headcount', value: 0, target: 10, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your hiring plan. Starter target: adjust it to your own plan.' },
       { label: 'eNPS', value: 0, target: 55, unit: '', delta: 0, direction: 'higher', benchmark: '30+ is good; 50+ is excellent.' },
       { label: 'Time-to-Hire', value: 0, target: 28, unit: '', delta: 0, direction: 'lower', benchmark: 'Shorter is better; ~30 days is a common target.' },
       { label: 'Attrition', value: 0, target: 8, unit: '%', delta: 0, direction: 'lower', benchmark: 'Keep annual attrition below ~10%.' },
@@ -643,33 +649,33 @@ export const DEPARTMENTS: Department[] = [
   { id: 'operations', name: 'Operations', kpis: [
       { label: 'On-Time', value: 0, target: 98, unit: '%', delta: 0, direction: 'higher', benchmark: '95%+ on-time delivery.' },
       { label: 'Utilization', value: 0, target: 80, unit: '%', delta: 0, direction: 'higher', benchmark: '70–85% is a healthy utilization band.' },
-      { label: 'Cost / Unit', value: 0, target: 0, unit: '$', delta: 0, direction: 'lower', benchmark: 'Lower unit cost is better — set your target.' },
-      { label: 'Backlog', value: 0, target: 0, unit: '', delta: 0, direction: 'lower', benchmark: 'Keep backlog within capacity — shorter is better.' },
+      { label: 'Cost / Unit', value: 0, target: 10, unit: '$', delta: 0, direction: 'lower', benchmark: 'Lower unit cost is better — set your target. Starter target: adjust it to your own plan.' },
+      { label: 'Backlog', value: 0, target: 10, unit: '', delta: 0, direction: 'lower', benchmark: 'Keep backlog within capacity — shorter is better. Starter target: adjust it to your own plan.' },
       { label: 'Quality', value: 0, target: 99.5, unit: '%', delta: 0, direction: 'higher', benchmark: 'First-pass yield / QA pass rate.' },
     ] },
   { id: 'product', name: 'Product', kpis: [
       { label: 'Activation', value: 0, target: 65, unit: '%', delta: 0, direction: 'higher', benchmark: '40–60%+ activation is typical for SaaS.' },
       { label: 'Retention', value: 0, target: 94, unit: '%', delta: 0, direction: 'higher', benchmark: 'Best-in-class annual retention is 90%+.' },
-      { label: 'Features Shipped', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your roadmap throughput goal.' },
+      { label: 'Features Shipped', value: 0, target: 4, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your roadmap throughput goal. Starter target: adjust it to your own plan.' },
       { label: 'Churn', value: 0, target: 2, unit: '%', delta: 0, direction: 'lower', benchmark: 'Keep monthly churn low (<2%).' },
     ] },
   { id: 'success', name: 'Customer Success', kpis: [
       { label: 'Renewal Rate', value: 0, target: 92, unit: '%', delta: 0, direction: 'higher', benchmark: '90%+ gross renewal is strong.' },
       { label: 'Expansion', value: 0, target: 30, unit: '%', delta: 0, direction: 'higher', benchmark: 'Net expansion of 20%+ offsets churn.' },
       { label: 'Health Score', value: 0, target: 80, unit: '', delta: 0, direction: 'higher', benchmark: 'Account health — higher is better.' },
-      { label: 'Touchpoints', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your engagement goal.' },
+      { label: 'Touchpoints', value: 0, target: 50, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your engagement goal. Starter target: adjust it to your own plan.' },
     ] },
   { id: 'security', name: 'Security & Compliance', kpis: [
-      { label: 'Critical Vulns', value: 0, target: 0, unit: '', delta: 0, direction: 'lower', benchmark: 'Zero critical vulnerabilities is the target.' },
+      { label: 'Critical Vulns', value: 0, target: 0, unit: '', delta: 0, direction: 'lower', zeroTarget: true, benchmark: 'Zero critical vulnerabilities is the target.' },
       { label: 'MTTR (hrs)', value: 0, target: 4, unit: '', delta: 0, direction: 'lower', benchmark: 'Faster mean-time-to-remediate is better.' },
       { label: 'Audit Pass', value: 0, target: 100, unit: '%', delta: 0, direction: 'higher', benchmark: 'Full audit pass rate.' },
       { label: 'Coverage', value: 0, target: 90, unit: '%', delta: 0, direction: 'higher', benchmark: 'Asset and monitoring coverage.' },
     ] },
   { id: 'strategy', name: 'Strategy & Exec', kpis: [
       { label: 'OKR Attain', value: 0, target: 80, unit: '%', delta: 0, direction: 'higher', benchmark: '70–80% attainment is a healthy stretch.' },
-      { label: 'Valuation', value: 0, target: 0, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your valuation goal.' },
-      { label: 'Market Share', value: 0, target: 0, unit: '%', delta: 0, direction: 'higher', benchmark: 'Set to your market-share goal.' },
-      { label: 'Innovation Index', value: 0, target: 0, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your innovation benchmark.' },
+      { label: 'Valuation', value: 0, target: 1000000, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your valuation goal. Starter target: adjust it to your own plan.' },
+      { label: 'Market Share', value: 0, target: 5, unit: '%', delta: 0, direction: 'higher', benchmark: 'Set to your market-share goal. Starter target: adjust it to your own plan.' },
+      { label: 'Innovation Index', value: 0, target: 70, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your innovation benchmark. Starter target: adjust it to your own plan.' },
     ] },
 ];
 
@@ -1532,6 +1538,8 @@ export interface KpiEntry {
   direction?: KpiDirection;
   /** Short best-practice note shown to the user. */
   benchmark?: string;
+  /** True when a target of exactly 0 is the goal itself (critical vulnerabilities), not a target that has not been set. */
+  zeroTarget?: boolean;
 }
 
 export interface KpiGroup {
@@ -1566,6 +1574,8 @@ export function kpiMeasured(k: KpiEntry): boolean {
  * better metric that has no target and a non-zero value).
  */
 export function kpiAttainment(k: KpiEntry): number | null {
+  // A KPI where zero is the goal (critical vulnerabilities) is met only by zero. Any other target of 0 just means "not set up".
+  if (k.zeroTarget && k.direction === 'lower' && k.target === 0 && kpiMeasured(k)) return k.value <= 0 ? 100 : 0;
   // Without a target there is nothing to score against, for either direction.
   if (k.target <= 0) return null;
   if (k.direction === 'lower') {
@@ -1573,6 +1583,44 @@ export function kpiAttainment(k: KpiEntry): number | null {
     return Math.min(100, Math.round((k.target / k.value) * 100));
   }
   return Math.min(100, Math.round((k.value / k.target) * 100));
+}
+
+/**
+ * A company's KPI set completed against the best-practice baseline. Departments and KPIs the company is missing are added with
+ * their baseline target, direction and note; a KPI that has no measurement and a target of 0 (never set up) gets the baseline
+ * target. Everything the company changed or added itself, and every measured value, is kept exactly as it is.
+ * `changed` says whether anything was added, so the caller knows to save it.
+ */
+export function completeKpiGroups(saved: KpiGroup[] | null | undefined): { groups: KpiGroup[]; changed: boolean } {
+  if (!Array.isArray(saved) || saved.length === 0) return { groups: INITIAL_KPI_GROUPS.map((g) => ({ ...g, kpis: g.kpis.map((k) => ({ ...k })) })), changed: true };
+  let changed = false;
+  const groups = saved.map((g) => ({ ...g, kpis: [...(g.kpis ?? [])] }));
+  for (const base of INITIAL_KPI_GROUPS) {
+    const g = groups.find((x) => x.id === base.id);
+    if (!g) {
+      groups.push({ ...base, kpis: base.kpis.map((k) => ({ ...k })) });
+      changed = true;
+      continue;
+    }
+    for (const bk of base.kpis) {
+      const i = g.kpis.findIndex((k) => k.label === bk.label);
+      if (i < 0) {
+        g.kpis.push({ ...bk });
+        changed = true;
+      } else {
+        const k = g.kpis[i];
+        const untouched = !k.target && !kpiMeasured(k);
+        if (untouched && bk.target) {
+          g.kpis[i] = { ...k, target: bk.target, direction: k.direction ?? bk.direction, benchmark: k.benchmark ?? bk.benchmark, unit: k.unit || bk.unit };
+          changed = true;
+        } else if ((!k.benchmark && bk.benchmark) || (bk.zeroTarget && !k.zeroTarget)) {
+          g.kpis[i] = { ...k, benchmark: k.benchmark ?? bk.benchmark, direction: k.direction ?? bk.direction, zeroTarget: k.zeroTarget ?? bk.zeroTarget };
+          changed = true;
+        }
+      }
+    }
+  }
+  return { groups, changed };
 }
 
 export interface KpiOverride {
@@ -1610,7 +1658,11 @@ export function deriveKpiOverrides(state: {
   set('finance', 'Burn Rate', Math.round(burn), '$');
   if (revenue > 0) set('finance', 'Gross Margin', Math.round(((revenue - burn) / Math.max(1, revenue)) * 100), '%');
 
-  set('sales', 'Deals Closed', leads.filter((l) => l.stage === 'won').length, '');
+  const won = leads.filter((l) => l.stage === 'won');
+  const lost = leads.filter((l) => l.stage === 'lost');
+  set('sales', 'Deals Closed', won.length, '');
+  if (won.length + lost.length > 0) set('sales', 'Win Rate', Math.round((won.length / (won.length + lost.length)) * 100), '%');
+  if (won.length > 0) set('sales', 'Avg Deal Size', Math.round(won.reduce((sum, l) => sum + (l.value || 0), 0) / won.length), '$');
 
   set('people', 'Headcount', emps.filter((e) => e.status !== 'offboarded').length, '');
 
@@ -1908,6 +1960,8 @@ export interface NotificationPrefs {
 
 export interface SettingsState {
   notifications: NotificationPrefs;
+  /** Which events are handed to an agent automatically. Each defaults to on. */
+  automations?: { ticketTriage?: boolean; leadFollowUp?: boolean; overdueInvoices?: boolean; agentTasks?: boolean };
   crmUrl: string; // per-company engine / CRM endpoint
   engineApiKey?: string; // legacy: replaced by the encrypted Company Engine connection
   /** Pull customers and deals from the Company Engine automatically while the dashboard is open. */
@@ -2050,7 +2104,7 @@ export interface AgentRun {
   startedAt: string;
   completedAt?: string;
   summary?: string;
-  triggeredBy: 'user' | 'scheduler' | 'webhook' | 'handoff';
+  triggeredBy: 'user' | 'scheduler' | 'webhook' | 'handoff' | 'automation';
 }
 
 // ---------------------------------------------------------------------------

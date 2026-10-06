@@ -205,7 +205,7 @@ export async function createTicket(
   u: string,
   ws: string,
   raw: CreateTicketInput,
-  ctx: { source: TicketSource; actor: string; messageId?: string; extraComments?: TicketComment[] },
+  ctx: { source: TicketSource; actor: string; messageId?: string; extraComments?: TicketComment[]; fromAgent?: boolean },
 ): Promise<Ticket> {
   const input = createInputSchema.parse(raw);
   const settings = await loadSettings(u, ws);
@@ -247,6 +247,8 @@ export async function createTicket(
       const latest = await loadSettings(u, ws);
       if (latest.nextNumber <= n) await setBorgaState(settingsKey(u, ws), { ...latest, nextNumber: n + 1 });
       if (ctx.messageId) await setBorgaState(midKey(u, ws, ctx.messageId), { ticketId: id });
+      // Hand it to the support agent. Not for tickets an agent opened itself (that would loop), and never allowed to delay or fail creation.
+      if (!ctx.fromAgent) void import('./automations').then((m) => m.onTicketCreated(u, ws, ticket)).catch((e) => console.error('[automation] ticket hand-off failed', e));
       return ticket;
     }
   }

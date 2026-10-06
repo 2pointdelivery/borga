@@ -103,6 +103,16 @@ export async function executeAgentRun(
   let summary = '';
   let stopped = false;
 
+  // An automatic hand-off is a specific job (triage this ticket, chase this invoice). The canned keyword plan below knows nothing
+  // about it and would report success for unrelated work, so without a model it fails plainly instead.
+  if (!provider && triggeredBy === 'automation') {
+    run.status = 'error';
+    run.summary = 'No AI model is available for this company, so this was not done. Choose one under Integrations → AI & Voice, then it will be picked up again.';
+    push({ type: 'summary', content: run.summary, at: new Date().toISOString() });
+    run.completedAt = new Date().toISOString();
+    return run;
+  }
+
   if (!provider) {
     const plan = planFromGoal(goal);
     for (const step of plan.slice(0, maxSteps)) {
@@ -121,6 +131,7 @@ export async function executeAgentRun(
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `Execute this goal fully using the available tools.\n\nGoal: ${goal}` },
     ];
+    let nudges = 0;
     for (let i = 0; i < maxSteps; i++) {
       if (await stopRequested()) { stopped = true; break; }
       stepCount = i + 1;
@@ -131,7 +142,15 @@ export async function executeAgentRun(
         const thought = llmResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').replace(/SUMMARY:[\s\S]*/g, '').trim();
         if (thought) push({ type: 'thought', content: thought.slice(0, 1000), at: new Date().toISOString() });
         const toolCalls = parseToolCalls(llmResponse);
-        if (!toolCalls.length) break;
+        if (!toolCalls.length) {
+          // Some models announce what they will do and stop. Ask twice for the actual call (or a SUMMARY) before giving up on the run.
+          if (!summaryMatch && nudges < 2) {
+            nudges++;
+            messages = [...messages, { role: 'assistant', content: llmResponse }, { role: 'user', content: 'You described a plan but did not act. Call a tool now, exactly as <tool_call>{"tool":"name","params":{...}}</tool_call>, or finish with SUMMARY: if there is nothing left to do.' }];
+            continue;
+          }
+          break;
+        }
         const toolResults: string[] = [];
         for (const tc of toolCalls) {
           if (await stopRequested()) { stopped = true; break; }
@@ -143,12 +162,19 @@ export async function executeAgentRun(
         }
         if (stopped) break;
         messages = [...messages, { role: 'assistant', content: llmResponse }, { role: 'user', content: `Tool results:\n${toolResults.join('\n\n')}\n\nContinue or write SUMMARY: if done.` }];
-      } catch {
-        run.status = 'error'; break;
+      } catch (e) {
+        run.status = 'error';
+        summary = `The AI model could not be reached: ${(e as Error).message}`.slice(0, 300);
+        break;
       }
     }
   }
 
+  if (provider && !stopped && run.status !== 'error' && !run.steps.length && !summary) {
+    // a model that answers with nothing is a failed run, not a finished one
+    run.status = 'error';
+    summary = 'The AI model returned no usable answer. Try again, or pick another model under Integrations → AI & Voice.';
+  }
   if (stopped) run.status = 'stopped';
   else if (run.status !== 'error') run.status = 'complete';
   if (!summary) summary = stopped

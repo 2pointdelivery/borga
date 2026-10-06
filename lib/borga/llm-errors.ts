@@ -39,6 +39,9 @@ export function friendlyLlmError(providerLabel: string, status: number, bodyText
   if (status === 429) {
     return `${providerLabel} is rate limiting requests right now${detail ? ` (${detail})` : ''}. Wait a minute and try again, or add a free API key ${where}.`;
   }
+  if (status === 402) {
+    return `${providerLabel} now asks for an API key or payment before it will answer (402). Add a key, or pick another model ${where}. OpenRouter and Groq both have free tiers.`;
+  }
   if (status === 401 || status === 403) {
     return `${providerLabel} refused the request (${status}). Check the API key ${where}.${detail ? ` Upstream said: ${detail}` : ''}`;
   }
