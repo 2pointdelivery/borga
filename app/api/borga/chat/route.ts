@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { paymentRequired } from '@/lib/borga/billing-server';
+import { fetchPublic } from '@/lib/borga/safe-url';
+import { friendlyLlmError } from '@/lib/borga/llm-errors';
 import { getBorgaState, scopedKey } from '@/lib/borga/persistence';
 import { resolveProviderConfig, resolveApiKey } from '@/lib/borga/llm-providers';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
@@ -77,19 +79,13 @@ export async function POST(req: NextRequest) {
 
   const lastUserText = (body.messages ?? []).filter((m) => m.role === 'user').at(-1)?.content ?? '';
 
-  // --- Muse (local CLI) ---
-  // Runs on the user's own machine. Without a configured local address there
-  // is nothing to call, so the reply says how to install it instead of failing.
+  // --- Muse (remote API) ---
+  // An OpenAI-compatible endpoint reached over the internet with an optional bearer key. The address must be https and public
+  // (fetchPublic refuses internal hosts and re-checks every redirect), because a server that fetches an address from a setting
+  // must never be pointed at the internal network.
   if (providerId === 'llm-muse') {
-    let museHost = '';
-    try {
-      museHost = baseUrl ? new URL(baseUrl).hostname : '';
-    } catch {
-      museHost = '';
-    }
-    const museLocal = museHost === 'localhost' || museHost === '127.0.0.1' || museHost === '::1' || museHost.endsWith('.local');
-    if (!baseUrl || !museLocal) {
-      return NextResponse.json({ reply: 'Muse runs on your own computer via the Muse CLI. Install it first: /bin/bash -c "$(curl -fsSL https://dev.meta.ai/cli/install-opencode.sh)", then set its local address under Integrations → AI & Voice.' }, { status: 200 });
+    if (!baseUrl) {
+      return NextResponse.json({ reply: 'Muse is not set up yet. Add its remote base URL (https://…/v1) and API key under Integrations → AI & Voice.' }, { status: 200 });
     }
 
     if (kb.length) {
@@ -98,24 +94,26 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const upstream = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      const upstream = await fetchPublic(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
         body: JSON.stringify({ model, messages, max_tokens: 512, temperature: 0.6 }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(45000),
       });
       if (!upstream.ok) {
-        return NextResponse.json({
-          reply: 'Muse returned an error — is the CLI serving its local endpoint at the configured address?'
-        }, { status: 502 });
+        const text = await upstream.text().catch(() => '');
+        return NextResponse.json({ reply: friendlyLlmError('Muse', upstream.status, text), error: 'MUSE_ERROR' }, { status: 502 });
       }
       const data = (await upstream.json()) as { choices?: { message?: { content?: string } }[] };
       return NextResponse.json({ reply: data.choices?.[0]?.message?.content?.trim() ?? 'Borga received no answer.' }, { status: 200 });
-    } catch {
-      // Muse not reachable → plain guidance, no stack trace
+    } catch (err) {
+      const why = (err as Error).message || '';
+      const blocked = /https|private|internal|credentials|redirect/i.test(why);
       return NextResponse.json({
-        reply: 'Muse is not reachable at its configured local address. Install the CLI: /bin/bash -c "$(curl -fsSL https://dev.meta.ai/cli/install-opencode.sh)", then set its local address under Integrations → AI & Voice.',
-        error: 'MUSE_UNREACHABLE'
+        reply: blocked
+          ? `Muse's address was refused: ${why} Use a public https address under Integrations → AI & Voice.`
+          : 'Muse could not be reached. Check its base URL and API key under Integrations → AI & Voice.',
+        error: 'MUSE_UNREACHABLE',
       }, { status: 502 });
     }
   }

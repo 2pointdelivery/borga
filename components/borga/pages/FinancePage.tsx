@@ -26,6 +26,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
   const closures = useFeature('bookClosure');
   const assetsOn = useFeature('fixedAssets');
   const filingOn = useFeature('filings');
+  const budgeting = useFeature('budgeting');
   return (
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>
@@ -35,7 +36,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
         {banking && <TabsTrigger value="banking">Banking</TabsTrigger>}
         <TabsTrigger value="vendors">Vendors &amp; AP</TabsTrigger>
         <TabsTrigger value="tax">Tax</TabsTrigger>
-        <TabsTrigger value="budgeting">Budgeting</TabsTrigger>
+        {budgeting && <TabsTrigger value="budgeting">Budgeting</TabsTrigger>}
         {revenue && <TabsTrigger value="revenue">Revenue Tracker</TabsTrigger>}
         <TabsTrigger value="reports">Reports</TabsTrigger>
         {closures && <TabsTrigger value="closures">Book Closure</TabsTrigger>}
@@ -56,7 +57,7 @@ export function FinancePage({ initialTab }: { initialTab?: string }) {
         </Tabs>
       </TabsContent>
       <TabsContent value="tax"><TaxTab /></TabsContent>
-      <TabsContent value="budgeting"><BudgetTab /></TabsContent>
+      {budgeting && <TabsContent value="budgeting"><BudgetTab /></TabsContent>}
       {revenue && <TabsContent value="revenue"><RevenueTrackerTab /></TabsContent>}
       <TabsContent value="reports"><ReportsCenter /></TabsContent>
       {closures && <TabsContent value="closures"><BookClosureTab /></TabsContent>}

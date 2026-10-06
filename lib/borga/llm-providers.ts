@@ -13,6 +13,8 @@ export interface ProviderConfig {
   envVar: string;
   /** For providers that need no account but still expect some bearer value (LLM7 accepts a placeholder). */
   anonymousKey?: string;
+  /** The key is sent when one is saved, but the provider also works without it (a remote endpoint that is open or IP-restricted). */
+  optionalKey?: boolean;
 }
 
 /**
@@ -20,7 +22,8 @@ export interface ProviderConfig {
  * provider in its DB-backed `llmCatalog`. Mirrors the seed in `lib/borga/data`.
  */
 export const DEFAULT_PROVIDER_CONFIG: Record<string, ProviderConfig> = {
-  'llm-muse': { baseUrl: realEnv('MUSE_BASE_URL') || '', envVar: '' },
+  // Remote Muse: an https OpenAI-compatible endpoint, with an API key when it asks for one.
+  'llm-muse': { baseUrl: realEnv('MUSE_BASE_URL') || '', envVar: 'MUSE_API_KEY', optionalKey: true },
   'llm-groq': { baseUrl: 'https://api.groq.com/openai/v1', envVar: 'GROQ_API_KEY' },
   'llm-gemini': { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', envVar: 'GEMINI_API_KEY' },
   'llm-claude': { baseUrl: 'https://api.anthropic.com/v1', envVar: 'ANTHROPIC_API_KEY' },
@@ -76,6 +79,7 @@ export async function resolveProviderConfig(
           baseUrl: savedUrl || fixGeminiUrl(providerId, entry.baseUrl && entry.baseUrl.length > 0 ? entry.baseUrl : fallback.baseUrl),
           envVar: keyless ? '' : entry.envVar && entry.envVar.length > 0 ? entry.envVar : fallback.envVar,
           anonymousKey: fallback.anonymousKey,
+          optionalKey: fallback.optionalKey,
         };
       }
     }

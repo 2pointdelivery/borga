@@ -51,7 +51,16 @@ export const FEATURES = [
   { id: 'agents', label: 'AI agents & runner', description: 'Agent fleet, runner and planner.', status: 'beta', defaultOn: true, page: 'ai', group: 'AI & automation' },
   { id: 'heartbeat', label: 'Always-on heartbeat', description: 'Scheduled agent checks and the /api/borga/cron endpoint.', status: 'beta', defaultOn: true, group: 'AI & automation' },
   { id: 'mcp', label: 'MCP servers', description: 'Generic MCP server connections with OAuth.', status: 'beta', defaultOn: true, group: 'Platform' },
-  { id: 'composio', label: 'Composio toolkits', description: 'Third-party app toolkits via Composio.', status: 'beta', defaultOn: true, group: 'Platform' },
+  { id: 'composio', label: 'Composio toolkits', description: 'Third-party app toolkits via Composio.', status: 'beta', defaultOn: true, page: 'integrations', tab: 'toolkits', group: 'Platform' },
+  { id: 'inbox', label: 'Unified inbox', description: 'One inbox for email, WhatsApp and other channels, with AI-drafted replies.', status: 'beta', defaultOn: true, page: 'communications', tab: 'inbox', group: 'Communications' },
+  { id: 'budgeting', label: 'Budgeting', description: 'Budgets by account and period, tracked against actuals.', status: 'beta', defaultOn: true, page: 'finance', tab: 'budgeting', group: 'Finance' },
+  { id: 'hr', label: 'HR (directory, time off, teams)', description: 'Employee directory, leave requests, team invites, teams and the organogram.', status: 'beta', defaultOn: true, page: 'hr', group: 'Company' },
+  { id: 'kpis', label: 'KPI scorecard', description: 'Best-practice KPIs by department, scored against targets, with values filled from your own data.', status: 'beta', defaultOn: true, page: 'overview', tab: 'kpis', group: 'Company' },
+  { id: 'analytics', label: 'Analytics', description: 'Charts and trends across sales, finance and operations.', status: 'beta', defaultOn: true, page: 'overview', tab: 'analytics', group: 'Company' },
+  { id: 'developers', label: 'Developer tools (API keys, webhooks)', description: 'Public API keys, outgoing webhooks and the feature-request board.', status: 'beta', defaultOn: true, page: 'developers', group: 'Platform' },
+  { id: 'automations', label: 'Automatic delegation', description: 'New tickets, stale leads, overdue invoices and agent-assigned tasks are handed to the agent that owns them. Each can also be switched under AI Platform.', status: 'beta', defaultOn: true, group: 'AI & automation' },
+  { id: 'advisor', label: 'Advisor bubble', description: 'The floating assistant that suggests what to look at on each page.', status: 'beta', defaultOn: true, group: 'AI & automation' },
+  { id: 'widgets', label: 'Dashboard widgets', description: 'The side column with project progress, support tickets, calendar, AI assistant and plan.', status: 'stable', defaultOn: true, group: 'Platform' },
   { id: 'whatsapp', label: 'WhatsApp', description: 'WhatsApp Business messaging.', status: 'experimental', defaultOn: false, group: 'Communications' },
 ] as const satisfies readonly FeatureDef[];
 

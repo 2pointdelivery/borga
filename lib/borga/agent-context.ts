@@ -16,6 +16,7 @@ import type {
 import type { FilingsState } from './filing-catalog';
 import type { InventoryItem, StockMovement } from './inventory';
 import { AGENTS, DEFAULT_LLM, completeKpiGroups, KNOWLEDGE_SEED, INITIAL_TASKS, INITIAL_LEADS, LLM_PROVIDERS, RETIRED_LLM_PROVIDERS, kpiAttainment, kpiMeasured, type LlmProvider } from './data';
+import { assertPublicUrl } from './safe-url';
 import { friendlyLlmError, isRetryableLlmStatus, LLM_MAX_ATTEMPTS, llmRetryDelayMs } from './llm-errors';
 import { effectiveInstructions } from './agent-personas';
 import { deriveBusinessInsights } from './insights';
@@ -355,7 +356,7 @@ async function buildLlm(providerId: string, model: string, ws?: string | null, u
   const cfg = await resolveProviderConfig(providerId, ws, userId);
   const apiKey = await resolveApiKey(cfg);
   if (!cfg.baseUrl) return null;
-  if (cfg.envVar && !apiKey) return null; // key required but not set
+  if (cfg.envVar && !apiKey && !cfg.optionalKey) return null; // key required but not set
   return { providerId, model, apiKey, baseUrl: cfg.baseUrl };
 }
 
@@ -401,6 +402,10 @@ export async function callLlm(
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
   const label = LLM_PROVIDERS.find((p) => p.id === providerId)?.label ?? providerId.replace(/^llm-/, '');
+  // The Muse address comes from a setting and is fetched from this server: https and public only, never the internal network.
+  if (providerId === 'llm-muse') {
+    try { await assertPublicUrl(baseUrl); } catch (e) { throw new Error(`Muse's address was refused: ${(e as Error).message} Use a public https address under Integrations → AI & Voice.`); }
+  }
 
   /**
    * POST with retries on transient upstream failures. Community providers

@@ -1,19 +1,17 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { sessionUserId } from '@/lib/borga/features-server';
-import { DEFAULT_PROVIDER_CONFIG, resolveProviderConfig } from '@/lib/borga/llm-providers';
+import { DEFAULT_PROVIDER_CONFIG, resolveApiKey, resolveProviderConfig } from '@/lib/borga/llm-providers';
 import { getApiKey } from '@/lib/borga/secrets';
 import { fetchPublic, readTextCapped } from '@/lib/borga/safe-url';
 import { FREE_LLM_PROVIDERS, parseModelList, presetFor } from '@/lib/borga/model-catalog';
 
 export const runtime = 'nodejs';
 
-const isLocalHost = (host: string) => host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' || host.endsWith('.local');
-
 /**
  * POST { providerId, freeOnly? } -> the provider's live model list, reduced to chat models and classified free / credits / paid.
  *
  * Public lists (OpenRouter, NVIDIA, SambaNova, Pollinations, LLM7) load with no key. Lists that need a key (Groq, Gemini, Cerebras,
- * Mistral) answer { needsKey: true } until one is saved. Muse is read from the local CLI server.
+ * Mistral) answer { needsKey: true } until one is saved. Muse is read from its remote API (https base URL plus optional key).
  *
  * The request goes to the provider's built-in base URL only, never to a URL taken from the workspace catalog: the catalog is
  * editable, and a saved API key must never be sent to an address a user typed.
@@ -32,24 +30,16 @@ export async function POST(req: NextRequest) {
 
   try {
     let res: Response;
-    if (preset.local) {
-      // Muse runs on the user's own machine, so the public-URL guard (which blocks private addresses) does not apply; the same
-      // localhost-only rule as the chat route does.
-      const base = (await resolveProviderConfig(providerId, null, userId)).baseUrl;
-      if (!base) {
-        return NextResponse.json({ ok: false, error: `${preset.label} runs on your own computer via the Muse CLI. Install it first: /bin/bash -c "$(curl -fsSL https://dev.meta.ai/cli/install-opencode.sh)", then set its local address under Integrations → AI & Voice.` });
+    if (providerId === 'llm-muse') {
+      // Muse is a remote API at the address saved under Integrations (never one from the editable catalog), read with the saved key.
+      const cfg = await resolveProviderConfig(providerId, null, userId);
+      if (!cfg.baseUrl) {
+        return NextResponse.json({ ok: false, error: 'Muse has no address yet. Add its remote base URL (https://…/v1) and API key under Integrations → AI & Voice.' });
       }
-      let host: string;
-      try {
-        host = new URL(base).hostname;
-      } catch {
-        return NextResponse.json({ ok: false, error: 'The Muse address is not a valid URL.' });
-      }
-      if (!isLocalHost(host)) {
-        return NextResponse.json({ ok: false, error: 'Muse must be on this computer (localhost). Change its address under Integrations if it is elsewhere on your network.' });
-      }
-      res = await fetch(`${base.replace(/\/$/, '')}/models`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) }).catch(() => {
-        throw new Error('Could not reach Muse. Is the CLI serving its local endpoint?');
+      const apiKey = await resolveApiKey(cfg).catch(() => '');
+      res = await fetchPublic(`${cfg.baseUrl.replace(/\/$/, '')}/models`, {
+        headers: { Accept: 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        signal: AbortSignal.timeout(15_000),
       });
     } else {
       const cfg = DEFAULT_PROVIDER_CONFIG[providerId];

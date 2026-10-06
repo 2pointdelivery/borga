@@ -461,8 +461,8 @@ export function CommandCenter() {
               let label = ok ? 'API key configured' : 'No key — add in Integrations → AI & Voice';
               const color = ok ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30' : 'bg-amber-500/10 text-amber-600 ring-amber-500/30';
               const dot = ok ? 'bg-emerald-500' : 'bg-amber-500';
-              if (active === 'llm-muse' && ok) { label = 'Muse CLI endpoint configured'; }
-              if (active === 'llm-muse' && !ok) { label = 'Muse CLI not set up — install it, then set its local address'; }
+              if (active === 'llm-muse' && ok) { label = 'Muse remote API configured'; }
+              if (active === 'llm-muse' && !ok) { label = 'Muse not set up — add its remote base URL and key in Integrations → AI & Voice'; }
               return (
                 <span className={`flex items-center gap-1.5 rounded-full px-2 py-1 font-medium ring-1 ${color}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />

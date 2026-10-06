@@ -1035,8 +1035,8 @@ export interface LlmProvider {
 export const LLM_PROVIDERS: LlmProvider[] = [
   {
     id: 'llm-muse', label: 'Muse', baseUrl: '', accent: '#7C3AED', connectionId: 'cn-muse',
-    envVar: '',
-    freeTierNote: 'Runs on your hardware via the Muse CLI — install it first',
+    envVar: 'MUSE_API_KEY',
+    freeTierNote: 'Remote Muse API — set its https base URL and API key',
     models: [
       { id: 'muse', label: 'Muse', tier: 'free', tag: 'coding' },
     ],
@@ -1243,7 +1243,7 @@ export const INITIAL_CONNECTIONS: AppConnection[] = [
   { id: 'cn-hubspot', type: 'tool', provider: 'hubspot', label: 'HubSpot', status: 'off', account: '', scopes: 'contacts, deals, tickets', lastSync: '…' },
   { id: 'cn-stripe', type: 'tool', provider: 'stripe', label: 'Stripe', status: 'off', account: '', scopes: 'invoices, payments', lastSync: '…' },
   { id: 'cn-drive', type: 'tool', provider: 'google-drive', label: 'Google Drive', status: 'off', account: '', scopes: 'read, search', lastSync: '…' },
-  { id: 'cn-muse', type: 'llm', provider: 'muse', label: 'Muse', status: 'off', account: '', scopes: 'chat completions — local CLI', lastSync: '…' },
+  { id: 'cn-muse', type: 'llm', provider: 'muse', label: 'Muse', status: 'off', account: '', scopes: 'chat completions — remote API', lastSync: '…' },
   { id: 'cn-groq', type: 'llm', provider: 'groq', label: 'Groq', status: 'off', account: '', scopes: 'chat completions — free tier', lastSync: '…' },
   { id: 'cn-nvidia', type: 'llm', provider: 'nvidia', label: 'NVIDIA NIM', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },
   { id: 'cn-gemini', type: 'llm', provider: 'gemini', label: 'Google Gemini', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },

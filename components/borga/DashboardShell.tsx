@@ -116,6 +116,8 @@ function ShellInner() {
     return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
   }, [dataReady, activeWorkspaceId, runRecurringInvoices, runRecurringBills]);
   const voiceEnabled = useFeatures((s) => s.flags.voice);
+  const widgetsEnabled = useFeatures((s) => s.flags.widgets);
+  const advisorEnabled = useFeatures((s) => s.flags.advisor);
   const loadFeatures = useFeatures((s) => s.load);
   const greeted = useRef(false);
 
@@ -313,7 +315,7 @@ function ShellInner() {
           })}
         </nav>
         <div className="space-y-3 px-3 pb-3 2xl:hidden">
-          <CalendarWidget />
+          {widgetsEnabled && <CalendarWidget />}
         </div>
         <div className="border-t p-4 text-xs text-sidebar-foreground/60">
           <div className="flex items-center gap-2">
@@ -417,7 +419,7 @@ function ShellInner() {
             )}
           </div>
         </main>
-        <RightRail />
+        {widgetsEnabled && <RightRail />}
         </div>
         <StatusBar />
       </div>
@@ -456,7 +458,7 @@ function ShellInner() {
       )}
 
       <CommandPalette onOpenVoice={() => setVoiceOpen(true)} />
-      <AdvisoryWidget page={route.page} tab={route.tab} />
+      {advisorEnabled && <AdvisoryWidget page={route.page} tab={route.tab} />}
     </div>
   );
 }

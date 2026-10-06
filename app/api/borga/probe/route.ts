@@ -1,4 +1,6 @@
+import { isIP } from 'node:net';
 import { NextResponse, type NextRequest } from 'next/server';
+import { isPrivateIp } from '@/lib/borga/safe-url';
 import { getApiKey } from '@/lib/borga/secrets';
 import { DEFAULT_PROVIDER_CONFIG, resolveProviderConfig } from '@/lib/borga/llm-providers';
 import { sessionUserId } from '@/lib/borga/features-server';
@@ -9,12 +11,14 @@ export const runtime = 'nodejs';
 const PLACEHOLDER_URLS = ['example', 'placeholder', ''];
 const PLACEHOLDER_KEYS = ['xxx', 'placeholder', 'your-key', ''];
 
-/** A Muse base URL counts only when it is set and points at this machine (same localhost rule as chat). */
+/** A Muse base URL counts only when it is a remote https address (the chat route refuses anything internal, so it would never work). */
 function museConfigured(baseUrl: string): boolean {
   try {
     const u = new URL(baseUrl);
-    const host = u.hostname;
-    return (u.protocol === 'http:' || u.protocol === 'https:') && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local'));
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    if (u.protocol !== 'https:' || u.username || u.password) return false;
+    if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return false;
+    return !(isIP(host) && isPrivateIp(host));
   } catch {
     return false;
   }

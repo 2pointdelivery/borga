@@ -125,12 +125,11 @@ export function AiStep({ onChosen }: { onChosen: () => void }) {
     void fetch('/api/borga/config', { cache: 'no-store' }).then((r) => r.json()).then((j: { keys?: KeyStatus[] }) => setKeys(j.keys ?? [])).catch(() => setKeys([]));
   }, []);
 
-  // Keyless providers are ready immediately; keyed ones need their key. Local
-  // CLI providers (Muse) are only ready once their endpoint exists — either a
-  // base URL edited into the catalog or the configured MUSE_BASE_URL.
+  // Keyless providers are ready immediately; keyed ones need their key. Muse is a
+  // remote API: ready once its https base URL is saved (its key is optional).
   const ready = useMemo(() => llmCatalog.filter((p) => {
     const preset = presetFor(p.id);
-    if (preset?.local) return !!p.baseUrl || !!keys?.some((k) => k.envVar === 'MUSE_BASE_URL' && k.configured);
+    if (p.id === 'llm-muse') return !!keys?.some((k) => k.envVar === 'MUSE_BASE_URL' && k.configured);
     return preset?.keyless || (p.envVar && keys?.some((k) => k.envVar === p.envVar && k.configured));
   }), [llmCatalog, keys]);
   const needKey = llmCatalog.filter((p) => !ready.includes(p));

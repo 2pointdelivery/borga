@@ -45,3 +45,17 @@ test('every feature has a known group, a unique id, and newer modules are switch
   assert.deepEqual([flags.fixedAssets, flags.filings, flags.companyEngine, flags.bankFeeds], [false, false, false, false]);
   assert.equal(resolveFeatures(null).flags.bankFeeds, true);
 });
+
+test('optional modules can be switched off from Settings, and their nav entries follow', () => {
+  assert.equal(featureForTab('communications', 'inbox'), 'inbox');
+  assert.equal(featureForTab('finance', 'budgeting'), 'budgeting');
+  assert.equal(featureForTab('overview', 'kpis'), 'kpis');
+  assert.equal(featureForTab('overview', 'analytics'), 'analytics');
+  assert.equal(featureForTab('integrations', 'toolkits'), 'composio');
+  assert.equal(featureForTab('hr'), 'hr');
+  assert.equal(featureForTab('developers'), 'developers');
+  assert.equal(featureForTab('overview', 'command'), null, 'the Command Center is not optional');
+  const { flags } = resolveFeatures({ hr: false, kpis: false, automations: false, widgets: false });
+  assert.deepEqual([flags.hr, flags.kpis, flags.automations, flags.widgets], [false, false, false, false]);
+  for (const id of ['inbox', 'budgeting', 'hr', 'kpis', 'analytics', 'developers', 'automations', 'advisor', 'widgets'] as const) assert.equal(resolveFeatures(null).flags[id], true, `${id} is on by default`);
+});

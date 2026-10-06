@@ -36,7 +36,7 @@ const COMMUNITY_WARNING = 'Community-run free service with no account: your prom
 export const FREE_LLM_PROVIDERS: FreeProviderPreset[] = [
   { id: 'llm-pollinations', label: 'Pollinations', signupUrl: 'https://pollinations.ai', free: 'all', keyOptional: true, keyless: true, warning: COMMUNITY_WARNING, note: 'No key needed. Anonymous tier, rate limited' },
   { id: 'llm-llm7', label: 'LLM7', signupUrl: 'https://llm7.io', free: 'flagged', keyOptional: true, keyless: true, warning: COMMUNITY_WARNING, note: 'No key needed for the models marked free; the rest need an account' },
-  { id: 'llm-muse', label: 'Muse', free: 'all', keyOptional: true, keyless: true, local: true, note: 'Runs on your own computer via the Muse CLI: free and private. Install it first: /bin/bash -c "$(curl -fsSL https://dev.meta.ai/cli/install-opencode.sh)"' },
+  { id: 'llm-muse', label: 'Muse', free: 'all', keyOptional: true, note: 'Remote Muse API: set its https base URL and API key under Integrations → AI & Voice, then load its models' },
   { id: 'llm-openrouter', label: 'OpenRouter', signupUrl: 'https://openrouter.ai/keys', free: 'priced', keyOptional: true, note: 'List is public; only models priced at zero (":free") are free. A free key is needed to chat' },
   { id: 'llm-nvidia', label: 'NVIDIA NIM', signupUrl: 'https://build.nvidia.com', free: 'credits', keyOptional: true, note: 'List is public; a free key with starter credits is needed to chat' },
   { id: 'llm-sambanova', label: 'SambaNova', signupUrl: 'https://cloud.sambanova.ai', free: 'all', keyOptional: true, note: 'List is public; a free key is needed to chat. Rate limited' },

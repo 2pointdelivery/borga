@@ -1,7 +1,7 @@
 import 'server-only';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { sessionUserId } from './features-server';
+import { featureGate, sessionUserId } from './features-server';
 import { parseBearerSecret, touchApiKey, verifyApiKey, type ApiKeyRecord } from './api-keys-server';
 import { wsAllowed } from './api-keys';
 
@@ -38,5 +38,8 @@ export async function guardV1(req: NextRequest): Promise<{ auth: V1Auth; ws: str
   }
   const ws = wsAllowed(new URL(req.url).searchParams.get('ws'), auth.key?.wsIds);
   if (!ws) return { res: NextResponse.json({ ok: false, error: "a valid ?ws= workspace id is required (and must be inside this key's scope)" }, { status: 400 }) };
+  // The public API is part of Developer tools: a company that switched them off (Settings → Features) is not reachable through it.
+  const off = await featureGate('developers', auth.userId, ws);
+  if (off) return { res: off };
   return { auth, ws };
 }

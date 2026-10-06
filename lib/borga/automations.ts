@@ -4,6 +4,7 @@ import { userWsKey } from './keys';
 import { enqueueRun, getJob } from './run-queue';
 import { loadSettings } from './heartbeat-settings';
 import { paymentRequired } from './billing-server';
+import { loadFeatures } from './features-server';
 import { AGENTS, type Agent, type Invoice, type Lead, type Task } from './data';
 import {
   MAX_RUNS_PER_SCAN, TICKET_FRESH_MS, agentTasks, invoiceGoal, leadGoal, normalizeLedger, overdueInvoices, pruneLedger,
@@ -37,6 +38,7 @@ async function context(u: string, ws: string) {
   const settings = await loadSettings(ws, u);
   if (settings?.heartbeatPaused === true) return { off: 'paused' } as const;
   if (await paymentRequired(u, ws).catch(() => null)) return { off: 'subscription needed' } as const;
+  if (!(await loadFeatures(u, ws)).flags.automations) return { off: 'turned off in Settings → Features' } as const;
   const agents = (await stateOf<Agent[]>(u, ws, 'agents')) ?? AGENTS;
   return { automations: resolveAutomations(settings?.automations), agents } as const;
 }

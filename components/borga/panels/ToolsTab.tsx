@@ -91,7 +91,10 @@ const LLM_KEY_MAP: Record<string, { envVar: string; label: string; kind: 'key' |
   'llm-cerebras': { envVar: 'CEREBRAS_API_KEY', label: 'API key', kind: 'key', hint: 'cloud.cerebras.ai — free tier' },
   'llm-sambanova': { envVar: 'SAMBANOVA_API_KEY', label: 'API key', kind: 'key', hint: 'cloud.sambanova.ai — free tier' },
   'llm-mistral': { envVar: 'MISTRAL_API_KEY', label: 'API key', kind: 'key', hint: 'console.mistral.ai/api-keys — free Experiment plan' },
-  'llm-muse': { envVar: 'MUSE_BASE_URL', label: 'Base URL', kind: 'url', hint: 'local Muse endpoint (must be localhost), e.g. http://127.0.0.1:PORT/v1' },
+  'llm-muse': {
+    envVar: 'MUSE_BASE_URL', label: 'Base URL', kind: 'url', hint: 'remote Muse API (https), e.g. https://api.example.com/v1',
+    extra: { envVar: 'MUSE_API_KEY', label: 'API key', kind: 'key', hint: 'Bearer key for the remote Muse API (leave empty if it needs none)' },
+  },
   'llm-custom': {
     envVar: 'LLM_BASE_URL', label: 'Base URL', kind: 'url', hint: 'e.g. http://localhost:8000/v1',
     extra: { envVar: 'LLM_API_KEY', label: 'API key', kind: 'key', hint: 'Bearer token for your endpoint' },
@@ -998,7 +1001,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             const expanded = expandedProviders.has(p.id);
             const mainKeyStatus = keyConfig ? keys[keyConfig.envVar] : undefined;
             // Keyless providers (Pollinations, LLM7) work with no account: they are ready as soon as they exist.
-            // Local CLI providers (Muse) are only ready once their endpoint exists — a catalog URL or the saved key.
+            // Muse is a remote API: it is ready once its https address is saved (its key is optional).
             const preset = presetFor(p.id);
             const keyless = !!preset?.keyless;
             const isConfigured = preset?.local
