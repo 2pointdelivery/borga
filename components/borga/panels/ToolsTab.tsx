@@ -1,5 +1,7 @@
 'use client';
 
+import { ConnectedApps } from './ConnectedApps';
+import { useConnectionActions } from '../use-connection-actions';
 import { MailDogCard } from '../MailDogCard';
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
@@ -73,12 +75,6 @@ const TOOLKIT_CONN: Record<string, string> = {
   HubSpot: 'cn-hubspot',
   Stripe: 'cn-stripe',
   LinkedIn: 'cn-linkedin',
-};
-
-const TYPE_STYLE: Record<AppConnection['type'], string> = {
-  tool: 'bg-sky-500/10 text-sky-600 ring-sky-500/30',
-  llm: 'bg-violet-500/10 text-violet-600 ring-violet-500/30',
-  voice: 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30',
 };
 
 // Maps each LLM provider ID to the env var(s) it needs
@@ -263,7 +259,7 @@ export type ToolsSection = 'ai-providers' | 'email' | 'composio' | 'apps';
  * switching sections never loses OAuth/key state; only the JSX output changes.
  */
 export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection }) {
-  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, removeComposioConnection, updateComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, elevenlabs, setElevenlabs, loadFreeModels, syncToolkitConnection } = useBorga();
+  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, elevenlabs, setElevenlabs, loadFreeModels, syncToolkitConnection } = useBorga();
   // Dynamic, per-workspace catalog (DB-backed); falls back to the seed list.
   const catalog = llmCatalog && llmCatalog.length ? llmCatalog : LLM_PROVIDERS;
   const [query, setQuery] = useState('');
@@ -845,97 +841,12 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     setConnecting(false);
   };
 
+  // Disconnecting an app ends the real connection at Composio (see use-connection-actions); a voice or model card just switches off.
+  const connectionActions = useConnectionActions();
   const disconnect = async (conn: AppConnection) => {
+    if (conn.type === 'tool') return connectionActions.disconnect(conn);
     connectApp(conn.id, { status: 'off', lastSync: '…', account: '' });
-    
-    // If this is a Composio connection, also disconnect via API
-    if (conn.type === 'tool' && hasComposioKey) {
-      try {
-        const connectionId = conn.id.replace('cn-', '');
-        await fetch('/api/borga/composio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-          body: JSON.stringify({
-            action: 'disconnect',
-            apiKey: composio.apiKey,
-            baseUrl: composio.baseUrl || undefined,
-            connectionId,
-          }),
-        });
-        
-        // Remove from Composio connections store
-        const appId = conn.provider; // Use provider as the app identifier
-        removeComposioConnection(appId);
-        // Mirror the disconnect so toolkit cards, inbox and social stop showing it as linked.
-        syncToolkitConnection(appId, false);
-      } catch {
-        toast({ title: `Could not disconnect ${conn.label} remotely`, description: 'Removed locally; revoke access on the provider side if it persists.', variant: 'warning' });
-      }
-    }
-    
     log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `Disconnected ${conn.label}.` });
-  };
-
-  const checkConnectionStatus = async (conn: AppConnection) => {
-    if (conn.type !== 'tool' || !hasComposioKey) return;
-    
-    try {
-      const connectionId = conn.id.replace('cn-', '');
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'connectionStatus',
-          apiKey: composio.apiKey,
-          baseUrl: composio.baseUrl || undefined,
-          appName: connectionId,
-        }),
-      });
-      const data = await res.json();
-      
-      if (data.ok && data.status === 'active') {
-        // Update last used timestamp
-        updateComposioConnection(conn.provider, { lastUsed: new Date().toISOString() });
-        connectApp(conn.id, { lastSync: 'Just now' });
-      } else if (data.ok && data.status === 'not_found') {
-        // Connection no longer exists on Composio side
-        connectApp(conn.id, { status: 'error', lastSync: 'Connection expired' });
-        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Connection ${conn.label} expired or was revoked.` });
-      }
-    } catch {
-      // Background status check — the status pills already show the last known state.
-    }
-  };
-
-  const refreshToken = async (conn: AppConnection) => {
-    if (conn.type !== 'tool' || !hasComposioKey) return;
-    
-    try {
-      const connectionId = conn.id.replace('cn-', '');
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'refreshToken',
-          apiKey: composio.apiKey,
-          baseUrl: composio.baseUrl || undefined,
-          appName: connectionId,
-        }),
-      });
-      const data = await res.json();
-      
-      if (data.ok) {
-        updateComposioConnection(conn.provider, { lastUsed: new Date().toISOString() });
-        connectApp(conn.id, { lastSync: 'Token refreshed' });
-        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'sync', message: `Refreshed OAuth token for ${conn.label}.` });
-      } else {
-        connectApp(conn.id, { status: 'error', lastSync: 'Token refresh failed' });
-        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Failed to refresh token for ${conn.label}.` });
-      }
-    } catch (error) {
-      connectApp(conn.id, { status: 'error', lastSync: 'Refresh error' });
-      toast({ title: `Could not refresh ${conn.label}`, description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
-    }
   };
 
   // After saving a key, refresh key status. (Choosing the default model is explicit: "Use as default".)
@@ -1751,37 +1662,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       )}
 
       {/* ── Connected apps ────────────────────────────────────────────────── */}
-      {(section === 'email' || section === 'apps') && (
-      <section>
-        <SectionTitle title="Connected apps" sub="Active connections and their scopes" />
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          {connections
-            .filter((c) => c.status === 'connected')
-            .map((c) => (
-              <Card key={c.id} className="flex items-center gap-3 p-3">
-                <span className={cn('flex h-8 w-8 items-center justify-center rounded-lg ring-1', TYPE_STYLE[c.type])}>
-                  {c.type === 'voice' ? <AudioLines className="h-4 w-4" /> : c.type === 'llm' ? <Cpu className="h-4 w-4" /> : <PlugZap className="h-4 w-4" />}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{c.label}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{c.account} — {c.scopes}</p>
-                </div>
-                {c.type === 'tool' && (
-                  <>
-                    <button onClick={() => void checkConnectionStatus(c)} title="Re-check connection status" className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </button>
-                    <button onClick={() => void refreshToken(c)} title="Refresh OAuth token" className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
-                      <KeyRound className="h-3.5 w-3.5" />
-                    </button>
-                  </>
-                )}
-                <CircleCheck className="h-4 w-4 shrink-0 text-emerald-500" />
-              </Card>
-            ))}
-        </div>
-      </section>
-      )}
+      {(section === 'email' || section === 'apps') && <ConnectedApps />}
 
       {/* ── Composio OAuth connect modal (Apollo-style) ───────────────────── */}
       <Dialog open={!!oauth} onOpenChange={(o) => !o && setOauth(null)}>

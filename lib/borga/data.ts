@@ -1230,6 +1230,19 @@ export const EMAIL_APPS: EmailApp[] = [
   { id: 'email-yahoo', label: 'Yahoo Mail', provider: 'Yahoo', composioAppName: 'yahoo_mail', accent: '#6001D2', description: 'Read and send Yahoo Mail messages' },
 ];
 
+/** Connection cards that belonged to the retired demo and local-model providers. Older companies still have them saved. */
+export const RETIRED_CONNECTION_IDS: string[] = ['cn-demo', 'cn-ollama'];
+
+/**
+ * Saved connection cards without the retired ones ("Demo (no key)" was always shown as connected, though it was never a real
+ * connection). `changed` says whether anything was removed, so the caller knows to save the cleaned list.
+ */
+export function repairConnections(saved: AppConnection[] | null | undefined): { connections: AppConnection[]; changed: boolean } {
+  if (!Array.isArray(saved)) return { connections: INITIAL_CONNECTIONS, changed: false };
+  const kept = saved.filter((c) => !RETIRED_CONNECTION_IDS.includes(c.id) && !(c.type === 'llm' && RETIRED_LLM_PROVIDERS.includes(`llm-${c.provider}`)));
+  return { connections: kept, changed: kept.length !== saved.length };
+}
+
 export const INITIAL_CONNECTIONS: AppConnection[] = [
   { id: 'cn-gmail', type: 'tool', provider: 'gmail', label: 'Gmail', status: 'off', account: '', scopes: 'read, send, manage labels', lastSync: '…' },
   { id: 'cn-calendar', type: 'tool', provider: 'google-calendar', label: 'Google Calendar', status: 'off', account: '', scopes: 'read, write events', lastSync: '…' },

@@ -87,6 +87,7 @@ INITIAL_APPROVALS,
   DEFAULT_ELEVENLABS,
   DEFAULT_SETTINGS,
   normalizeSettings,
+  repairConnections,
   INITIAL_CALLS,
   KNOWLEDGE_SEED,
   KNOWLEDGE_QUESTIONS,
@@ -3138,6 +3139,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       // The KPI set is completed against the best-practice baseline (missing KPIs added, unset targets filled) and saved back,
       // so every company has the full set, in the database as well as on screen.
       const kpiSet = completeKpiGroups(d.kpis as KpiGroup[] | undefined);
+      const connectionSet = repairConnections(d.connections as AppConnection[] | undefined);
       const settingsNow = normalizeSettings(d.settings as Partial<SettingsState> | undefined);
       const settingsChanged = !!d.settings && (d.settings as SettingsState).autonomousMode !== settingsNow.autonomousMode;
       const agentsChanged = !!dbAgents && JSON.stringify(agents) !== JSON.stringify(dbAgents);
@@ -3150,7 +3152,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         approvals: d.approvals ?? INITIAL_APPROVALS,
         finance: d.finance ?? INITIAL_FINANCE,
         toolkits: d.toolkits ?? COMPOSIO_TOOLKITS,
-        connections: d.connections ?? INITIAL_CONNECTIONS,
+        connections: connectionSet.connections,
         ops: d.ops ?? INITIAL_OPS,
         // A previously persisted mask ('[stored server-side]') is not a key:
         // drop it so it can never be sent to Composio (which would 401) or
@@ -3243,6 +3245,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       if (agentsChanged) persist('agents', agents);
       if (kpiSet.changed) persist('kpis', kpiSet.groups);
       if (settingsChanged) persist('settings', settingsNow);
+      if (connectionSet.changed) persist('connections', connectionSet.connections);
     } catch {
       // Never leave the shell stuck on the loading spinner. Surface the app
       // with whatever local state we have so the user can recover.
