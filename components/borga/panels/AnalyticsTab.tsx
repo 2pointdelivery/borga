@@ -31,6 +31,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useBorga } from '@/lib/borga/store';
 import { agentStatusNow } from '@/lib/borga/agent-status';
+import { useHealth } from '../use-health';
 import { computeProjectActualSpend, PROJECT_STATUS_LABEL, type ProjectStatus } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
@@ -98,28 +99,15 @@ export function AnalyticsTab() {
     [posts],
   );
 
-  // The four real inputs behind the health score, each already 0-1 normalized —
-  // exposed as their own chart below instead of a fabricated weekly time series
-  // (this app doesn't persist historical snapshots to plot a real trend yet).
-  const healthDimensions = useMemo(() => {
-    const margin = revenue ? (revenue - expenses) / revenue : 0;
-    const winRate = leads.length ? leads.filter((l) => l.stage === 'won').length / leads.length : 0;
-    const roas = adSpend ? adConversions / (adSpend / 1000) : 0;
-    const perf = employees.length
-      ? employees.reduce((s, e) => s + e.performance, 0) / (employees.length * 100)
-      : 0;
-    return [
-      { name: 'Margin', score: Math.round(Math.max(0, Math.min(100, margin * 100))) },
-      { name: 'Win rate', score: Math.round(winRate * 100) },
-      { name: 'Conversions / $1k', score: Math.round(Math.min(1, roas / 5) * 100) },
-      { name: 'Team perf.', score: Math.round(perf * 100) },
-    ];
-  }, [revenue, expenses, leads, adSpend, adConversions, employees]);
-
-  const healthScore = useMemo(() => {
-    const [margin, winRate, roas, perf] = healthDimensions.map((d) => d.score / 100);
-    return Math.round(Math.min(100, margin * 40 + winRate * 25 + roas * 15 + perf * 20));
-  }, [healthDimensions]);
+  // The health score: built from the areas that have data, with the rest listed as not measured yet.
+  const health = useHealth();
+  const bandStyle = {
+    strong: 'bg-emerald-500/10 text-emerald-600', healthy: 'bg-emerald-500/10 text-emerald-600',
+    attention: 'bg-amber-500/10 text-amber-600', risk: 'bg-rose-500/10 text-rose-600', unknown: 'bg-muted text-muted-foreground',
+  }[health.band];
+  const gaugeColor = { strong: '#059669', healthy: '#10b981', attention: '#d97706', risk: '#e11d48', unknown: '#94a3b8' }[health.band];
+  const healthDimensions = health.dimensions.filter((d) => d.score !== null).map((d) => ({ name: d.name, score: d.score as number }));
+  const unmeasured = health.dimensions.filter((d) => d.score === null);
 
   const money = (n: number) => fmtMoney(n, activeWorkspace()?.currency ?? 'USD');
 
@@ -137,8 +125,8 @@ export function AnalyticsTab() {
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="Analytics" sub={`Cross-module intelligence for ${activeWorkspace()?.name ?? 'the workspace'}`} />
-        <Badge className={cn(healthScore >= 70 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600')}>
-          Company health {healthScore}/100
+        <Badge className={bandStyle}>
+          {health.score === null ? 'Company health: not enough data yet' : `Company health ${health.score}/100 · ${health.label}`}
         </Badge>
       </div>
 
@@ -162,9 +150,10 @@ export function AnalyticsTab() {
         {/* Momentum */}
         <Card className="p-5 lg:col-span-2">
           <div className="mb-4 flex items-center justify-between">
-            <SectionTitle title="Company momentum" sub="What's driving the health score right now, by dimension" />
+            <SectionTitle title="Company momentum" sub="What's driving the health score right now, by area" />
           </div>
-          <div className="h-56">
+          {healthDimensions.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Nothing to score yet. Record revenue, send an invoice or add tasks and the areas appear here.</p>}
+          <div className={cn('h-56', healthDimensions.length === 0 && 'hidden')}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={healthDimensions} margin={{ left: -18, right: 4, top: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -183,13 +172,13 @@ export function AnalyticsTab() {
 
         {/* Health gauge */}
         <Card className="flex flex-col items-center justify-center p-5">
-          <SectionTitle title="Health score" sub="Weighted across four dimensions" />
+          <SectionTitle title="Health score" sub={health.score === null ? 'Needs at least two areas with data' : `Based on ${health.measured} of ${health.dimensions.length} areas`} />
           <div className="relative mt-2 h-44 w-44">
             <ResponsiveContainer width="100%" height="100%">
               <RadialBarChart
                 innerRadius="70%"
                 outerRadius="100%"
-                data={[{ name: 'score', value: healthScore, fill: healthScore >= 70 ? '#059669' : '#d97706' }]}
+                data={[{ name: 'score', value: health.score ?? 0, fill: gaugeColor }]}
                 startAngle={90}
                 endAngle={-270}
               >
@@ -197,13 +186,33 @@ export function AnalyticsTab() {
                 <RadialBar dataKey="value" cornerRadius={12} background={{ fill: 'var(--muted)' }} />
               </RadialBarChart>
             </ResponsiveContainer>
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <span className="text-3xl font-bold">{healthScore}</span>
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-3xl font-bold">{health.score ?? '—'}</span>
+              <span className="text-[11px] text-muted-foreground">{health.label}</span>
             </div>
           </div>
-          <p className="text-center text-[11px] text-muted-foreground">Weights — Margin 40% · Win rate 25% · Conversions 15% · People 20%</p>
+          {health.weakest ? (
+            <button onClick={() => window.dispatchEvent(new CustomEvent('borga:nav', { detail: health.weakest!.link }))} className="mt-1 text-center text-[11px] text-primary hover:underline">
+              Biggest drag: {health.weakest.name} ({health.weakest.score}). {health.weakest.detail}
+            </button>
+          ) : (
+            <p className="mt-1 text-center text-[11px] text-muted-foreground">Weights: Profitability 25 · Collections 20 · Sales 15 · Delivery 15 · KPIs 15 · Support 10 · People 10 · Marketing 5. Areas without data are left out, not counted as zero.</p>
+          )}
         </Card>
       </div>
+
+      {unmeasured.length > 0 && (
+        <Card className="border-dashed p-4">
+          <p className="text-xs font-semibold">Not measured yet</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {unmeasured.map((d) => (
+              <button key={d.id} onClick={() => window.dispatchEvent(new CustomEvent('borga:nav', { detail: d.link }))} className="rounded-full border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground" title={d.detail}>
+                {d.name}: {d.detail}
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Funnel */}

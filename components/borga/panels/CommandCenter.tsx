@@ -35,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useBorga, sortTasks } from '@/lib/borga/store';
 import { agentStatusNow } from '@/lib/borga/agent-status';
+import { useHealth } from '../use-health';
 import { PRIORITY_LABEL, PRIORITY_COLOR, APPROVAL_LABEL, LLM_PROVIDERS, GOAL_KPI_PRESETS, type Goal, type GoalStatus } from '@/lib/borga/data';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { DateInput } from '../form-widgets';
@@ -231,6 +232,7 @@ export function CommandCenter() {
 
   const done = tasks.filter((t) => t.status === 'done').length;
   const agentBusy = useBorga((s) => s.agentBusy);
+  const health = useHealth();
   const activeAgents = agents.filter((a) => agentStatusNow(a, agentBusy) === 'active').length;
   const topTasks = sortTasks(tasks.filter((t) => t.status !== 'done')).slice(0, 4);
 
@@ -387,6 +389,19 @@ export function CommandCenter() {
               Borga and the agent fleet are online. {attention.length} things need your attention right now.
             </p>
           </div>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: 'overview', tab: 'analytics' } }))}
+            className="flex items-center gap-3 rounded-xl border bg-muted/30 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+            title="Open the health breakdown"
+          >
+            <span className={cn('flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold', health.band === 'strong' || health.band === 'healthy' ? 'bg-emerald-500/15 text-emerald-600' : health.band === 'attention' ? 'bg-amber-500/15 text-amber-600' : health.band === 'risk' ? 'bg-rose-500/15 text-rose-600' : 'bg-muted text-muted-foreground')}>
+              {health.score ?? '—'}
+            </span>
+            <div>
+              <p className="text-sm font-medium">Company health</p>
+              <p className="text-xs text-muted-foreground">{health.score === null ? 'Not enough data yet' : `${health.label} · ${health.measured} areas`}</p>
+            </div>
+          </button>
           <div className="flex items-center gap-3 rounded-xl border bg-muted/30 px-4 py-3">
             <BrainCircuit className="h-8 w-8 text-primary" />
             <div>
