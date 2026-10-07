@@ -3,31 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { agentStatusNow } from '@/lib/borga/agent-status';
 import { useBorga } from '@/lib/borga/store';
+import { resolveVoiceRef } from '@/lib/borga/voice-ids';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
 
-// ElevenLabs voice names (as stored in ElevenLabsConfig.voice) → voice IDs.
-// Mirrors the map in app/api/borga/elevenlabs/route.ts.
-const ELEVEN_VOICE_IDS: Record<string, string> = {
-  rachel: '21m00Tcm4TlvDq8ikWAM',
-  domi: 'AZnzlk1XvdvUeBnXmlld',
-  bella: 'EXAVITQu4vr4xnSDxMaL',
-  antoni: 'ErXwobaYiN019PkySvjV',
-  elli: 'MF3mGyEYCl7XYWbV9V6O',
-  josh: 'TxGEqnHWrfWFTfGW9XjX',
-  arnold: 'VR6AewLTigWG4xSOukaG',
-  adam: 'pNInz6obpgDQGcFmaJgB',
-  sam: 'yoZ06aMxZJJ28mfd3POQ',
-  george: 'JBFqnCBsd6RMkjVDRZzb',
-};
-
-function elevenVoiceId(name?: string): string | undefined {
-  if (!name) return undefined;
-  return ELEVEN_VOICE_IDS[name.toLowerCase()];
-}
+const elevenVoiceId = resolveVoiceRef;
 
 // Detect a deep male English voice for Borga.
 function pickBorgaVoice(): SpeechSynthesisVoice | null {
@@ -275,14 +258,16 @@ export function useVoice() {
       try { engine.rec?.stop(); } catch { /* ignore */ }
       setVoice({ thinking: true });
       historyRef.current.push({ role: 'user', content: prompt });
+      if (historyRef.current.length > 40) historyRef.current.splice(1, historyRef.current.length - 40);
       try {
         const res = await fetch('/api/borga/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
           body: JSON.stringify({
-            providerId: llm.providerId,
-            model: llm.model,
-            messages: historyRef.current.filter((m) => m.role !== 'system'),
+            providerId: settings.voiceLlm?.providerId || llm.providerId,
+            model: settings.voiceLlm?.providerId ? settings.voiceLlm.model : llm.model,
+            // the last few turns are enough for a spoken exchange; the whole session would grow every request
+            messages: historyRef.current.filter((m) => m.role !== 'system').slice(-12),
             ws: activeWorkspaceId,
             companyName: activeWorkspace()?.name,
           }),
@@ -301,7 +286,7 @@ export function useVoice() {
         return reply;
       }
     },
-    [llm, log, setVoice, speak, interrupt, activeWorkspaceId, activeWorkspace],
+    [llm, settings.voiceLlm, log, setVoice, speak, interrupt, activeWorkspaceId, activeWorkspace],
   );
 
   const parseCommand = useCallback(

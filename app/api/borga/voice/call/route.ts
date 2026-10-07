@@ -5,30 +5,15 @@ import { twilioCredentials } from '@/lib/borga/provider-keys';
 import { paymentRequired } from '@/lib/borga/billing-server';
 import { setBorgaState } from '@/lib/borga/persistence';
 import { featureGate, sessionUserId } from '@/lib/borga/features-server';
+import { resolveVoiceRef } from '@/lib/borga/voice-ids';
 
 export const runtime = 'nodejs';
 
 const E164 = /^\+[1-9]\d{7,14}$/;
 const DEFAULT_VOICE_ID = 'EXAVITQu4vr4xnSDxMaL';
 
-// Friendly voice names (as stored in ElevenLabsConfig.voice) → real ElevenLabs
-// voice ids. Mirrors the maps in components/borga/use-voice.ts and
-// app/api/borga/elevenlabs/route.ts.
-const VOICE_NAME_TO_ID: Record<string, string> = {
-  rachel: '21m00Tcm4TlvDq8ikWAM',
-  domi: 'AZnzlk1XvdvUeBnXmlld',
-  bella: 'EXAVITQu4vr4xnSDxMaL',
-  antoni: 'ErXwobaYiN019PkySvjV',
-  elli: 'MF3mGyEYCl7XYWbV9V6O',
-  josh: 'TxGEqnHWrfWFTfGW9XjX',
-  arnold: 'VR6AewLTigWG4xSOukaG',
-  adam: 'pNInz6obpgDQGcFmaJgB',
-  sam: 'yoZ06aMxZJJ28mfd3POQ',
-  george: 'VR6AewLTigWG4xSOukaG',
-};
-
 function resolveVoiceId(nameOrId: string): string {
-  return VOICE_NAME_TO_ID[nameOrId.toLowerCase()] ?? (nameOrId || DEFAULT_VOICE_ID);
+  return resolveVoiceRef(nameOrId) ?? DEFAULT_VOICE_ID;
 }
 
 function twilioAuth(sid: string, token: string): string {

@@ -15,6 +15,8 @@ import { deriveBusinessInsights, insightsToMemories, type InsightSeverity } from
 import { AgentAvatar, StatusPill, SectionTitle } from '../bits';
 import { AgentEditDialog } from './AgentEditDialog';
 import { SearchSelect } from '../SearchSelect';
+import { useVoiceSetup } from '../use-voice-setup';
+import { describeVoice, resolveVoiceRef } from '@/lib/borga/voice-ids';
 import { toast } from '@/lib/toast-bus';
 import { AUTOMATION_LABELS, resolveAutomations } from '@/lib/borga/automation-core';
 import { agentStatusNow } from '@/lib/borga/agent-status';
@@ -40,7 +42,14 @@ export function AgentsTab() {
   const [callLeadId, setCallLeadId] = useState('');
   const [q, setQ] = useState('');
   const [group, setGroup] = useState<string>('all');
-  const voice = ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice) ?? ELEVENLABS_VOICES[0];
+  const voiceSetup = useVoiceSetup({ sync: false });
+  const setElevenlabs = useBorga((st) => st.setElevenlabs);
+  // the voice this agent speaks with: its own pick, else the company's
+  const agentVoiceRef = (callAgent && elevenlabs.agentVoices?.[callAgent.id]) || elevenlabs.voice;
+  const voiceOptions = voiceSetup.voices.length
+    ? voiceSetup.voices.map((v) => ({ value: v.id, label: v.name, detail: describeVoice(v) }))
+    : ELEVENLABS_VOICES.map((v) => ({ value: resolveVoiceRef(v.id) ?? v.id, label: v.label, detail: v.tag }));
+  const voice = voiceOptions.find((o) => o.value === resolveVoiceRef(agentVoiceRef)) ?? voiceOptions[0];
 
   const selectCallLead = (id: string) => {
     setCallLeadId(id);
@@ -387,7 +396,7 @@ export function AgentsTab() {
           <DialogHeader>
             <DialogTitle>Place an outbound call</DialogTitle>
             <DialogDescription>
-              {callAgent?.name} dials out through ElevenLabs using the <span className="font-medium text-foreground">{voice.label}</span> voice ({voice.tag}).
+              {callAgent?.name} dials out through ElevenLabs using the <span className="font-medium text-foreground">{voice.label}</span> voice ({voice.detail}).
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -414,6 +423,20 @@ export function AgentsTab() {
               <label className="text-xs font-medium text-muted-foreground">Lead / contact name</label>
               <Input value={callLead} onChange={(e) => setCallLead(e.target.value)} placeholder="e.g. Marcus Webb" className="mt-1" />
             </div>
+            {elevenlabs.connected && callAgent && (
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Voice for {callAgent.name}</label>
+                <SearchSelect
+                  options={voiceOptions}
+                  value={voice.value}
+                  onChange={(v) => { if (v) setElevenlabs({ agentVoices: { ...(elevenlabs.agentVoices ?? {}), [callAgent.id]: v } }); }}
+                  placeholder="Select a voice"
+                  searchPlaceholder="Search voices"
+                  clearable={false}
+                  className="mt-1"
+                />
+              </div>
+            )}
             {!elevenlabs.connected && (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
                 ElevenLabs isn&apos;t connected yet — connect it in Settings to place real outbound calls. The call will still be simulated below.

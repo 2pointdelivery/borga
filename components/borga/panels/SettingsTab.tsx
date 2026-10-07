@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Bell, Palette, User, Mic, Server, Globe, ShieldCheck, Phone, BrainCircuit, Cookie } from 'lucide-react';
+import { Save, Bell, Palette, User, Mic, Server, Globe, ShieldCheck, BrainCircuit, Cookie } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,9 +10,9 @@ import { Badge } from '@/components/ui/badge';
 import { useBorga } from '@/lib/borga/store';
 import { useTheme } from '../theme-provider';
 import type { ThemeMode } from '@/lib/borga/store';
-import { ELEVENLABS_VOICES, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from '@/lib/borga/data';
+import { AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from '@/lib/borga/data';
+import { VoiceSetup } from '../VoiceSetup';
 import { SectionTitle } from '../bits';
-import { SearchSelect } from '../SearchSelect';
 import { ValuationConfigEditor } from './ValuationConfigEditor';
 import { FeaturesCard } from './FeaturesCard';
 import { EmailUpdatesCard } from './EmailUpdatesCard';
@@ -30,7 +30,7 @@ const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
 
 
 export function SettingsTab() {
-  const { userName, setUserName, log, elevenlabs, setElevenlabs, settings, setSettings, dbAvailable } = useBorga();
+  const { userName, setUserName, log, settings, setSettings, dbAvailable } = useBorga();
   const { mode, setMode } = useTheme();
   const [name, setName] = useState(userName);
 
@@ -136,55 +136,22 @@ export function SettingsTab() {
           )}
         </Card>
 
-        <Card className="p-5">
+        <Card className="p-5 lg:col-span-2">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Mic className="h-4 w-4 text-primary" /> Voice assistant
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {elevenlabs.connected
-              ? 'Speaks with your configured ElevenLabs voice; falls back to the browser voice below if ElevenLabs is unreachable.'
-              : 'Speaks with the browser’s built-in voice — connect ElevenLabs (below) for a higher-quality agent voice.'}
+          <p className="mt-1 mb-3 text-xs text-muted-foreground">
+            How Borga sounds and which model answers out loud. Phone calls are configured under Integrations → Connections (Twilio).
           </p>
-          <div className="mt-3 space-y-3">
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2.5">
-              <span className="text-xs text-muted-foreground">Active voice profile</span>
-              <code className="text-xs font-mono">
-                {elevenlabs.connected
-                  ? `${ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice)?.label ?? elevenlabs.voice} — ${ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice)?.tag ?? 'ElevenLabs'}`
-                  : 'Browser voice — rate 0.98 — pitch 0.85'}
-              </code>
+          <VoiceSetup showListening={false} />
+          <div className="mt-3 flex items-center justify-between gap-4 rounded-lg border px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Always listening</p>
+              <p className="text-xs text-muted-foreground">Mic stays on app-wide; Borga only acts once you say &ldquo;Borga&rdquo; first. Separate from voice replies in notifications.</p>
             </div>
-            <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2.5">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">Always listening</p>
-                <p className="text-xs text-muted-foreground">Mic stays on app-wide; Borga only acts once you say &ldquo;Borga&rdquo; first. Separate from voice replies in notifications.</p>
-              </div>
-              <Switch
-                checked={settings.alwaysListening ?? settings.notifications.voice}
-                onCheckedChange={(v) => setSettings({ ...settings, alwaysListening: v })}
-              />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-5 lg:col-span-2">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Phone className="h-4 w-4 shrink-0 text-primary" /> Agent voice
-            <Badge variant={elevenlabs.connected ? 'secondary' : 'outline'} className="text-[10px]">{elevenlabs.connected ? 'ElevenLabs key saved' : 'Browser voice'}</Badge>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            The voice agents speak with. The ElevenLabs API key lives in <strong>Integrations → AI &amp; Voice</strong>; without it the browser&apos;s built-in voice is used. Phone calls are configured under Integrations → Connections (Twilio).
-          </p>
-          <div className="mt-3 max-w-sm">
-            <label className="text-xs font-medium text-muted-foreground">Agent voice</label>
-            <SearchSelect
-              options={ELEVENLABS_VOICES.map((v) => ({ value: v.id, label: v.label, detail: v.tag }))}
-              value={elevenlabs.voice}
-              onChange={(v) => { if (v) setElevenlabs({ voice: v }); }}
-              placeholder="Select a voice"
-              searchPlaceholder="Search voices"
-              clearable={false}
-              className="mt-1"
+            <Switch
+              checked={settings.alwaysListening ?? settings.notifications.voice}
+              onCheckedChange={(v) => setSettings({ ...settings, alwaysListening: v })}
             />
           </div>
         </Card>

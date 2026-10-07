@@ -1829,6 +1829,8 @@ export interface ElevenLabsConfig {
   voice: string; // active voice id (see ELEVENLABS_VOICES)
   defaultVoice: string;
   lastSync: string;
+  /** A voice per agent (agent id -> ElevenLabs voice id). Agents without one use `voice`. */
+  agentVoices?: Record<string, string>;
 }
 
 export const ELEVENLABS_VOICES: { id: string; label: string; tag: string }[] = [
@@ -1994,6 +1996,8 @@ export interface SettingsState {
   approvalThresholdUsd?: number;
   /** Always-on microphone (wake word). Separate from notifications.voice (spoken replies); falls back to it for older workspaces. */
   alwaysListening?: boolean;
+  /** The model that answers spoken requests. Unset: the company's chat model (with the usual fallback). */
+  voiceLlm?: { providerId: string; model: string };
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {

@@ -29,6 +29,7 @@ import { ThemeProvider, useTheme } from './theme-provider';
 import { CommandPalette } from './CommandPalette';
 import { AdvisoryWidget } from './AdvisoryWidget';
 import { VoiceAssistant } from './VoiceAssistant';
+import { useVoiceSetup } from '@/components/borga/use-voice-setup';
 import { useVoice } from './use-voice';
 import { BorgaOrb } from './BorgaOrb';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
@@ -75,6 +76,8 @@ function ShellInner() {
   // What the AI actually is right now: the selected provider (Pollinations works out of the box, no key).
   const aiLabel = llmCatalog.find((p) => p.id === llm.providerId)?.label ?? llm.providerId;
   const { startListening, stopListening } = useVoice();
+  // keeps the stored "ElevenLabs connected" flag equal to what the server finds (the key is tried, not just present)
+  useVoiceSetup();
   const [route, setRoute] = useState<ActiveRoute>({ page: 'overview' });
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);

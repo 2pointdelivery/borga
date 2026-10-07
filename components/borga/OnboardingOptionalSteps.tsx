@@ -1,14 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Globe, Loader2, Mail, Mic, Play, Sparkles, Volume2 } from 'lucide-react';
+import { AlertTriangle, Check, Globe, Loader2, Mail, Play, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast-bus';
 import { useBorga } from '@/lib/borga/store';
-import { ELEVENLABS_VOICES, type KnowledgeCategoryId } from '@/lib/borga/data';
+import { type KnowledgeCategoryId } from '@/lib/borga/data';
+import { VoiceSetup } from '@/components/borga/VoiceSetup';
 import { presetFor } from '@/lib/borga/model-catalog';
 import { ConnectionPanel } from './panels/ConnectionsTab';
 import { ModelPicker, tierSections } from './panels/ModelPicker';
@@ -224,50 +223,7 @@ export function EmailStep({ onConfigured }: { onConfigured: () => void }) {
 
 // ── voice ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The voice assistant: always-listening on or off, and the voice agents speak with. Works with the browser's voice; ElevenLabs is better when the deployment has a key. */
+/** The voice assistant: always-listening, the ElevenLabs key and voice, a real sample, and the model that answers spoken requests. */
 export function VoiceStep({ onChosen }: { onChosen: () => void }) {
-  const { settings, setSettings, elevenlabs, setElevenlabs } = useBorga();
-  const [speaking, setSpeaking] = useState(false);
-  const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
-
-  const hear = () => {
-    if (!canSpeak) return;
-    const u = new SpeechSynthesisUtterance("Hello, I'm Borga. I can read out your updates and take your commands.");
-    u.onend = () => setSpeaking(false);
-    u.onerror = () => setSpeaking(false);
-    setSpeaking(true);
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2.5">
-        <div className="min-w-0">
-          <p className="flex items-center gap-2 text-sm font-medium"><Mic className="h-4 w-4 text-primary" /> Always listening</p>
-          <p className="text-xs text-muted-foreground">The microphone stays on while Borga is open, and Borga only acts after you say &ldquo;Borga&rdquo;. The browser asks for permission first.</p>
-        </div>
-        <Switch checked={settings.notifications.voice} onCheckedChange={(v) => { setSettings({ notifications: { ...settings.notifications, voice: v } }); onChosen(); }} aria-label="Always listening" />
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <Label className="text-xs text-muted-foreground">Agent voice</Label>
-          <select
-            value={elevenlabs.voice}
-            onChange={(e) => { setElevenlabs({ voice: e.target.value }); onChosen(); }}
-            className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            disabled={!elevenlabs.connected}
-          >
-            {ELEVENLABS_VOICES.map((v) => <option key={v.id} value={v.id}>{v.label} — {v.tag}</option>)}
-          </select>
-          <p className="mt-1 text-[11px] text-muted-foreground">{elevenlabs.connected ? 'ElevenLabs is set up: agents use this voice.' : 'ElevenLabs is not set up on this deployment (the administrator adds its key under Integrations → AI & Voice), so agents use your browser\'s voice.'}</p>
-        </div>
-        <div className="flex items-end">
-          <Button variant="outline" onClick={hear} disabled={!canSpeak || speaking}>{speaking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />} Hear a sample</Button>
-        </div>
-      </div>
-      {!canSpeak && <p className="text-xs text-amber-600">This browser cannot speak. Voice works best in Chrome, Edge or Safari.</p>}
-    </div>
-  );
+  return <VoiceSetup onChosen={onChosen} />;
 }

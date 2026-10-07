@@ -3,6 +3,7 @@ import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { isValidUserId } from '@/lib/borga/keys';
 import { elevenLabsKey } from '@/lib/borga/provider-keys';
 import { featureGate } from '@/lib/borga/features-server';
+import { LEGACY_VOICE_IDS, resolveVoiceRef } from '@/lib/borga/voice-ids';
 
 export const runtime = 'nodejs';
 
@@ -17,22 +18,10 @@ async function getUserId(req: NextRequest): Promise<string | null> {
 
 const ELEVENLABS_BASE = 'https://api.elevenlabs.io/v1';
 
-// Default voice IDs available on all ElevenLabs accounts
-const VOICE_IDS: Record<string, string> = {
-  'rachel': '21m00Tcm4TlvDq8ikWAM',
-  'domi': 'AZnzlk1XvdvUeBnXmlld',
-  'bella': 'EXAVITQu4vr4xnSDxMaL',
-  'antoni': 'ErXwobaYiN019PkySvjV',
-  'elli': 'MF3mGyEYCl7XYWbV9V6O',
-  'josh': 'TxGEqnHWrfWFTfGW9XjX',
-  'arnold': 'VR6AewLTigWG4xSOukaG',
-  'adam': 'pNInz6obpgDQGcFmaJgB',
-  'sam': 'yoZ06aMxZJJ28mfd3POQ',
-};
+const VOICE_IDS = LEGACY_VOICE_IDS;
 
 function resolveVoiceId(voiceName: string): string {
-  const lower = voiceName.toLowerCase();
-  return VOICE_IDS[lower] ?? VOICE_IDS['rachel'];
+  return resolveVoiceRef(voiceName) ?? LEGACY_VOICE_IDS.rachel;
 }
 
 // Generate a realistic call script that the agent would say during the call

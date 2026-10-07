@@ -259,7 +259,7 @@ export type ToolsSection = 'ai-providers' | 'email' | 'composio' | 'apps';
  * switching sections never loses OAuth/key state; only the JSX output changes.
  */
 export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection }) {
-  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, elevenlabs, setElevenlabs, loadFreeModels, syncToolkitConnection } = useBorga();
+  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, loadFreeModels, syncToolkitConnection } = useBorga();
   // Dynamic, per-workspace catalog (DB-backed); falls back to the seed list.
   const catalog = llmCatalog && llmCatalog.length ? llmCatalog : LLM_PROVIDERS;
   const [query, setQuery] = useState('');
@@ -863,15 +863,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     }
   };
 
-  // Derive ElevenLabs "connected" from the real key instead of a manual switch.
-  useEffect(() => {
-    if (keysLoading) return;
-    const has = !!keys['ELEVENLABS_API_KEY']?.configured;
-    if (has !== elevenlabs.connected) setElevenlabs({ connected: has, lastSync: has ? 'Key saved' : '…' });
-  }, [keys, keysLoading, elevenlabs.connected, setElevenlabs]);
-
   const handleVoiceKeySaved = (providerId: string) => {
     fetchKeys();
+    window.dispatchEvent(new Event('borga:voice-setup-changed'));
     const p = VOICE_PROVIDERS.find((p) => p.id === providerId);
     if (p) {
       const { id: connId } = statusOf('voice', p.id.replace('voice-', ''), p.label);

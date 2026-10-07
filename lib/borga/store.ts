@@ -2518,7 +2518,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('calls', get().calls);
   },
   placeCall: (a) => {
-    const voiceName = get().elevenlabs.voice || 'george';
+    const voiceName = get().elevenlabs.agentVoices?.[a.agentId] || get().elevenlabs.voice || 'george';
     const companyName = get().activeWorkspace()?.name ?? 'the company';
     const script = a.note || `Hello, this is ${a.agentName} calling from ${companyName}. I'm reaching out to ${a.leadName || a.contact} regarding a potential partnership opportunity. Please feel free to call us back. Have a wonderful day.`;
     const id = `call-${Date.now()}`;
