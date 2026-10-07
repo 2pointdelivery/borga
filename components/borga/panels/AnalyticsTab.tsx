@@ -1,5 +1,5 @@
 'use client';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
+import { fmtMoney } from '@/lib/borga/currencies';
 
 import { useMemo } from 'react';
 import {
@@ -9,6 +9,9 @@ import {
   Megaphone,
   HandCoins,
   Target,
+  FolderKanban,
+  CheckSquare,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -27,14 +30,18 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useBorga } from '@/lib/borga/store';
+import { agentStatusNow } from '@/lib/borga/agent-status';
+import { useHealth } from '../use-health';
+import { computeProjectActualSpend, PROJECT_STATUS_LABEL, type ProjectStatus } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
 
 export function AnalyticsTab() {
   const {
     leads, finance, ads, posts, employees, fundraising, agents,
-    messages, calls, activeWorkspace,
+    messages, calls, projects, tasks, bills, activeWorkspace,
   } = useBorga();
+  const agentBusy = useBorga((s) => s.agentBusy);
 
   const revenue = finance.filter((f) => f.kind === 'revenue' && !f.voidedAt).reduce((s, f) => s + f.amount, 0);
   const expenses = finance.filter((f) => f.kind === 'expense' && !f.voidedAt).reduce((s, f) => s + f.amount, 0);
@@ -44,6 +51,35 @@ export function AnalyticsTab() {
   const adConversions = ads.reduce((s, a) => s + a.conversions, 0);
   const headcount = employees.filter((e) => e.status !== 'offboarded').length;
   const fundsRaised = fundraising.filter((f) => f.stage === 'won').length;
+
+  // Project delivery — derived entirely from the live projects, their linked
+  // tasks/expenses and vendor bills. No fabricated progress or timeline data.
+  const projectStats = useMemo(() => {
+    const spendOf = (id: string) => computeProjectActualSpend(finance, id);
+    const projectTasks = tasks.filter((t) => t.projectId);
+    const doneTasks = projectTasks.filter((t) => t.status === 'done').length;
+    const portfolioBudget = projects.reduce((s, p) => s + p.budgetAmount, 0);
+    const portfolioActual = projects.reduce((s, p) => s + spendOf(p.id), 0);
+    const byStatus = (['planning', 'active', 'on-hold', 'completed', 'cancelled'] as ProjectStatus[])
+      .map((s) => ({ status: s, label: PROJECT_STATUS_LABEL[s], count: projects.filter((p) => p.status === s).length }))
+      .filter((s) => s.count > 0);
+    const spendByProject = projects
+      .map((p) => ({ name: p.name, budget: p.budgetAmount, actual: spendOf(p.id) }))
+      .sort((a, b) => b.actual - a.actual)
+      .slice(0, 6);
+    const overBudget = projects.filter((p) => p.budgetAmount > 0 && spendOf(p.id) > p.budgetAmount);
+    const certified = bills
+      .filter((b) => b.projectId && (b.status === 'scheduled' || b.status === 'paid'))
+      .reduce((s, b) => s + b.amount, 0);
+    return {
+      portfolioBudget, portfolioActual, spendByProject, byStatus, overBudget, certified,
+      taskCount: projectTasks.length,
+      doneTasks,
+      taskCompletion: projectTasks.length ? Math.round((doneTasks / projectTasks.length) * 100) : 0,
+      active: projects.filter((p) => p.status === 'active').length,
+      completed: projects.filter((p) => p.status === 'completed').length,
+    };
+  }, [projects, tasks, finance, bills]);
 
   const funnel = useMemo(() => {
     const stages = ['new', 'qualified', 'proposal', 'won'] as const;
@@ -63,47 +99,34 @@ export function AnalyticsTab() {
     [posts],
   );
 
-  // The four real inputs behind the health score, each already 0-1 normalized —
-  // exposed as their own chart below instead of a fabricated weekly time series
-  // (this app doesn't persist historical snapshots to plot a real trend yet).
-  const healthDimensions = useMemo(() => {
-    const margin = revenue ? (revenue - expenses) / revenue : 0;
-    const winRate = leads.length ? leads.filter((l) => l.stage === 'won').length / leads.length : 0;
-    const roas = adSpend ? adConversions / (adSpend / 1000) : 0;
-    const perf = employees.length
-      ? employees.reduce((s, e) => s + e.performance, 0) / (employees.length * 100)
-      : 0;
-    return [
-      { name: 'Margin', score: Math.round(Math.max(0, Math.min(100, margin * 100))) },
-      { name: 'Win rate', score: Math.round(winRate * 100) },
-      { name: 'Ad ROAS', score: Math.round(Math.min(1, roas / 5) * 100) },
-      { name: 'Team perf.', score: Math.round(perf * 100) },
-    ];
-  }, [revenue, expenses, leads, adSpend, adConversions, employees]);
+  // The health score: built from the areas that have data, with the rest listed as not measured yet.
+  const health = useHealth();
+  const bandStyle = {
+    strong: 'bg-emerald-500/10 text-emerald-600', healthy: 'bg-emerald-500/10 text-emerald-600',
+    attention: 'bg-amber-500/10 text-amber-600', risk: 'bg-rose-500/10 text-rose-600', unknown: 'bg-muted text-muted-foreground',
+  }[health.band];
+  const gaugeColor = { strong: '#059669', healthy: '#10b981', attention: '#d97706', risk: '#e11d48', unknown: '#94a3b8' }[health.band];
+  const healthDimensions = health.dimensions.filter((d) => d.score !== null).map((d) => ({ name: d.name, score: d.score as number }));
+  const unmeasured = health.dimensions.filter((d) => d.score === null);
 
-  const healthScore = useMemo(() => {
-    const [margin, winRate, roas, perf] = healthDimensions.map((d) => d.score / 100);
-    return Math.round(Math.min(100, margin * 40 + winRate * 25 + roas * 15 + perf * 20));
-  }, [healthDimensions]);
+  const money = (n: number) => fmtMoney(n, activeWorkspace()?.currency ?? 'USD');
 
-  const money = (n: number) =>
-    `${CURRENCY_SYMBOL[activeWorkspace()?.currency ?? 'USD']}${n >= 1000 ? `${(n / 1000).toFixed(0)}K` : n}`;
-
-  const cards = [
-    { label: 'Revenue (MTD)', value: money(revenue), icon: DollarSign, color: 'text-emerald-600' },
+  const cards: Array<{ label: string; value: string; sub?: string; icon: typeof DollarSign; color: string }> = [
+    { label: 'Revenue to date', value: money(revenue), icon: DollarSign, color: 'text-emerald-600' },
     { label: 'Open pipeline', value: money(pipelineValue), icon: Target, color: 'text-sky-600' },
-    { label: 'Ad spend — conversions', value: `${money(adSpend)} — ${adConversions}`, icon: Megaphone, color: 'text-violet-600' },
+    { label: 'Ad spend', value: money(adSpend), sub: `${adConversions} conversions`, icon: Megaphone, color: 'text-violet-600' },
     { label: 'Headcount', value: String(headcount), icon: Users, color: 'text-amber-600' },
+    { label: 'Active projects', value: String(projectStats.active), sub: `${projects.length} total`, icon: FolderKanban, color: 'text-rose-600' },
     { label: 'Funding wins', value: String(fundsRaised), icon: HandCoins, color: 'text-teal-600' },
-    { label: 'Messages sent', value: String(messages.length + calls.length), icon: TrendingUp, color: 'text-indigo-600' },
+    { label: 'Messages & calls', value: String(messages.length + calls.length), icon: TrendingUp, color: 'text-indigo-600' },
   ];
 
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="Analytics" sub={`Cross-module intelligence for ${activeWorkspace()?.name ?? 'the workspace'}`} />
-        <Badge className={cn(healthScore >= 70 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600')}>
-          Company health {healthScore}/100
+        <Badge className={bandStyle}>
+          {health.score === null ? 'Company health: not enough data yet' : `Company health ${health.score}/100 · ${health.label}`}
         </Badge>
       </div>
 
@@ -117,6 +140,7 @@ export function AnalyticsTab() {
                 <Icon className={cn('h-3.5 w-3.5', c.color)} /> {c.label}
               </p>
               <p className="mt-1 truncate text-lg font-semibold">{c.value}</p>
+              {c.sub && <p className="truncate text-[10px] text-muted-foreground">{c.sub}</p>}
             </Card>
           );
         })}
@@ -126,9 +150,10 @@ export function AnalyticsTab() {
         {/* Momentum */}
         <Card className="p-5 lg:col-span-2">
           <div className="mb-4 flex items-center justify-between">
-            <SectionTitle title="Company momentum" sub="What's driving the health score right now, by dimension" />
+            <SectionTitle title="Company momentum" sub="What's driving the health score right now, by area" />
           </div>
-          <div className="h-56">
+          {healthDimensions.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Nothing to score yet. Record revenue, send an invoice or add tasks and the areas appear here.</p>}
+          <div className={cn('h-56', healthDimensions.length === 0 && 'hidden')}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={healthDimensions} margin={{ left: -18, right: 4, top: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -147,13 +172,13 @@ export function AnalyticsTab() {
 
         {/* Health gauge */}
         <Card className="flex flex-col items-center justify-center p-5">
-          <SectionTitle title="Health score" sub="Weighted across four dimensions" />
+          <SectionTitle title="Health score" sub={health.score === null ? 'Needs at least two areas with data' : `Based on ${health.measured} of ${health.dimensions.length} areas`} />
           <div className="relative mt-2 h-44 w-44">
             <ResponsiveContainer width="100%" height="100%">
               <RadialBarChart
                 innerRadius="70%"
                 outerRadius="100%"
-                data={[{ name: 'score', value: healthScore, fill: healthScore >= 70 ? '#059669' : '#d97706' }]}
+                data={[{ name: 'score', value: health.score ?? 0, fill: gaugeColor }]}
                 startAngle={90}
                 endAngle={-270}
               >
@@ -161,13 +186,33 @@ export function AnalyticsTab() {
                 <RadialBar dataKey="value" cornerRadius={12} background={{ fill: 'var(--muted)' }} />
               </RadialBarChart>
             </ResponsiveContainer>
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <span className="text-3xl font-bold">{healthScore}</span>
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-3xl font-bold">{health.score ?? '—'}</span>
+              <span className="text-[11px] text-muted-foreground">{health.label}</span>
             </div>
           </div>
-          <p className="text-center text-[11px] text-muted-foreground">Margin 40% — Win rate 25% — ROAS 15% — People 20%</p>
+          {health.weakest ? (
+            <button onClick={() => window.dispatchEvent(new CustomEvent('borga:nav', { detail: health.weakest!.link }))} className="mt-1 text-center text-[11px] text-primary hover:underline">
+              Biggest drag: {health.weakest.name} ({health.weakest.score}). {health.weakest.detail}
+            </button>
+          ) : (
+            <p className="mt-1 text-center text-[11px] text-muted-foreground">Weights: Profitability 25 · Collections 20 · Sales 15 · Delivery 15 · KPIs 15 · Support 10 · People 10 · Marketing 5. Areas without data are left out, not counted as zero.</p>
+          )}
         </Card>
       </div>
+
+      {unmeasured.length > 0 && (
+        <Card className="border-dashed p-4">
+          <p className="text-xs font-semibold">Not measured yet</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {unmeasured.map((d) => (
+              <button key={d.id} onClick={() => window.dispatchEvent(new CustomEvent('borga:nav', { detail: d.link }))} className="rounded-full border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground" title={d.detail}>
+                {d.name}: {d.detail}
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Funnel */}
@@ -224,13 +269,67 @@ export function AnalyticsTab() {
         </Card>
       </div>
 
+      {/* Project delivery analytics */}
+      <Card className="p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <SectionTitle title="Project delivery" sub={`${projects.length} project${projects.length === 1 ? '' : 's'} — ${money(projectStats.portfolioActual)} of ${money(projectStats.portfolioBudget)} budget spent`} />
+          <Badge className={cn(projectStats.taskCompletion >= 70 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600')}>
+            {projectStats.taskCompletion}% tasks complete
+          </Badge>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            { label: 'Active', value: String(projectStats.active), icon: FolderKanban, color: 'text-emerald-600' },
+            { label: 'Completed', value: String(projectStats.completed), icon: CheckSquare, color: 'text-violet-600' },
+            { label: 'Tasks done', value: `${projectStats.doneTasks}/${projectStats.taskCount}`, icon: CheckSquare, color: 'text-sky-600' },
+            { label: 'Over budget', value: String(projectStats.overBudget.length), icon: AlertTriangle, color: projectStats.overBudget.length ? 'text-rose-600' : 'text-muted-foreground' },
+          ].map((s) => {
+            const Icon = s.icon;
+            return (
+              <Card key={s.label} className="p-3">
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Icon className={cn('h-3.5 w-3.5', s.color)} /> {s.label}</p>
+                <p className="mt-1 text-lg font-semibold">{s.value}</p>
+              </Card>
+            );
+          })}
+        </div>
+
+        {projects.length === 0 ? (
+          <p className="mt-4 py-6 text-center text-xs text-muted-foreground">No projects yet — create one on the Projects page to see delivery analytics here.</p>
+        ) : (
+          <>
+            <div className="mt-4 h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={projectStats.spendByProject} margin={{ left: -18, right: 4, top: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} interval={0} />
+                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} />
+                  <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} formatter={(v: number) => money(v)} />
+                  <Bar dataKey="budget" name="Budget" fill="var(--chart-4)" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="actual" name="Actual" fill="var(--chart-2)" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-muted-foreground">
+              <span><span className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: 'var(--chart-4)' }} />Budget</span>
+              <span><span className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: 'var(--chart-2)' }} />Actual spend</span>
+              <span>Certified project payments {money(projectStats.certified)}</span>
+              {projectStats.overBudget.length > 0 && (
+                <span className="text-rose-500">Over budget: {projectStats.overBudget.map((p) => p.name).join(', ')}</span>
+              )}
+            </div>
+          </>
+        )}
+      </Card>
+
       {/* AI insight footer */}
       <Card className="border-dashed p-4">
         <p className="text-xs font-semibold text-primary">Borga&apos;s read</p>
         <p className="mt-1 text-sm text-muted-foreground">
           Pipeline is {pipelineValue >= revenue ? 'outpacing' : 'trailing'} booked revenue at {money(pipelineValue)} open.
           Marketing converted {adConversions} paid conversions on {money(adSpend)} spend, while the fleet runs{' '}
-          {agents.filter((a) => a.status === 'active').length}/{agents.length} agents active.
+          {agents.filter((a) => agentStatusNow(a, agentBusy) === 'active').length}/{agents.length} agents working.
           {(revenue - expenses) > 0
             ? ` Net cash position is positive at ${money(revenue - expenses)}.`
             : ' Watch burn — expenses exceed booked revenue this period.'}

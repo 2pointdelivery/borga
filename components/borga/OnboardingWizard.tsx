@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowRight, ArrowLeft, Check, Loader2, Building2, Wallet,
-  Users, LineChart, Sparkles,
+  Users, LineChart, Sparkles, Globe, Cpu, Mail, Mic,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -15,14 +15,18 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useBorga } from '@/lib/borga/store';
+import { CountrySelect, CurrencySelect } from './form-widgets';
+import { AiStep, EmailStep, VoiceStep, WebsiteStep } from './OnboardingOptionalSteps';
 import { parseServices } from '@/lib/borga/services';
 import {
-  makeOnboarding, industryProfile, INDUSTRY_VALUATION, deriveValuation,
+  normalizeOnboarding, industryProfile, INDUSTRY_VALUATION, deriveValuation,
   CURRENCY_SYMBOL, type OnboardingStepId, type Workspace,
 } from '@/lib/borga/data';
 
 type StepId = OnboardingStepId;
-const ORDER: StepId[] = ['profile', 'industry', 'financials', 'team', 'valuation'];
+const ORDER: StepId[] = ['profile', 'industry', 'website', 'financials', 'team', 'ai', 'email', 'voice', 'valuation'];
+/** Steps that can be skipped: they never hold up finishing the setup. */
+const OPTIONAL: ReadonlySet<StepId> = new Set<StepId>(['website', 'ai', 'email', 'voice']);
 
 const STEP_META: Record<StepId, { icon: typeof Building2; title: string; blurb: string }> = {
   profile: { icon: Building2, title: 'Company profile', blurb: 'Legal name, location and branding.' },
@@ -31,6 +35,10 @@ const STEP_META: Record<StepId, { icon: typeof Building2; title: string; blurb: 
   team: { icon: Users, title: 'Team', blurb: 'Add your key people.' },
   valuation: { icon: LineChart, title: 'Valuation', blurb: 'See your derived, industry-aware value.' },
   knowledge: { icon: Sparkles, title: 'Knowledge', blurb: 'Knowledge base.' },
+  website: { icon: Globe, title: 'Your website', blurb: 'Let Borga read your website into the knowledge base, so agents know your business from day one.' },
+  ai: { icon: Cpu, title: 'AI model', blurb: 'Choose the model your agents think with. A free one needs no account.' },
+  email: { icon: Mail, title: 'Email', blurb: 'Send ticket replies and updates from your own address and mail server.' },
+  voice: { icon: Mic, title: 'Voice', blurb: 'Talk to Borga and hear it answer.' },
 };
 
 const INDUSTRY_OPTIONS = INDUSTRY_VALUATION.map((e) => e.profile.label);
@@ -40,34 +48,63 @@ export function OnboardingWizard() {
   const { activeWorkspace, updateWorkspace, addFinanceEntry, addEmployee, addKnowledge, setOnboarding, setActiveWorkspace, hydrate, synced, finance, knowledge } = useBorga();
   const ws = activeWorkspace();
 
-  const [step, setStep] = useState<StepId>(() => {
-    if (typeof window !== 'undefined') {
-      const p = new URLSearchParams(window.location.search).get('step');
-      if (p && ORDER.includes(p as StepId)) return p as StepId;
-    }
-    return 'profile';
-  });
+  // Follow the address, not a one-time read of it: after "router.push('/app/onboarding?step=industry')" the component mounts
+  // before the address has changed, so reading window.location at mount fell back to the first step.
+  const wanted = useSearchParams().get('step');
+  const wantedStep = wanted && ORDER.includes(wanted as StepId) ? (wanted as StepId) : null;
+  const [step, setStep] = useState<StepId>(wantedStep ?? 'profile');
+  useEffect(() => {
+    if (wantedStep) setStep(wantedStep);
+  }, [wantedStep]);
 
   const [profile, setProfile] = useState({ name: '', legalName: '', country: '', currency: 'USD', website: '', email: '' });
   const [ind, setInd] = useState({ industry: '', description: '', services: '', differentiators: '', facts: '' });
   const [fin, setFin] = useState({ revenue: '', period: 'monthly' });
   const [team, setTeam] = useState<{ name: string; role: string }[]>([{ name: '', role: '' }]);
   const [saving, setSaving] = useState(false);
+  // Once the user picks a currency themselves, choosing a country must not overwrite it.
+  const currencyChosen = useRef(false);
 
   useEffect(() => {
     if (!synced) void hydrate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onboarding = ws?.onboarding ?? makeOnboarding();
+  // Start from what the company already has (from the New company dialog or an earlier visit) instead of a blank form,
+  // so this step never asks again for details it already holds and saving it cannot blank them out.
+  useEffect(() => {
+    if (!ws) return;
+    setProfile((p) => (p.name ? p : { name: ws.name ?? '', legalName: ws.legalName ?? '', country: ws.country ?? '', currency: ws.currency ?? 'USD', website: ws.website ?? '', email: ws.email ?? '' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws?.id]);
+
+  const onboarding = normalizeOnboarding(ws?.onboarding);
+
+  // Opened with no ?step= (for example "Resume onboarding"): start at the first step that is not done yet, so a company whose
+  // profile is already filled in is never shown the profile page a second time.
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (!ws || resumed.current || wantedStep) return;
+    resumed.current = true;
+    // the first required step that is not done: optional steps are never what "resume" lands on
+    const first = ORDER.find((id) => !OPTIONAL.has(id) && !onboarding.steps.find((s) => s.id === id)?.completed);
+    if (first) setStep(first);
+  }, [ws, wantedStep]);
 
   function markComplete(ids: StepId[]) {
     if (!ws) return;
-    const steps = (onboarding.steps.length ? onboarding.steps : makeOnboarding().steps).map((s) =>
-      ids.includes(s.id) ? { ...s, completed: true } : s,
-    );
-    const completed = steps.every((s) => s.completed);
+    const steps = normalizeOnboarding(ws.onboarding).steps.map((s) => (ids.includes(s.id) ? { ...s, completed: true, skipped: false } : s));
+    // finished means every required step is done; optional ones may be done, skipped or left
+    const completed = steps.filter((s) => !s.optional).every((s) => s.completed);
     setOnboarding(ws.id, { started: true, completed, steps });
+  }
+
+  function skip(id: StepId) {
+    if (ws) {
+      const steps = normalizeOnboarding(ws.onboarding).steps.map((s) => (s.id === id ? { ...s, skipped: true } : s));
+      setOnboarding(ws.id, { started: true, steps });
+    }
+    next();
   }
 
   const valFacts = useMemo(
@@ -221,35 +258,39 @@ export function OnboardingWizard() {
             <Sparkles className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Set up {ws.name}</h1>
-            <p className="text-xs text-muted-foreground">A 5-step onboarding builds the knowledge base your agents and valuation model use.</p>
+            <h1 className="text-xl font-bold tracking-tight text-foreground">Set up {ws.name}</h1>
+            <p className="mt-0.5 text-sm text-foreground/70">Five essential steps build the knowledge base your agents and valuation model use. Four optional ones (website, AI, email, voice) can be skipped and done later.</p>
           </div>
         </div>
 
-        {/* Stepper */}
-        <div className="mb-8 flex items-center gap-2">
+        {/* Stepper: every step keeps its full name; they wrap into rows on narrow screens */}
+        <ol className="mb-8 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
           {ORDER.map((s, i) => {
-            const done = onboarding.steps.find((x) => x.id === s)?.completed;
+            const st = onboarding.steps.find((x) => x.id === s);
+            const done = st?.completed;
             const active = s === step;
             const Icon = STEP_META[s].icon;
             return (
-              <button
-                key={s}
-                onClick={() => setStep(s)}
-                className={`flex flex-1 items-center gap-2 rounded-xl border px-3 py-2 text-left transition ${
-                  active ? 'border-primary/50 bg-primary/5' : 'border-border hover:bg-card'
-                }`}
-              >
-                <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${done ? 'bg-emerald-500/15 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
-                  {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
-                </span>
-                <div className="hidden sm:block">
-                  <div className="text-[11px] font-semibold">{STEP_META[s].title}</div>
-                </div>
-              </button>
+              <li key={s}>
+                <button
+                  onClick={() => setStep(s)}
+                  aria-current={active ? 'step' : undefined}
+                  className={`flex h-full w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition ${
+                    active ? 'border-primary/60 bg-primary/5' : OPTIONAL.has(s) ? 'border-dashed border-border hover:bg-card' : 'border-border hover:bg-card'
+                  }`}
+                >
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${done ? 'bg-emerald-500/15 text-emerald-600' : 'bg-muted text-muted-foreground'}`}>
+                    {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[11px] font-medium text-muted-foreground">{i + 1}{OPTIONAL.has(s) ? ' · optional' : ''}{st?.skipped && !done ? ' · skipped' : ''}</span>
+                    <span className="block text-xs font-semibold leading-tight text-foreground">{STEP_META[s].title}</span>
+                  </span>
+                </button>
+              </li>
             );
           })}
-        </div>
+        </ol>
 
         <Card className="borga-fade-up p-6">
           <div className="mb-5 flex items-center gap-3">
@@ -269,12 +310,20 @@ export function OnboardingWizard() {
                 <div><Label className="text-xs text-muted-foreground">Legal name</Label><Input value={profile.legalName} onChange={(e) => setProfile({ ...profile, legalName: e.target.value })} className="mt-1" /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label className="text-xs text-muted-foreground">Country</Label><Input value={profile.country} onChange={(e) => setProfile({ ...profile, country: e.target.value })} className="mt-1" /></div>
+                <div><Label className="text-xs text-muted-foreground">Country</Label>
+                  <div className="mt-1">
+                    <CountrySelect
+                      value={profile.country}
+                      onChange={(v) => setProfile((p) => ({ ...p, country: v }))}
+                      // the country's own currency, unless the user already chose one
+                      onPick={(c) => c.cur && !currencyChosen.current && setProfile((p) => ({ ...p, currency: c.cur }))}
+                    />
+                  </div>
+                </div>
                 <div><Label className="text-xs text-muted-foreground">Currency</Label>
-                  <Select value={profile.currency} onValueChange={(v) => setProfile({ ...profile, currency: v })}>
-                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                    <SelectContent>{Object.keys(CURRENCY_SYMBOL).map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select>
+                  <div className="mt-1">
+                    <CurrencySelect value={profile.currency} onChange={(v) => { currencyChosen.current = true; setProfile((p) => ({ ...p, currency: v })); }} />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -334,6 +383,11 @@ export function OnboardingWizard() {
             </div>
           )}
 
+          {step === 'website' && <WebsiteStep initialUrl={profile.website || ws.website} onAdded={() => { markComplete(['website']); next(); }} />}
+          {step === 'ai' && <AiStep onChosen={() => markComplete(['ai'])} />}
+          {step === 'email' && <EmailStep onConfigured={() => markComplete(['email'])} />}
+          {step === 'voice' && <VoiceStep onChosen={() => markComplete(['voice'])} />}
+
           {step === 'valuation' && valFacts && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -343,6 +397,25 @@ export function OnboardingWizard() {
                 <div className="rounded-xl border bg-muted/20 p-4"><p className="text-xs text-muted-foreground">Bear case</p><p className="text-2xl font-bold">{sym}{valFacts.floor.toFixed(2)}M</p></div>
                 <div className="rounded-xl border bg-muted/20 p-4"><p className="text-xs text-muted-foreground">Bull case</p><p className="text-2xl font-bold">{sym}{valFacts.ceiling.toFixed(2)}M</p></div>
                 <div className="rounded-xl border bg-muted/20 p-4"><p className="text-xs text-muted-foreground">Growth (YoY)</p><p className="text-2xl font-bold">{valFacts.growthPct}%</p></div>
+              </div>
+              <div className="rounded-xl border p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Optional setup</p>
+                <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {ORDER.filter((id) => OPTIONAL.has(id)).map((id) => {
+                    const st = onboarding.steps.find((x) => x.id === id);
+                    const state = st?.completed ? 'Done' : st?.skipped ? 'Skipped' : 'Not done';
+                    return (
+                      <li key={id} className="flex items-center justify-between gap-2 rounded-lg bg-muted/30 px-3 py-2 text-sm">
+                        <span className="flex items-center gap-2">{(() => { const I = STEP_META[id].icon; return <I className="h-4 w-4 text-muted-foreground" />; })()}{STEP_META[id].title}</span>
+                        <span className="flex items-center gap-2">
+                          <span className={`text-xs ${st?.completed ? 'text-emerald-600' : 'text-muted-foreground'}`}>{state}</span>
+                          {!st?.completed && <button className="text-xs text-primary hover:underline" onClick={() => setStep(id)}>Set up</button>}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="mt-2 text-[11px] text-muted-foreground">You can do any of these later: open Settings, or this page again from the Resume onboarding button.</p>
               </div>
               <p className="text-xs text-muted-foreground">
                 Derived from your industry ({industryProfile(ws.industry).label}), the revenue you entered, and your knowledge base.
@@ -357,7 +430,12 @@ export function OnboardingWizard() {
             </Button>
             <div className="flex items-center gap-3">
               {stepError && <span className="text-xs font-medium text-rose-500">{stepError}</span>}
-              {step !== 'valuation' ? (
+              {OPTIONAL.has(step) ? (
+                <>
+                  <Button variant="ghost" onClick={() => skip(step)}>Skip for now</Button>
+                  <Button onClick={next}><ArrowRight className="h-4 w-4" /> {onboarding.steps.find((x) => x.id === step)?.completed ? 'Continue' : 'Continue without setting up'}</Button>
+                </>
+              ) : step !== 'valuation' ? (
                 <Button onClick={step === 'profile' ? saveProfile : step === 'industry' ? saveIndustry : step === 'financials' ? saveFinancials : saveTeam} disabled={saving || !canContinue}>
                   {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Continue
                 </Button>

@@ -32,6 +32,16 @@ const nextConfig: NextConfig = {
     } catch {
       umamiHost = '';
     }
+    // The Company Engine API host is per-workspace and user-supplied; when the
+    // deployment sets a shared fallback (BORGA_ENGINE_URL), allow the browser
+    // to reach that origin too. Nothing is hardcoded — blank means self-only.
+    let engineHost = '';
+    try {
+      const raw = process.env.BORGA_ENGINE_URL;
+      if (raw && raw.startsWith('http')) engineHost = new URL(raw).origin;
+    } catch {
+      engineHost = '';
+    }
     // Vercel Web Analytics is only present on real Vercel deployments.
     const vercelAnalytics = !!process.env.VERCEL;
     const scriptExtra = [
@@ -43,6 +53,7 @@ const nextConfig: NextConfig = {
     const connectExtra = [
       umamiHost ? `https://${umamiHost}` : '',
       vercelAnalytics ? 'https://va.vercel-analytics.com https://*.vercel-insights.com' : '',
+      engineHost,
     ]
       .filter(Boolean)
       .join(' ');
@@ -55,6 +66,10 @@ const nextConfig: NextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Permissions-Policy', value: 'camera=(), geolocation=()' },
           { key: 'X-XSS-Protection', value: '0' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+          // HSTS only where it is real: on localhost it would pin the dev host to https.
+          ...(isDev ? [] : [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' }]),
           {
             key: 'Content-Security-Policy',
             value: [
@@ -67,11 +82,16 @@ const nextConfig: NextConfig = {
               // happyseeds.ai required for the watermark logo image.
               "img-src 'self' data: blob: https://happyseeds.ai https://*.happyseeds.ai",
               "font-src 'self' data:",
-              // *.happyseeds.ai required for the watermark API; 2pointlogistics.com for the engine API.
+              // *.happyseeds.ai required for the watermark API. Engine calls are
+              // proxied through our own API routes; connectExtra only adds the
+              // deployment fallback origin when BORGA_ENGINE_URL is set.
               // Composio calls are proxied through our own API routes, so no direct browser→composio connection needed.
-              `connect-src 'self' https://2pointlogistics.com https://*.happyseeds.ai ${connectExtra}`.trim(),
+              `connect-src 'self' https://*.happyseeds.ai ${connectExtra}`.trim(),
               "object-src 'none'",
               "base-uri 'self'",
+              // No other site may frame the app (clickjacking), and forms may only post back to it.
+              "frame-ancestors 'none'",
+              "form-action 'self'",
             ].join('; '),
           },
         ],

@@ -1,9 +1,13 @@
 'use client';
 
+import { ConnectedApps } from './ConnectedApps';
+import { useConnectionActions } from '../use-connection-actions';
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   Plus,
   PlugZap,
+  ChevronDown,
+  ChevronUp,
   Search,
   Unplug,
   ShieldCheck,
@@ -19,10 +23,7 @@ import {
   Trash2,
   RefreshCw,
   ExternalLink,
-  ChevronDown,
-  ChevronUp,
   Lock,
-  Phone,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,9 +31,18 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useBorga } from '@/lib/borga/store';
-import { LLM_PROVIDERS, VOICE_PROVIDERS, EMAIL_APPS, COMPOSIO_TOOLKITS, type AppConnection, type EmailApp, type Toolkit } from '@/lib/borga/data';
+import { useComposioReady } from '../use-composio-ready';
+import { LLM_PROVIDERS, EMAIL_APPS, COMPOSIO_TOOLKITS, type AppConnection, type EmailApp, type Toolkit } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { ModelCatalogEditor } from './ModelCatalogEditor';
+import { FreeLlmPanel } from './FreeLlmPanel';
+import { ModelPicker, tierSections } from './ModelPicker';
+import { COMPOSIO_ENTITY, connectionIdForToolkit } from '@/lib/borga/connected-apps';
+import { dedupeServers, findServerByUrl } from '@/lib/borga/mcp-dedupe';
+import { useConnectedApps } from '../use-connected-apps';
+import { ConnectionSummary } from './ConnectionSummary';
+import { presetFor } from '@/lib/borga/model-catalog';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast-bus';
 
@@ -69,12 +79,6 @@ const TOOLKIT_CONN: Record<string, string> = {
   LinkedIn: 'cn-linkedin',
 };
 
-const TYPE_STYLE: Record<AppConnection['type'], string> = {
-  tool: 'bg-sky-500/10 text-sky-600 ring-sky-500/30',
-  llm: 'bg-violet-500/10 text-violet-600 ring-violet-500/30',
-  voice: 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30',
-};
-
 // Maps each LLM provider ID to the env var(s) it needs
 const LLM_KEY_MAP: Record<string, { envVar: string; label: string; kind: 'key' | 'url'; hint: string; extra?: { envVar: string; label: string; kind: 'key' | 'url'; hint: string } }> = {
   'llm-groq': { envVar: 'GROQ_API_KEY', label: 'API key', kind: 'key', hint: 'console.groq.com — free tier' },
@@ -83,16 +87,21 @@ const LLM_KEY_MAP: Record<string, { envVar: string; label: string; kind: 'key' |
   'llm-claude': { envVar: 'ANTHROPIC_API_KEY', label: 'API key', kind: 'key', hint: 'console.anthropic.com' },
   'llm-openai': { envVar: 'OPENAI_API_KEY', label: 'API key', kind: 'key', hint: 'platform.openai.com/api-keys' },
   'llm-openrouter': { envVar: 'OPENROUTER_API_KEY', label: 'API key', kind: 'key', hint: 'openrouter.ai/keys' },
-  'llm-ollama': { envVar: 'OLLAMA_BASE_URL', label: 'Base URL', kind: 'url', hint: 'default: http://127.0.0.1:11434/v1' },
+  'llm-cerebras': { envVar: 'CEREBRAS_API_KEY', label: 'API key', kind: 'key', hint: 'cloud.cerebras.ai — free tier' },
+  'llm-sambanova': { envVar: 'SAMBANOVA_API_KEY', label: 'API key', kind: 'key', hint: 'cloud.sambanova.ai — free tier' },
+  'llm-mistral': { envVar: 'MISTRAL_API_KEY', label: 'API key', kind: 'key', hint: 'console.mistral.ai/api-keys — free Experiment plan' },
+  'llm-muse': {
+    envVar: 'MUSE_BASE_URL', label: 'Base URL', kind: 'url', hint: 'remote Muse API (https), e.g. https://api.example.com/v1',
+    extra: { envVar: 'MUSE_API_KEY', label: 'API key', kind: 'key', hint: 'Bearer key for the remote Muse API (leave empty if it needs none)' },
+  },
   'llm-custom': {
     envVar: 'LLM_BASE_URL', label: 'Base URL', kind: 'url', hint: 'e.g. http://localhost:8000/v1',
     extra: { envVar: 'LLM_API_KEY', label: 'API key', kind: 'key', hint: 'Bearer token for your endpoint' },
   },
 };
 
-const VOICE_KEY_MAP: Record<string, { envVar: string; label: string; hint: string }> = {
-  'voice-elevenlabs': { envVar: 'ELEVENLABS_API_KEY', label: 'API key', hint: 'elevenlabs.io/app/api-key' },
-};
+/** The model a card shows before the user picks one: the first free model, else the first model. */
+const firstModelOf = (p: { models: { id: string; tier: string }[] }): string => (p.models.find((m) => m.tier === 'free') ?? p.models[0])?.id ?? '';
 
 const TWILIO_KEYS: { envVar: string; label: string; kind: 'key' | 'url'; hint: string }[] = [
   { envVar: 'TWILIO_ACCOUNT_SID', label: 'Account SID', kind: 'key', hint: 'console.twilio.com' },
@@ -101,6 +110,9 @@ const TWILIO_KEYS: { envVar: string; label: string; kind: 'key' | 'url'; hint: s
 ];
 
 const SMTP_KEYS: { envVar: string; label: string; kind: 'key' | 'url'; hint: string }[] = [
+  { envVar: 'MAILDOG_USER', label: 'MailDog user name', kind: 'key', hint: 'Your MailDog account user name (it is your email address)' },
+  { envVar: 'MAILDOG_PASSWORD', label: 'MailDog password', kind: 'key', hint: 'Used with mail.maildog.io on port 587; stored encrypted' },
+  { envVar: 'MAILDOG_FROM', label: 'MailDog from address', kind: 'url', hint: 'e.g. Borga <noreply@yourdomain.com>; must be on your MailDog domain' },
   { envVar: 'SMTP_HOST', label: 'SMTP Host', kind: 'url', hint: 'e.g. smtp.gmail.com or smtp.sendgrid.net' },
   { envVar: 'SMTP_PORT', label: 'SMTP Port', kind: 'key', hint: '587 (STARTTLS) or 465 (SSL)' },
   { envVar: 'SMTP_USER', label: 'SMTP Username', kind: 'key', hint: 'Account / API user' },
@@ -245,7 +257,7 @@ export type ToolsSection = 'ai-providers' | 'email' | 'composio' | 'apps';
  * switching sections never loses OAuth/key state; only the JSX output changes.
  */
 export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection }) {
-  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, removeComposioConnection, updateComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, elevenlabs, setElevenlabs } = useBorga();
+  const { toolkits, installToolkit, uninstallToolkit, connections, connectApp, log, composio, setComposio, addComposioConnection, llmCatalog, mcpServers, addMcpServer, updateMcpServer, deleteMcpServer, activeWorkspaceId, llm, setDefaultLlm, loadFreeModels, syncToolkitConnection } = useBorga();
   // Dynamic, per-workspace catalog (DB-backed); falls back to the seed list.
   const catalog = llmCatalog && llmCatalog.length ? llmCatalog : LLM_PROVIDERS;
   const [query, setQuery] = useState('');
@@ -254,17 +266,53 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   const [account, setAccount] = useState('');
   const [agree, setAgree] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  // ── LinkedIn author choice (personal vs the page you post as) ───────────
+  const [liChoice, setLiChoice] = useState<'personal' | 'organization'>('personal');
+
+  // ── Live per-toolkit tools — expanding a card fetches the real list once ──
+  const [expandedToolkitId, setExpandedToolkitId] = useState<string | null>(null);
+  const [toolkitTools, setToolkitTools] = useState<Record<string, { slug: string; description: string }[]>>({});
+  const [loadingTools, setLoadingTools] = useState<string | null>(null);
+
+  const loadToolkitTools = async (t: Toolkit) => {
+    if (toolkitTools[t.id] || loadingTools || !hasComposioKey) return;
+    setLoadingTools(t.id);
+    try {
+      const res = await fetch('/api/borga/composio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ action: 'tools', appName: t.composioAppName }),
+      });
+      const d = (await res.json()) as { ok: boolean; tools?: { slug: string; description: string }[] };
+      if (d.ok && d.tools) setToolkitTools((s) => {
+        const next: Record<string, { slug: string; description: string }[]> = { ...s };
+        next[t.id] = d.tools ?? [];
+        return next;
+      });
+    } catch {
+      // keep the placeholder empty — a retry can reload
+    } finally {
+      setLoadingTools(null);
+    }
+  };
+
 
   // OAuth state shared by email + toolkit cards
   const [oauthConnecting, setOauthConnecting] = useState<string | null>(null);
   const [oauthStatuses, setOauthStatuses] = useState<Record<string, 'connected' | 'connecting' | 'off'>>({});
+
+  // A server-side COMPOSIO_API_KEY counts too, so an env-configured key works
+  // across the app even when no per-workspace key was saved in the UI.
+  const { ready: composioReady } = useComposioReady();
+  const hasComposioKey = !!composio.apiKey || composioReady;
+  const { apps: liveApps, refresh: refreshLiveApps } = useConnectedApps();
 
   // Live Composio catalog — user-triggered refresh (not auto-fetched to avoid startup 502s)
   const [liveToolkits, setLiveToolkits] = useState<Toolkit[] | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
 
   const refreshCatalog = useCallback(async () => {
-    if (!composio.apiKey || catalogLoading) return;
+    if (!hasComposioKey || catalogLoading) return;
     setCatalogLoading(true);
     try {
       const r = await fetch('/api/borga/composio', {
@@ -296,11 +344,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     } finally {
       setCatalogLoading(false);
     }
-  }, [composio.apiKey, catalogLoading]);
+  }, [composio.apiKey, hasComposioKey, catalogLoading]);
 
 
   const connectViaOAuth = async (id: string, composioAppName: string, label: string, connId?: string) => {
-    if (!composio.apiKey) return;
+    if (!hasComposioKey) return;
     setOauthConnecting(id);
     setOauthStatuses((s) => ({ ...s, [id]: 'connecting' }));
     if (connId) connectApp(connId, { status: 'connecting', account: '', lastSync: 'Connecting…' });
@@ -308,7 +356,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       const res = await fetch('/api/borga/composio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ action: 'connect', appName: composioAppName, entityId: 'default', apiKey: composio.apiKey }),
+        body: JSON.stringify({ action: 'connect', appName: composioAppName, entityId: COMPOSIO_ENTITY, apiKey: composio.apiKey }),
       });
       const d = await res.json() as { ok: boolean; method?: string; connection?: { redirectUrl?: string; redirect_url?: string } };
       const redirectUrl = d.connection?.redirectUrl ?? d.connection?.redirect_url;
@@ -343,8 +391,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
               clearInterval(interval);
               setOauthStatuses((s) => ({ ...s, [id]: 'connected' }));
               setOauthConnecting(null);
+              // Single mirror-sync so Inbox/Social cards reflect the link too.
+              syncToolkitConnection(composioAppName, true, (found as { id?: string }).id);
+              void refreshLiveApps();
               if (connId) connectApp(connId, { status: 'connected', account: 'OAuth authorized', lastSync: 'Just now', scopes: 'OAuth authorized' });
-              log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: `${label} connected via OAuth.` });
+              log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: `${label} connected via OAuth.` });
             }
           } catch { /* ignore poll errors */ }
         }, 2000);
@@ -363,7 +414,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   const connectEmail = async (app: EmailApp) => connectViaOAuth(app.id, app.composioAppName, app.label);
 
   // Composio config
-  const [apiKey, setApiKey] = useState(composio.apiKey);
+  // A persisted mask is not a key — never show or resend it.
+  const sanitizedStoreKey = /^\[.*\]$/.test((composio.apiKey ?? '').trim()) ? '' : composio.apiKey;
+  const [apiKey, setApiKey] = useState(sanitizedStoreKey);
   const [baseUrl, setBaseUrl] = useState(composio.baseUrl);
   const [showKey, setShowKey] = useState(false);
 
@@ -396,15 +449,19 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   const toggleExpand = (id: string) =>
     setExpandedProviders((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
+  // Shared (deployment-wide) keys can only be changed by the administrator; everyone else sets up their own under Connections.
+  const [operator, setOperator] = useState(false);
   const fetchKeys = useCallback(async () => {
     setKeysLoading(true);
     try {
       const res = await fetch('/api/borga/config');
-      const d = (await res.json()) as { keys: KeyStatus[] };
+      const d = (await res.json()) as { keys: KeyStatus[]; operator?: boolean };
+      setOperator(!!d.operator);
       const map: Record<string, KeyStatus> = {};
       for (const k of d.keys) map[k.envVar] = k;
       setKeys(map);
@@ -452,6 +509,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   const [mcpAddError, setMcpAddError] = useState('');
   const [mcpBusyId, setMcpBusyId] = useState<string | null>(null);
   const [mcpTokenDrafts, setMcpTokenDrafts] = useState<Record<string, string>>({});
+  const [confirmDeleteMcp, setConfirmDeleteMcp] = useState<string | null>(null);
 
   const mcpApi = async (payload: Record<string, unknown>) => {
     const res = await fetch('/api/borga/mcp', {
@@ -464,6 +522,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
 
   const addServer = async () => {
     if (!mcpName.trim() || !mcpUrl.trim() || mcpAdding) return;
+    const already = findServerByUrl(mcpServers, mcpUrl);
+    if (already) {
+      setMcpAddError(`That server is already added as "${already.name}". Use Test or Reconnect on it instead.`);
+      return;
+    }
     setMcpAdding(true);
     setMcpAddError('');
     try {
@@ -481,7 +544,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       if (mcpAuthType === 'bearer' && mcpToken.trim()) {
         await mcpApi({ action: 'save_token', serverId: id, token: mcpToken.trim() });
       }
-      log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: `Added MCP server "${mcpName.trim()}"${test.ok ? ` — ${test.tools?.length ?? 0} tools available.` : '.'}` });
+      log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: `Added MCP server "${mcpName.trim()}"${test.ok ? ` — ${test.tools?.length ?? 0} tools available.` : '.'}` });
       setMcpName(''); setMcpUrl(''); setMcpToken(''); setMcpAuthType('none');
     } catch {
       setMcpAddError('Network error while adding the server.');
@@ -517,6 +580,54 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     }
   };
 
+  // ── One-click Composio-hosted MCP for social ─────────────────────────────
+  // Provisions managed auth configs + a "Borga Social" MCP server at Composio
+  // and registers its scoped URL here. Agents can then call the social tools
+  // through mcp_call once the social accounts are linked.
+  const [socialMcpBusy, setSocialMcpBusy] = useState(false);
+  const [socialMcpMsg, setSocialMcpMsg] = useState('');
+  const setupSocialMcp = async () => {
+    if (socialMcpBusy || !activeWorkspaceId) return;
+    setSocialMcpBusy(true);
+    setSocialMcpMsg('');
+    try {
+      const res = await fetch('/api/borga/composio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ action: 'mcpSocialSetup', entityId: activeWorkspaceId, apiKey: composio.apiKey || undefined }),
+      });
+      const d = (await res.json()) as { ok: boolean; error?: string; serverId?: string; url?: string; manual?: string[] };
+      if (!d.ok || !d.url) {
+        setSocialMcpMsg(d.error ?? 'Could not set up the hosted MCP server.');
+        return;
+      }
+      const test = await mcpApi({ action: 'test', url: d.url, provider: 'composio' });
+      if (!test.ok) {
+        setSocialMcpMsg(`Server created but unreachable: ${test.error ?? 'unknown error'}.`);
+        return;
+      }
+      const existing = mcpServers.find((s) => s.provider === 'composio' && s.name === 'Composio Social') ?? findServerByUrl(mcpServers, d.url);
+      if (existing) {
+        updateMcpServer(existing.id, { url: d.url, status: 'connected', tools: test.tools, toolCount: test.tools?.length, lastSync: new Date().toISOString(), lastError: undefined });
+      } else {
+        addMcpServer({
+          id: `mcp-${Date.now().toString(36)}`, name: 'Composio Social', url: d.url,
+          authType: 'none', provider: 'composio',
+          status: 'connected', lastSync: new Date().toISOString(),
+          tools: test.tools, toolCount: test.tools?.length,
+        });
+      }
+      log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: `Composio Social MCP ready — ${test.tools?.length ?? 0} social tools available to agents via mcp_call.` });
+      setSocialMcpMsg(
+        `Ready — ${test.tools?.length ?? 0} tools. Link the social accounts under Marketing → Social Media to publish live.${(d.manual?.length ?? 0) ? ` Note: ${(d.manual ?? []).join(', ')} need custom OAuth apps (no managed credentials).` : ''}`,
+      );
+    } catch {
+      setSocialMcpMsg('Network error while setting up the hosted MCP server.');
+    } finally {
+      setSocialMcpBusy(false);
+    }
+  };
+
   const connectServerOAuth = async (id: string, url: string) => {
     setMcpBusyId(id);
     try {
@@ -544,7 +655,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           clearInterval(timer);
           const status = await mcpApi({ action: 'oauth_status', serverId: id });
           if (status.connected) {
-            log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'sync', message: 'Connected MCP server via OAuth.' });
+            log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'sync', message: 'Connected MCP server via OAuth.' });
             await refreshServer(id);
           } else {
             updateMcpServer(id, { status: 'error', lastError: 'Authorization window closed before completing sign-in.' });
@@ -565,7 +676,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       const res = await fetch('/api/borga/smtp-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ to: smtpTestTo.trim() }),
+        // ws matters: without it the server only checks the shared sender and
+        // ignores the company's own SMTP connection.
+        body: JSON.stringify({ to: smtpTestTo.trim(), ws: activeWorkspaceId }),
       });
       const d = (await res.json()) as { ok: boolean; error?: string };
       if (d.ok) {
@@ -581,8 +694,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   };
 
   const saveComposio = () => {
-    setComposio({ apiKey: apiKey.trim(), baseUrl: baseUrl.trim() });
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: 'Composio.dev API configuration saved.' });
+    const clean = /^\[.*\]$/.test(apiKey.trim()) ? '' : apiKey.trim();
+    setComposio({ apiKey: clean, baseUrl: baseUrl.trim() });
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: 'Composio.dev API configuration saved.' });
   };
 
   // Merge static (store) toolkits with live Composio catalog
@@ -620,9 +734,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     if (!oauth) return;
     setConnecting(true);
     connectApp(oauth.connectionId, { status: 'connecting', account: account.trim(), lastSync: 'Connecting…' });
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: `OAuth flow started for ${oauth.label}.` });
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: `OAuth flow started for ${oauth.label}.` });
 
-    if (composio.configured) {
+    if (composio.configured || hasComposioKey) {
       try {
         const res = await fetch('/api/borga/composio', {
           method: 'POST',
@@ -684,6 +798,8 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                         connectedAt: new Date().toISOString(),
                         lastUsed: new Date().toISOString(),
                       });
+                      // Single mirror-sync so Inbox/Social cards reflect the link too.
+                      syncToolkitConnection(oauth.appName, true, matchedAccount.id);
                     }
                     
                     connectApp(oauth.connectionId, { 
@@ -692,14 +808,15 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                       lastSync: 'Just now',
                       scopes: 'OAuth authorized'
                     });
-                    log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'sync', message: `Successfully connected ${oauth.label} via Composio OAuth.` });
+                    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'sync', message: `Successfully connected ${oauth.label} via Composio OAuth.` });
                   } else {
                     connectApp(oauth.connectionId, { status: 'error', lastSync: 'Authorization failed' });
-                    log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `OAuth authorization failed for ${oauth.label}.` });
+                    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `OAuth authorization failed for ${oauth.label}.` });
                   }
                 }
               } catch (error) {
-                console.error('OAuth polling error:', error);
+                connectApp(oauth.connectionId, { status: 'error', lastSync: 'Status check failed' });
+                toast({ title: `Could not verify ${oauth.label}`, description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'warning' });
               }
             }, 2000);
             
@@ -714,141 +831,48 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             lastSync: 'Just now',
             scopes: 'API key authenticated'
           });
-          log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'sync', message: `Connected ${oauth.label} via Composio API key.` });
+          log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'sync', message: `Connected ${oauth.label} via Composio API key.` });
         } else {
           connectApp(oauth.connectionId, { status: 'error', lastSync: 'Failed' });
-          log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Failed to connect ${oauth.label}: ${JSON.stringify(data)}` });
+          log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Failed to connect ${oauth.label}: ${JSON.stringify(data)}` });
         }
       } catch (error) {
-        console.error('Composio connection error:', error);
         connectApp(oauth.connectionId, { status: 'error', lastSync: 'Error' });
-        log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Connection error for ${oauth.label}: ${error instanceof Error ? error.message : 'Unknown error'}` });
+        toast({ title: `Could not connect ${oauth.label}`, description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Connection error for ${oauth.label}: ${error instanceof Error ? error.message : 'Unknown error'}` });
       }
     } else {
       connectApp(oauth.connectionId, { status: 'error', lastSync: 'No Composio key' });
-      log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Could not connect ${oauth.label} — add a Composio API key below first.` });
+      log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Could not connect ${oauth.label} — add a Composio API key below first.` });
     }
     setOauth(null);
     setConnecting(false);
   };
 
+  // Disconnecting an app ends the real connection at Composio (see use-connection-actions); a voice or model card just switches off.
+  const connectionActions = useConnectionActions();
   const disconnect = async (conn: AppConnection) => {
+    if (conn.type === 'tool') return connectionActions.disconnect(conn);
     connectApp(conn.id, { status: 'off', lastSync: '…', account: '' });
-    
-    // If this is a Composio connection, also disconnect via API
-    if (conn.type === 'tool' && composio.configured) {
-      try {
-        const connectionId = conn.id.replace('cn-', '');
-        await fetch('/api/borga/composio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-          body: JSON.stringify({
-            action: 'disconnect',
-            apiKey: composio.apiKey,
-            baseUrl: composio.baseUrl || undefined,
-            connectionId,
-          }),
-        });
-        
-        // Remove from Composio connections store
-        const appId = conn.provider; // Use provider as the app identifier
-        removeComposioConnection(appId);
-      } catch (error) {
-        console.error('Composio disconnect error:', error);
-      }
-    }
-    
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'system', message: `Disconnected ${conn.label}.` });
-  };
-
-  const checkConnectionStatus = async (conn: AppConnection) => {
-    if (conn.type !== 'tool' || !composio.configured) return;
-    
-    try {
-      const connectionId = conn.id.replace('cn-', '');
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'connectionStatus',
-          apiKey: composio.apiKey,
-          baseUrl: composio.baseUrl || undefined,
-          appName: connectionId,
-        }),
-      });
-      const data = await res.json();
-      
-      if (data.ok && data.status === 'active') {
-        // Update last used timestamp
-        updateComposioConnection(conn.provider, { lastUsed: new Date().toISOString() });
-        connectApp(conn.id, { lastSync: 'Just now' });
-      } else if (data.ok && data.status === 'not_found') {
-        // Connection no longer exists on Composio side
-        connectApp(conn.id, { status: 'error', lastSync: 'Connection expired' });
-        log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Connection ${conn.label} expired or was revoked.` });
-      }
-    } catch (error) {
-      console.error('Connection status check error:', error);
-    }
-  };
-
-  const refreshToken = async (conn: AppConnection) => {
-    if (conn.type !== 'tool' || !composio.configured) return;
-    
-    try {
-      const connectionId = conn.id.replace('cn-', '');
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'refreshToken',
-          apiKey: composio.apiKey,
-          baseUrl: composio.baseUrl || undefined,
-          appName: connectionId,
-        }),
-      });
-      const data = await res.json();
-      
-      if (data.ok) {
-        updateComposioConnection(conn.provider, { lastUsed: new Date().toISOString() });
-        connectApp(conn.id, { lastSync: 'Token refreshed' });
-        log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'sync', message: `Refreshed OAuth token for ${conn.label}.` });
-      } else {
-        connectApp(conn.id, { status: 'error', lastSync: 'Token refresh failed' });
-        log({ agentId: 'a1', agentName: 'Borga', actor: 'system', kind: 'system', message: `Failed to refresh token for ${conn.label}.` });
-      }
-    } catch (error) {
-      console.error('Token refresh error:', error);
-      connectApp(conn.id, { status: 'error', lastSync: 'Refresh error' });
-    }
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `Disconnected ${conn.label}.` });
   };
 
   // After saving a key, refresh key status. (Choosing the default model is explicit: "Use as default".)
   const handleLlmKeySaved = (providerId: string) => {
     fetchKeys();
     const p = catalog.find((x) => x.id === providerId);
-    if (p) log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' API key saved.' });
-  };
-
-  // Derive ElevenLabs "connected" from the real key instead of a manual switch.
-  useEffect(() => {
-    if (keysLoading) return;
-    const has = !!keys['ELEVENLABS_API_KEY']?.configured;
-    if (has !== elevenlabs.connected) setElevenlabs({ connected: has, lastSync: has ? 'Key saved' : '…' });
-  }, [keys, keysLoading, elevenlabs.connected, setElevenlabs]);
-
-  const handleVoiceKeySaved = (providerId: string) => {
-    fetchKeys();
-    const p = VOICE_PROVIDERS.find((p) => p.id === providerId);
-    if (p) {
-      const { id: connId } = statusOf('voice', p.id.replace('voice-', ''), p.label);
-      connectApp(connId, { status: 'connected', account: '(API key saved)', lastSync: 'Just now', scopes: 'text-to-speech' });
-      log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: `${p.label} API key saved and connection activated.` });
+    if (p) log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' configuration saved.' });
+    // A saved key unlocks the provider's live model list: load it now so the dropdown shows what is really available.
+    if (p && presetFor(providerId)) {
+      void loadFreeModels(providerId).then((r) => {
+        if (r.ok) toast({ title: `${p.label}: ${r.count} free model${r.count === 1 ? '' : 's'} loaded`, description: 'Pick one in the dropdown, then press Use as default.', variant: 'success' });
+        else if (r.error) toast({ title: `${p.label}: models not loaded`, description: r.error, variant: 'warning' });
+      });
     }
   };
 
   const SECTION_HEADER: Record<ToolsSection, { title: string; sub: string }> = {
-    'ai-providers': { title: 'AI & voice providers', sub: 'Paste API keys for LLMs and text-to-speech — encrypted and stored server-side' },
+    'ai-providers': { title: 'AI providers', sub: 'Paste API keys for language models — encrypted and stored server-side. Voice keys live under Connections' },
     email: { title: 'Email & connected apps', sub: 'OAuth email accounts and every active connection with its scopes' },
     composio: { title: 'Composio.dev', sub: 'Configure the API, browse the live catalog and install toolkits' },
     apps: { title: 'Tools & Integrations', sub: 'API keys, composio.dev toolkits, LLM providers and connected apps' },
@@ -875,14 +899,22 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           <SectionTitle title="LLM providers" sub="Paste API keys here — encrypted and stored server-side" />
           {keysLoading && <RefreshCw className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
+        <FreeLlmPanel catalog={catalog} hasKey={(id) => !!(LLM_KEY_MAP[id] && keys[LLM_KEY_MAP[id].envVar]?.configured)} />
         <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {catalog.map((p) => {
             const keyConfig = LLM_KEY_MAP[p.id];
             const isDefault = llm.providerId === p.id;
-            const isDemo = p.id === 'llm-demo';
             const expanded = expandedProviders.has(p.id);
             const mainKeyStatus = keyConfig ? keys[keyConfig.envVar] : undefined;
-            const isConfigured = isDemo || mainKeyStatus?.configured;
+            // Keyless providers (Pollinations, LLM7) work with no account: they are ready as soon as they exist.
+            // Muse is a remote API: it is ready once its https address is saved (its key is optional).
+            const preset = presetFor(p.id);
+            const keyless = !!preset?.keyless;
+            const isConfigured = preset?.local
+              ? !!p.baseUrl || !!mainKeyStatus?.configured
+              : keyless || !!mainKeyStatus?.configured;
+            // One source of truth for what the card shows and what its buttons send, so they can never disagree.
+            const selectedModel = isDefault ? llm.model : (modelChoice[p.id] ?? firstModelOf(p));
 
             return (
               <Card key={p.id} className="flex flex-col p-4">
@@ -905,20 +937,25 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                     </span>
                   ))}
                   {p.models.length > 2 && <span>+{p.models.length - 2} more</span>}
+                  {p.models.some((m) => m.tier === 'free') && <span className="ml-2 text-emerald-600">{p.models.filter((m) => m.tier === 'free').length} free</span>}
                 </p>
 
-                {isDemo ? (
-                  <div className="mt-3 rounded-lg border bg-sky-500/5 px-3 py-2 text-[11px] text-sky-600">
-                    Built-in — No API key needed — Always on
+                {keyless && (
+                  <div className="mt-3 space-y-1.5">
+                    <div className="rounded-lg border bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+                      No API key needed. {preset?.note}.
+                    </div>
+                    {preset?.warning && <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-400">{preset.warning}</p>}
                   </div>
-                ) : keyConfig ? (
+                )}
+                {keyConfig && (
                   <div className="mt-3">
                     <button
                       type="button"
                       onClick={() => toggleExpand(p.id)}
                       className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground"
                     >
-                      <span>{mainKeyStatus?.configured ? 'Key configured — update' : 'Add API key'}</span>
+                      <span>{mainKeyStatus?.configured ? 'Endpoint configured — update' : keyless ? 'Set local endpoint (optional)' : 'Add API key'}</span>
                       {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
 
@@ -945,43 +982,40 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                       </div>
                     )}
                   </div>
-                ) : null}
+                )}
 
                 <div className="mt-3 space-y-2">
-                  <select
-                    value={isDefault ? llm.model : (modelChoice[p.id] ?? p.models[0]?.id ?? '')}
-                    onChange={(e) => (isDefault ? setDefaultLlm({ model: e.target.value, online: false, latency: 0 }) : setModelChoice((m) => ({ ...m, [p.id]: e.target.value })))}
-                    disabled={!isConfigured}
-                    className="h-8 w-full rounded-lg border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                  >
-                    {p.models.map((m) => (
-                      <option key={m.id} value={m.id}>{m.tier === 'free' ? '🟢 ' : m.tier === 'credits' ? '🟡 ' : '💳 '}{m.label}{m.contextK ? ' — ' + m.contextK + 'k' : ''}</option>
-                    ))}
-                  </select>
+                  {/* Always usable, even before a key is added: browse and pick, then add the key to use it. */}
+                  <ModelPicker
+                    aria-label={`${p.label} model`}
+                    sections={tierSections(p.models)}
+                    value={selectedModel}
+                    onChange={(id) => (isDefault ? setDefaultLlm({ model: id, online: false, latency: 0 }) : setModelChoice((m) => ({ ...m, [p.id]: id })))}
+                    placeholder="Choose a model"
+                  />
                   <div className="flex gap-2">
                     <Button
                       size="sm"
                       variant={isDefault ? 'outline' : 'default'}
                       className="flex-1 gap-1"
                       disabled={isDefault || !isConfigured}
-                      title={!isConfigured ? 'Add an API key above first' : undefined}
+                      title={!isConfigured ? (preset?.local ? 'Install the CLI and set its local address above first' : 'Configure this provider above first') : undefined}
                       onClick={() => {
-                        setDefaultLlm({ providerId: p.id, model: modelChoice[p.id] ?? p.models[0]?.id ?? '', online: isDemo, latency: 0 });
-                        log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' set as the default AI provider.' });
+                        setDefaultLlm({ providerId: p.id, model: selectedModel, online: keyless, latency: 0 });
+                        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: p.label + ' set as the default AI provider.' });
+                        if (preset?.warning) toast({ title: `${p.label} is now your default AI`, description: 'It is a no-account community service: avoid confidential company data.', variant: 'warning' });
                       }}
                     >
                       <ShieldCheck className="h-3.5 w-3.5" /> {isDefault ? 'In use' : 'Use as default'}
                     </Button>
-                    {!isDemo && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!isConfigured || llmTests[p.id]?.busy}
-                        onClick={() => testLlm(p.id, isDefault ? llm.model : (modelChoice[p.id] ?? p.models[0]?.id ?? ''))}
-                      >
-                        {llmTests[p.id]?.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : 'Test'}
-                      </Button>
-                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!isConfigured || llmTests[p.id]?.busy}
+                      onClick={() => testLlm(p.id, selectedModel)}
+                    >
+                      {llmTests[p.id]?.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : 'Test'}
+                    </Button>
                   </div>
                   {llmTests[p.id]?.msg && (
                     <p className={cn('text-[11px]', llmTests[p.id]?.ok ? 'text-emerald-600' : 'text-rose-600')}>{llmTests[p.id]?.msg}</p>
@@ -1005,6 +1039,10 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
               { label: 'Google Gemini', href: 'https://aistudio.google.com/apikey' },
               { label: 'OpenRouter', href: 'https://openrouter.ai/keys' },
               { label: 'NVIDIA NIM', href: 'https://build.nvidia.com' },
+              { label: 'Cerebras', href: 'https://cloud.cerebras.ai' },
+              { label: 'SambaNova', href: 'https://cloud.sambanova.ai' },
+              { label: 'Mistral', href: 'https://console.mistral.ai/api-keys' },
+              { label: 'More free providers (FreeLLM.net)', href: 'https://freellm.net/free-llm-api-keys' },
             ].map((l) => (
               <a key={l.href} href={l.href} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 hover:text-foreground hover:underline">
                 {l.label} <ExternalLink className="h-2.5 w-2.5" />
@@ -1015,100 +1053,17 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       </section>
       )}
 
-      {/* ── Voice agents ──────────────────────────────────────────────────── */}
-      {(section === 'ai-providers' || section === 'apps') && (
+      {/* ── Platform default keys (administrator) ──────────────────────────── */}
+      {operator && (section === 'ai-providers' || section === 'apps') && (
       <section>
-        <div className="flex items-center gap-2">
-          <AudioLines className="h-4 w-4 text-primary" />
-          <SectionTitle title="Voice agents" sub="Paste API keys to enable real TTS and outbound calls" />
-        </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {VOICE_PROVIDERS.map((p) => {
-            const { id: connId, conn } = statusOf('voice', p.id.replace('voice-', ''), p.label);
-            const connected = conn?.status === 'connected';
-            const keyConfig = VOICE_KEY_MAP[p.id];
-            const keyStatus = keyConfig ? keys[keyConfig.envVar] : undefined;
-            const expanded = expandedProviders.has(p.id);
-
-            return (
-              <Card key={p.id} className="p-4">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white" style={{ background: p.accent }}>
-                    <AudioLines className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold">{p.label}</p>
-                      {keyStatus?.configured && (
-                        <Badge className="shrink-0 bg-emerald-500/10 text-emerald-600 text-[10px]"><Check className="mr-0.5 h-2.5 w-2.5" /> ready</Badge>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground">{p.kind}</p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={connected ? 'outline' : 'default'}
-                    className="shrink-0 gap-1"
-                    disabled={!connected && !keyStatus?.configured}
-                    title={!connected && !keyStatus?.configured ? 'Add an API key below first' : undefined}
-                    onClick={() => {
-                      if (connected) { conn && disconnect(conn); }
-                      else if (keyStatus?.configured) connectApp(connId, { status: 'connected', account: '(API key)', lastSync: 'Just now', scopes: 'text-to-speech' });
-                    }}
-                  >
-                    {connected ? <><Unplug className="h-3.5 w-3.5" /> Off</> : <><ShieldCheck className="h-3.5 w-3.5" /> On</>}
-                  </Button>
-                </div>
-
-                {keyConfig && (
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={() => toggleExpand(p.id)}
-                      className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground"
-                    >
-                      <span>{keyStatus?.configured ? 'Key configured — update' : 'Add API key'}</span>
-                      {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                    </button>
-                    {expanded && (
-                      <div className="border-t mt-2 pt-2">
-                        <InlineKeyInput
-                          envVar={keyConfig.envVar}
-                          label={keyConfig.label}
-                          hint={keyConfig.hint}
-                          kind="key"
-                          status={keyStatus}
-                          onRefresh={() => handleVoiceKeySaved(p.id)}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </Card>
-            );
-          })}
-        </div>
-      </section>
-      )}
-
-      {/* ── Twilio — real outbound calling ─────────────────────────────────── */}
-      {(section === 'ai-providers' || section === 'apps') && (
-      <section>
-        <div className="flex items-center gap-2 mb-3">
-          <Phone className="h-4 w-4 text-primary" />
-          <SectionTitle
-            title="Outbound calling (Twilio)"
-            sub="Dial real phone numbers with the agent's ElevenLabs voice — without this, calls play locally instead"
-          />
-        </div>
-        <Card className="p-4">
-          <p className="text-xs text-muted-foreground">
-            When configured, agent calls (Company → Agents, or the voice assistant&apos;s Place a call) dial a real number via Twilio
-            and play the ElevenLabs-generated speech with <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">&lt;Play&gt;</code> instead
-            of Twilio&apos;s own voice. Requires a publicly reachable deployment — Twilio can&apos;t fetch call audio from localhost.
+        <details className="rounded-lg border p-4">
+          <summary className="cursor-pointer text-sm font-semibold">Platform default keys for voice and calling (administrator)</summary>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Each company sets its own ElevenLabs, Deepgram, Fish Audio and Twilio credentials under Integrations → Connections. These shared keys are only
+            a fallback for operators (or for every company when SHARED_PROVIDER_KEYS=allow). Phone calls need a publicly reachable deployment.
           </p>
-          <div className="space-y-1">
-            {TWILIO_KEYS.map((k) => (
+          <div className="mt-2 space-y-1">
+            {[{ envVar: 'ELEVENLABS_API_KEY', label: 'ElevenLabs API key', hint: 'elevenlabs.io/app/api-key', kind: 'key' as const }, { envVar: 'DEEPGRAM_API_KEY', label: 'Deepgram API key', hint: 'console.deepgram.com', kind: 'key' as const }, ...TWILIO_KEYS].map((k) => (
               <InlineKeyInput
                 key={k.envVar}
                 envVar={k.envVar}
@@ -1116,54 +1071,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                 hint={k.hint}
                 kind={k.kind}
                 status={keys[k.envVar]}
-                onRefresh={fetchKeys}
+                onRefresh={() => { fetchKeys(); window.dispatchEvent(new Event('borga:voice-setup-changed')); }}
               />
             ))}
           </div>
-        </Card>
-      </section>
-      )}
-
-      {/* ── SMTP / Email delivery ─────────────────────────────────────────── */}
-      {(section === 'ai-providers' || section === 'apps') && (
-      <section>
-        <div className="flex items-center gap-2 mb-3">
-          <Radio className="h-4 w-4 text-primary" />
-          <SectionTitle title="SMTP / email delivery" sub="Send real emails (password resets, notifications) via your SMTP server" />
-        </div>
-        <Card className="p-4">
-          <div className="space-y-1">
-            {SMTP_KEYS.map((k) => (
-              <InlineKeyInput
-                key={k.envVar}
-                envVar={k.envVar}
-                label={k.label}
-                hint={k.hint}
-                kind={k.kind}
-                status={keys[k.envVar]}
-                onRefresh={fetchKeys}
-              />
-            ))}
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-4">
-            <Input
-              type="email"
-              value={smtpTestTo}
-              onChange={(e) => setSmtpTestTo(e.target.value)}
-              placeholder="test@example.com"
-              className="h-8 w-56 font-mono text-xs"
-            />
-            <Button
-              size="sm"
-              className="h-8 gap-1.5"
-              disabled={!smtpTestTo.trim() || smtpSending}
-              onClick={sendTestEmail}
-            >
-              {smtpSending ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
-              Send test email
-            </Button>
-          </div>
-        </Card>
+        </details>
       </section>
       )}
 
@@ -1227,6 +1139,13 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           />
         </div>
 
+        {dedupeServers(mcpServers).removed.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700">
+            <span>{dedupeServers(mcpServers).removed.length} of these servers repeat another one&apos;s address, so agents see their tools twice.</span>
+            <Button size="sm" variant="outline" className="h-7" onClick={() => { const { removed } = dedupeServers(mcpServers); removed.forEach((r) => deleteMcpServer(r.id)); toast({ title: `Removed ${removed.length} duplicate server${removed.length === 1 ? '' : 's'}`, description: 'The connected copy of each was kept.', variant: 'success' }); }}>Remove duplicates</Button>
+          </div>
+        )}
+
         {mcpServers.length > 0 && (
           <div className="mb-4 space-y-3">
             {mcpServers.map((s) => (
@@ -1260,7 +1179,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                         <ExternalLink className="h-3.5 w-3.5" /> {s.status === 'connected' ? 'Reconnect' : 'Connect via OAuth'}
                       </Button>
                     )}
-                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:text-destructive" onClick={() => deleteMcpServer(s.id)} title="Remove server">
+                    <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:text-destructive" onClick={() => setConfirmDeleteMcp(s.id)} title="Remove server">
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -1294,6 +1213,23 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
 
         <Card className="p-4">
           <p className="text-xs font-medium">Add a server</p>
+          <div className="mt-2 rounded-xl border border-dashed bg-muted/20 p-3">
+            <p className="text-xs font-medium">Composio Social MCP</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              One-click hosted MCP for LinkedIn, Facebook, Instagram, YouTube and Pinterest — agents call its tools through mcp_call once the accounts are linked under Marketing → Social Media. Needs a Composio API key.
+            </p>
+            <Button
+              size="sm"
+              className="mt-2 gap-1.5"
+              disabled={socialMcpBusy || !hasComposioKey}
+              title={!hasComposioKey ? 'Add a Composio API key above first' : 'Create (or reuse) the hosted Borga Social MCP server'}
+              onClick={setupSocialMcp}
+            >
+              {socialMcpBusy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Set up Composio Social MCP
+            </Button>
+            {socialMcpMsg && <p className="mt-2 text-[11px] text-muted-foreground">{socialMcpMsg}</p>}
+          </div>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             <Input value={mcpName} onChange={(e) => setMcpName(e.target.value)} placeholder="Name (e.g. Notion)" className="h-8 text-xs" />
             <Input value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" className="h-8 font-mono text-xs" />
@@ -1324,6 +1260,15 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             Add server
           </Button>
         </Card>
+
+        <ConfirmDialog
+          open={!!confirmDeleteMcp}
+          onOpenChange={(o) => { if (!o) setConfirmDeleteMcp(null); }}
+          title={`Remove MCP server "${mcpServers.find((s) => s.id === confirmDeleteMcp)?.name ?? ''}"?`}
+          description="The server and its tool list are removed. Agents lose access to its tools immediately."
+          confirmLabel="Remove server"
+          onConfirm={() => { if (confirmDeleteMcp) deleteMcpServer(confirmDeleteMcp); setConfirmDeleteMcp(null); }}
+        />
       </section>
       )}
 
@@ -1341,8 +1286,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           {EMAIL_APPS.map((app) => {
-            const status = oauthStatuses[app.id] ?? 'off';
             const isConnecting = oauthConnecting === app.id;
+            // the live state at Composio, the same one every other screen reads: connected once is connected everywhere, also after a reload
+            const live = liveApps[app.composioAppName]?.connected ?? false;
+            const status = isConnecting ? 'connecting' : live ? 'connected' : 'off';
+            const card = connections.find((c) => c.id === connectionIdForToolkit(app.composioAppName));
             return (
               <Card key={app.id} className="flex flex-col gap-3 p-4">
                 <div className="flex items-center gap-2">
@@ -1361,7 +1309,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                 <Button
                   size="sm"
                   variant={status === 'connected' ? 'outline' : 'default'}
-                  disabled={!composio.apiKey || isConnecting}
+                  disabled={!hasComposioKey || isConnecting}
                   onClick={() => connectEmail(app)}
                   className="mt-auto gap-1.5"
                 >
@@ -1373,18 +1321,79 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                     <><ExternalLink className="h-3.5 w-3.5" /> Connect via OAuth</>
                   )}
                 </Button>
+                {status === 'connected' && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="gap-1.5 text-muted-foreground"
+                    onClick={() => void disconnect(card ?? { id: connectionIdForToolkit(app.composioAppName), type: 'tool', provider: app.composioAppName, label: app.label, status: 'connected', account: '', scopes: '', lastSync: '' }).then(() => refreshLiveApps())}
+                  >
+                    <Unplug className="h-3.5 w-3.5" /> Disconnect
+                  </Button>
+                )}
               </Card>
             );
           })}
         </div>
-        {!composio.apiKey && (
+        {!hasComposioKey && (
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Add your Composio API key below to enable OAuth email connections.
+            Add your Composio API key below (or set COMPOSIO_API_KEY on the server) to enable OAuth email connections.
           </p>
         )}
       </section>
       )}
 
+      {/* ── Sending server (SMTP) ───────────────────────────────────────────── */}
+      {(section === 'email' || section === 'apps') && (
+      <section>
+        <div className="flex items-center gap-2 mb-3">
+          <Radio className="h-4 w-4 text-primary" />
+          <SectionTitle title="Sending server (SMTP)" sub="Mail sent from your company's own address: ticket replies, notifications, and messages when Gmail isn't connected" />
+        </div>
+        <ConnectionSummary providerId="smtp" hint="Your company's mail server is entered and tested in Integrations → Connections." />
+        <Card className="mt-3 p-4">
+          <p className="text-xs font-medium">Send a test email</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Uses your company&apos;s mail server above, or the platform&apos;s default when you have none.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Input
+              type="email"
+              value={smtpTestTo}
+              onChange={(e) => setSmtpTestTo(e.target.value)}
+              placeholder="test@example.com"
+              className="h-8 w-56 font-mono text-xs"
+            />
+            <Button
+              size="sm"
+              className="h-8 gap-1.5"
+              disabled={!smtpTestTo.trim() || smtpSending}
+              onClick={sendTestEmail}
+            >
+              {smtpSending ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
+              Send test email
+            </Button>
+          </div>
+        </Card>
+        {operator && (
+          <details className="mt-3 rounded-lg border p-3">
+            <summary className="cursor-pointer text-xs font-medium">Platform default for every company (administrator)</summary>
+            <p className="mt-2 text-[11px] text-muted-foreground">Used for sign-in and account mail, and by any company that has not set up its own server. A company&apos;s own server above always wins for its mail.</p>
+            <div className="mt-2 space-y-1">
+              {SMTP_KEYS.map((k) => (
+                <InlineKeyInput
+                  key={k.envVar}
+                  envVar={k.envVar}
+                  label={k.label}
+                  hint={k.hint}
+                  kind={k.kind}
+                  status={keys[k.envVar]}
+                  onRefresh={fetchKeys}
+                />
+              ))}
+            </div>
+          </details>
+        )}
+      </section>
+      )}
       {/* ── Composio.dev API configuration ───────────────────────────────── */}
       {(section === 'composio' || section === 'apps') && (
       <Card className="p-5">
@@ -1396,9 +1405,9 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
               <p className="text-xs text-muted-foreground">Required for OAuth toolkit connections. Get a key at composio.dev.</p>
             </div>
           </div>
-          <Badge variant="outline" className={cn('gap-1.5', composio.configured && 'text-emerald-600')}>
-            <span className={cn('h-2 w-2 rounded-full', composio.configured ? 'bg-emerald-500' : 'bg-muted-foreground/50')} />
-            {composio.configured ? 'Configured' : 'Not configured'}
+          <Badge variant="outline" className={cn('gap-1.5', hasComposioKey && 'text-emerald-600')}>
+            <span className={cn('h-2 w-2 rounded-full', hasComposioKey ? 'bg-emerald-500' : 'bg-muted-foreground/50')} />
+            {hasComposioKey ? (composio.apiKey ? 'Workspace key set' : 'Server key set') : 'Not configured'}
           </Badge>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -1421,6 +1430,12 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                 {showKey ? 'Hide' : 'Show'}
               </button>
             </div>
+            {keys['COMPOSIO_API_KEY']?.configured && (
+              <p className="mt-1 text-[11px] text-emerald-600">
+                Server key active ({keys['COMPOSIO_API_KEY'].source === 'env' ? 'COMPOSIO_API_KEY' : 'saved config'}
+                {keys['COMPOSIO_API_KEY'].masked ? ` ${keys['COMPOSIO_API_KEY'].masked}` : ''}) — leave the field empty to use it.
+              </p>
+            )}
           </div>
           <div>
             <label className="text-xs font-medium text-muted-foreground">API base URL</label>
@@ -1473,7 +1488,8 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             const oauthStatus = oauthStatuses[t.id] ?? (conn?.status === 'connected' ? 'connected' : 'off');
             const isConnecting = oauthConnecting === t.id;
             const connected = oauthStatus === 'connected';
-            return (
+            const isExpanded = expandedToolkitId === t.id;
+            const isLoadingTools = loadingTools === t.id;            return (
               <Card key={t.id} className="flex flex-col gap-3 p-3.5">
                 <div className="flex items-start gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -1489,17 +1505,64 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                         </Badge>
                       )}
                       {oauthStatus === 'connecting' && (
-                        <Badge className="ml-auto shrink-0 bg-amber-500/10 text-amber-600 text-[10px]">connecting—</Badge>
+                          <Badge className="ml-auto shrink-0 bg-amber-500/10 text-amber-600 text-[10px]">connecting</Badge>
                       )}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">{t.description}</p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedToolkitId(isExpanded ? null : t.id)}
+                    title={isExpanded ? 'Hide tools' : 'Show tools'}
+                    className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </button>
                 </div>
+                {isExpanded && (
+                  <div className="mt-3 space-y-2 border-t pt-3">
+                    {t.composioAppName.toLowerCase() === 'linkedin' && connected && (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-semibold">Post as</p>
+                        <div className="flex gap-1.5">
+                          {(['personal', 'organization'] as const).map((which) => (
+                            <button
+                              key={which}
+                              type="button"
+                              onClick={() => setLiChoice(which)}
+                              className={`rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${liChoice === which ? 'bg-primary text-primary-foreground' : 'border hover:bg-muted'}`}
+                            >
+                              {which === 'personal' ? 'Your profile' : 'Company page'}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">author: {liChoice === 'personal' ? 'your LinkedIn member URN' : 'an urn:li:organization URN (use GET_USER_INFO to find it first)'}</p>
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      <p className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Agent tools
+                        {isLoadingTools && <RefreshCw className="h-3 w-3 animate-spin" />}
+                      </p>
+                      {(toolkitTools[t.id] ?? []).slice(0, 18).map((tool) => (
+                        <p key={tool.slug} className="truncate text-[11px] font-mono text-muted-foreground" title={tool.description}>
+                          {tool.slug}
+                        </p>
+                      ))}
+                      {!isLoadingTools && (toolkitTools[t.id] ?? []).length === 0 && (
+                        <button onClick={() => void loadToolkitTools(t)} className="text-[11px] text-muted-foreground hover:text-foreground">
+                          Load the tool list
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <Button
                     size="sm"
                     variant={connected ? 'outline' : 'default'}
-                    disabled={!composio.apiKey || isConnecting}
+                    disabled={!hasComposioKey || isConnecting}
+                    title={!hasComposioKey ? 'Add a Composio API key above (or set COMPOSIO_API_KEY on the server)' : connected ? 'Disconnect' : `Connect ${t.name} via OAuth`}
                     onClick={() => connected
                       ? (conn && disconnect(conn), setOauthStatuses((s) => ({ ...s, [t.id]: 'off' })))
                       : connectViaOAuth(t.id, t.composioAppName, t.name, connId)
@@ -1507,7 +1570,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                     className="flex-1 gap-1.5"
                   >
                     {isConnecting ? (
-                      <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Waiting—</>
+                      <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Waiting</>
                     ) : connected ? (
                       <><Unplug className="h-3.5 w-3.5" /> Disconnect</>
                     ) : (
@@ -1533,27 +1596,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       )}
 
       {/* ── Connected apps ────────────────────────────────────────────────── */}
-      {(section === 'email' || section === 'apps') && (
-      <section>
-        <SectionTitle title="Connected apps" sub="Active connections and their scopes" />
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          {connections
-            .filter((c) => c.status === 'connected')
-            .map((c) => (
-              <Card key={c.id} className="flex items-center gap-3 p-3">
-                <span className={cn('flex h-8 w-8 items-center justify-center rounded-lg ring-1', TYPE_STYLE[c.type])}>
-                  {c.type === 'voice' ? <AudioLines className="h-4 w-4" /> : c.type === 'llm' ? <Cpu className="h-4 w-4" /> : <PlugZap className="h-4 w-4" />}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{c.label}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{c.account} — {c.scopes}</p>
-                </div>
-                <CircleCheck className="h-4 w-4 text-emerald-500" />
-              </Card>
-            ))}
-        </div>
-      </section>
-      )}
+      {(section === 'email' || section === 'apps') && <ConnectedApps />}
 
       {/* ── Composio OAuth connect modal (Apollo-style) ───────────────────── */}
       <Dialog open={!!oauth} onOpenChange={(o) => !o && setOauth(null)}>
@@ -1578,10 +1621,10 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                       <p className="text-sm font-semibold">{oauth.label}</p>
                       <p className="text-[11px] text-muted-foreground">Tool — scoped read / write</p>
                     </div>
-                    {composio.configured ? (
+                    {hasComposioKey ? (
                       <Badge className="ml-auto bg-emerald-500/10 text-emerald-600 text-[10px]">Composio ready</Badge>
                     ) : (
-                      <Badge variant="outline" className="ml-auto text-[10px]">Simulation mode</Badge>
+                      <Badge variant="outline" className="ml-auto text-[10px]">Needs Composio key</Badge>
                     )}
                   </div>
                 </div>

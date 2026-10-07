@@ -42,3 +42,46 @@ The cron timer calls `POST /api/borga/cron` every 5 minutes: heartbeat, IMAP mai
 - Backups are local to the VM. Copy them off-box (e.g. Oracle Object Storage free tier, `rclone`) before trusting them.
 - `docker compose down` keeps data; `down -v` **deletes the database volume**.
 - Outbound port 25 is blocked on Oracle; use an SMTP provider on 587/465.
+
+## Startup checks
+
+The app exits at startup (see `docker compose logs app`) if `SESSION_SECRET`, `BORGA_SECRET_KEY` or `DATABASE_URL` is missing, too short or a placeholder. Generate each secret with `openssl rand -hex 32`. Missing `CRON_SECRET`, `SMTP_HOST` or `APP_URL` only logs a warning, but without `CRON_SECRET` the timers cannot trigger the heartbeat, SLA, mail and sync jobs.
+
+## Administrators and signup
+
+Set `BORGA_OPERATOR_EMAILS` to the administrator email(s) before the first start (the server refuses to start without it). Each listed address can always create an account, change the shared API keys under Integrations, and issue invites under Settings, Signup invitations. Everyone else needs a single-use invite link from an administrator. `SIGNUP_MODE` is `invite` by default; use `closed` to stop all new signups, or `open` only for a public product (the server warns).
+
+## First-run checklist (nothing here has been run yet)
+
+Do these in order on the VM and stop at the first failure. Each line says what a pass looks like.
+
+1. `docker compose build` finishes. (It builds Next.js on the VM; expect several minutes.)
+2. `docker compose up -d`, then `docker compose ps`: `db` is healthy, `app` is up, `caddy` is up.
+3. `docker compose logs migrate` ends with "schema verified" (the tables are created by this one-shot service before the app starts). `docker compose logs app` shows "Ready" and no "Refusing to start" (that message lists exactly which secret is missing).
+4. `curl -s http://127.0.0.1:13000/api/health` shows `"db":"connected"`.
+5. `https://YOUR_DOMAIN/login` loads over HTTPS with a valid certificate (DNS must already point at the VM and ports 80 and 443 must be open in the Oracle security list and the VM firewall).
+6. Sign up with an address from `BORGA_OPERATOR_EMAILS`, then create an invite under Settings and sign up a second address with it.
+7. Install the systemd timers, then `sudo systemctl start borga-cron.service` and `journalctl -u borga-cron.service -n 20`: it must print JSON with `"ok":true`, not a 401.
+8. Run `./backup.sh`, then restore that file into a scratch database to prove the backup is usable (command in the header of `backup.sh`).
+9. Copy a backup off the VM. A backup on the same disk does not survive losing the VM.
+
+## Database migrations
+
+The schema lives only in the files in `drizzle/`. A one-shot `migrate` service applies pending migrations on every `docker compose up`, before the app starts, and the app does not start if it fails (`docker compose logs migrate` says why). `./update.sh` takes a backup first, so a failed migration can be undone by restoring it. To preview or run by hand: `./migrate.sh --dry-run`, `./migrate.sh`.
+
+The migration that makes `borga_users.email` unique refuses to run while two accounts share an email in any letter case, and lists them. Merge or delete the extras, then run it again; nothing is changed until then.
+
+## Client addresses and rate limits
+
+The app rate-limits sign-in and the API by client address. It reads that from `X-Forwarded-For` (right-most value) and `deploy/Caddyfile` overwrites the header with the real peer, so clients cannot choose their own address. If you put another proxy or CDN in front of Caddy, the address seen will be that proxy's, so every visitor would share limits: tell me and the trusted-hop handling needs extending first.
+
+## Billing (Stripe) and bank feeds (Salt Edge)
+
+**Billing** is $2 per user per month for every workspace, paid on Stripe's hosted Checkout page before the company is set up. It is off until you set `BILLING_MODE=enforce`.
+1. In Stripe, create the webhook endpoint `https://YOUR-DOMAIN/api/borga/billing/webhook` with the events listed in `.env`, and copy its signing secret.
+2. Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `BILLING_STARTS_ON`, then `BILLING_MODE=enforce`. The server refuses to start in production if any is missing or malformed.
+3. Companies that existed before `BILLING_STARTS_ON` keep working for `BILLING_GRACE_DAYS` and see a banner; new ones are locked until paid. A failed payment keeps working for 7 days, then locks. Administrators (`BORGA_OPERATOR_EMAILS`) are never charged, and a single workspace can be exempted with `POST /api/borga/operator/billing {userId, ws, comped: true}`.
+4. Users are the owner plus each accepted Team Invite; the Stripe quantity follows the team automatically.
+Taxes (VAT, sales tax) are not handled by this app: configure them in Stripe if you must charge them. Try it without Stripe using `node scripts/fake-stripe.mjs` (see the file header; development only).
+
+**Bank feeds** use Salt Edge (API v6). Either each company enters its App ID and Secret under Connections, or you set `SALTEDGE_APP_ID` and `SALTEDGE_SECRET` for everyone. A Live client also needs `SALTEDGE_PRIVATE_KEY`. Try it without Salt Edge using `node scripts/fake-saltedge.mjs` (development only).

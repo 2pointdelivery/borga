@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { isValidUserId } from '@/lib/borga/keys';
+import { clientIp } from '@/lib/auth/client-ip';
 
 function reqToken(req: NextRequest): string | undefined {
   const c = req.cookies.get(sessionCookieName());
@@ -14,6 +15,7 @@ function reqToken(req: NextRequest): string | undefined {
 // Simple in-memory fixed-window rate limiter (per Edge isolate).
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS = 120;
+const AUTH_MAX_REQUESTS = 10; // per IP per minute for each /api/auth/* route
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 const MAX_TRACKED_KEYS = 50_000; // hard cap — a long-lived isolate must never grow this unbounded
 const hits = new Map<string, { count: number; reset: number }>();
@@ -38,11 +40,10 @@ function sweepExpired(now: number): void {
   }
 }
 
-function rateLimited(req: NextRequest): boolean {
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
+function rateLimited(req: NextRequest, max: number = MAX_REQUESTS): boolean {
+  // The right-most forwarded value, which the client cannot choose (the left-most was client-controlled: rotating it gave
+  // unlimited fresh buckets). See lib/auth/client-ip.ts.
+  const ip = clientIp(req.headers);
   const bucket = req.nextUrl.pathname.split('/').slice(0, 4).join('/');
   const key = `${ip}:${bucket}`;
   const now = Date.now();
@@ -53,11 +54,42 @@ function rateLimited(req: NextRequest): boolean {
     return false;
   }
   rec.count += 1;
-  return rec.count > MAX_REQUESTS;
+  return rec.count > max;
 }
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // Security headers on every response this proxy touches. No CSP script-src:
+  // Next.js emits inline scripts that a strict policy would break (that needs
+  // per-request nonce plumbing); the rest of the headers below are safe to
+  // enforce. Revisit CSP once nonce support lands server-wide.
+  const hardened = (res: NextResponse) => {
+    res.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.headers.set('X-Frame-Options', 'DENY');
+    res.headers.set('X-Content-Type-Options', 'nosniff');
+    res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.headers.set('Permissions-Policy', 'camera=(), geolocation=()');
+    return res;
+  };
+
+  // Sign-in, sign-up, password reset and the client error sink are reachable without a session,
+  // so they get a much tighter per-IP limit (brute force, signup/email spam, log flooding).
+  if (pathname.startsWith('/api/auth/') || pathname === '/api/diag') {
+    if (req.method === 'POST' && rateLimited(req, pathname === '/api/diag' ? 30 : AUTH_MAX_REQUESTS)) {
+      return hardened(NextResponse.json({ ok: false, error: 'Too many requests. Wait a minute and try again.' }, { status: 429 }));
+    }
+    return hardened(NextResponse.next());
+  }
+
+  // Public API: Bearer-key (or session) auth happens inside each route — the
+  // proxy only rate-limits here so keys cannot be brute-forced or abused.
+  if (pathname.startsWith('/api/v1/')) {
+    if (rateLimited(req)) {
+      return hardened(NextResponse.json({ ok: false, error: 'Too many requests' }, { status: 429 }));
+    }
+    return hardened(NextResponse.next());
+  }
 
   // --- Page-level auth gating ---
   if (!pathname.startsWith('/api/borga')) {
@@ -68,25 +100,25 @@ export async function proxy(req: NextRequest) {
       if (!authed) {
         const url = new URL('/login', req.url);
         url.searchParams.set('next', pathname + req.nextUrl.search);
-        return NextResponse.redirect(url);
+        return hardened(NextResponse.redirect(url));
       }
-      return NextResponse.next();
+      return hardened(NextResponse.next());
     }
 
     if (pathname === '/') {
-      if (authed) return NextResponse.redirect(new URL('/app', req.url));
-      return NextResponse.next();
+      if (authed) return hardened(NextResponse.redirect(new URL('/app', req.url)));
+      return hardened(NextResponse.next());
     }
 
-    return NextResponse.next();
+    return hardened(NextResponse.next());
   }
 
   // --- API surface (/api/borga) ---
-  const res = NextResponse.next();
+  const res = hardened(NextResponse.next());
 
   // Rate limit all Borga API traffic.
   if (rateLimited(req)) {
-    return NextResponse.json({ ok: false, error: 'Too many requests' }, { status: 429 });
+    return hardened(NextResponse.json({ ok: false, error: 'Too many requests' }, { status: 429 }));
   }
 
   // Twilio's own servers fetch these two endpoints when a real outbound call
@@ -103,6 +135,18 @@ export async function proxy(req: NextRequest) {
   // without our session cookie. The route authenticates them with the
   // per-workspace inbound token (constant-time compare) and stays rate limited above.
   if (pathname === '/api/borga/tickets/inbound' && req.method === 'POST') {
+    return res;
+  }
+
+  // Scheduler (systemd timer, cron-job.org): carries no session cookie, so the route itself checks
+  // `Authorization: Bearer $CRON_SECRET` (and answers 401 when CRON_SECRET is unset). Without this
+  // exemption the gate below rejected every scheduled run and no background job ever ran.
+  if (pathname === '/api/borga/cron' && (req.method === 'POST' || req.method === 'GET')) {
+    return res;
+  }
+
+  // Stripe's subscription webhook: authenticated inside the route by the signature over the raw body.
+  if (pathname === '/api/borga/billing/webhook' && req.method === 'POST') {
     return res;
   }
 
@@ -126,13 +170,13 @@ export async function proxy(req: NextRequest) {
   // Authentication gate — full HMAC signature verification (Edge runtime).
   const uid = await verifySessionToken(reqToken(req));
   if (!uid || !isValidUserId(uid)) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+    return hardened(NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 }));
   }
   res.headers.set('x-user-id', uid);
 
   // Restrict methods to those the routes actually expose.
   if (!['GET', 'POST', 'OPTIONS'].includes(req.method)) {
-    return NextResponse.json({ ok: false, error: 'Method not allowed' }, { status: 405 });
+    return hardened(NextResponse.json({ ok: false, error: 'Method not allowed' }, { status: 405 }));
   }
 
   // Optional shared-secret gate for mutations. Enabled only when
@@ -143,14 +187,14 @@ export async function proxy(req: NextRequest) {
     if (authToken) {
       const auth = req.headers.get('authorization') ?? '';
       if (auth !== `Bearer ${authToken}`) {
-        return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+        return hardened(NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 }));
       }
     } else {
       // CSRF guard: the dashboard must attach this custom header to every write.
       // Browsers won't send a custom header cross-site without CORS preflight
       // (which we don't allow), so a malicious page can't mutate app state.
       if (req.headers.get('x-borga-client') !== 'borga-dashboard') {
-        return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 });
+        return hardened(NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 }));
       }
     }
   }
@@ -159,5 +203,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/', '/app/:path*', '/api/borga/:path*'],
+  matcher: ['/', '/app/:path*', '/api/borga/:path*', '/api/v1/:path*', '/api/auth/:path*', '/api/diag'],
 };

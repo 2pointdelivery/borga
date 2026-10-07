@@ -12,6 +12,7 @@ import {
 import { userWsKey } from './keys';
 import { encryptSecret, decryptSecret } from './secrets';
 import { sendThreadedEmail, isEmailConfigured } from '@/lib/auth/mailer';
+import { renderTicketReply } from './email-core';
 import type { ProactiveNotice } from './data';
 import {
   DEFAULT_TICKET_SETTINGS,
@@ -149,6 +150,21 @@ export async function getTicket(u: string, ws: string, id: string): Promise<Tick
   return getBorgaState<Ticket>(ticketKey(u, ws, id));
 }
 
+/**
+ * Delete a ticket — only closed or resolved ones. Open SLA records stay
+ * auditable: their history must survive, so active tickets cannot be deleted
+ * (resolve or close them first).
+ */
+export async function deleteTicket(u: string, ws: string, id: string): Promise<{ ok: boolean; error?: string }> {
+  const ticket = await getTicket(u, ws, id);
+  if (!ticket) return { ok: false, error: 'Ticket not found' };
+  if (ticket.status !== 'closed' && ticket.status !== 'resolved') {
+    return { ok: false, error: `Only closed or resolved tickets can be deleted — ${id} is ${ticket.status}. SLA history stays auditable.` };
+  }
+  await deleteBorgaState(ticketKey(u, ws, id));
+  return { ok: true };
+}
+
 async function saveTicket(u: string, ws: string, t: Ticket): Promise<Ticket> {
   const next = { ...t, updatedAt: now(), comments: t.comments.slice(-300), messageIds: t.messageIds.slice(-60) };
   await setBorgaState(ticketKey(u, ws, t.id), next);
@@ -189,7 +205,7 @@ export async function createTicket(
   u: string,
   ws: string,
   raw: CreateTicketInput,
-  ctx: { source: TicketSource; actor: string; messageId?: string; extraComments?: TicketComment[] },
+  ctx: { source: TicketSource; actor: string; messageId?: string; extraComments?: TicketComment[]; fromAgent?: boolean },
 ): Promise<Ticket> {
   const input = createInputSchema.parse(raw);
   const settings = await loadSettings(u, ws);
@@ -231,6 +247,8 @@ export async function createTicket(
       const latest = await loadSettings(u, ws);
       if (latest.nextNumber <= n) await setBorgaState(settingsKey(u, ws), { ...latest, nextNumber: n + 1 });
       if (ctx.messageId) await setBorgaState(midKey(u, ws, ctx.messageId), { ticketId: id });
+      // Hand it to the support agent. Not for tickets an agent opened itself (that would loop), and never allowed to delay or fail creation.
+      if (!ctx.fromAgent) void import('./automations').then((m) => m.onTicketCreated(u, ws, ticket)).catch((e) => console.error('[automation] ticket hand-off failed', e));
       return ticket;
     }
   }
@@ -323,8 +341,6 @@ function fromHeader(s: TicketSettings): string | undefined {
   return s.mailbox.address ? `${s.mailbox.displayName.replace(/[<>"\r\n]/g, '') || 'Support'} <${s.mailbox.address}>` : undefined;
 }
 
-const escapeHtml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 async function sendToRequester(
   u: string,
   ws: string,
@@ -334,19 +350,18 @@ async function sendToRequester(
   auto: boolean,
 ): Promise<{ messageId?: string; delivery: 'sent' | 'failed' | 'not-configured' }> {
   if (!t.requesterEmail) return { delivery: 'failed' };
-  if (!(await isEmailConfigured())) return { delivery: 'not-configured' };
+  if (!(await isEmailConfigured({ userId: u, ws }))) return { delivery: 'not-configured' };
   const refs = t.messageIds.slice(-20);
   const r = await sendThreadedEmail({
     to: t.requesterEmail,
     subject: `Re: ${ticketToken(t.id)} ${normalizeSubject(t.subject)}`,
-    text: body,
-    html: `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap">${escapeHtml(body)}</div>`,
+    ...renderTicketReply({ body, companyName: settings.mailbox.displayName || 'Support', ticketRef: t.id }),
     from: fromHeader(settings),
     replyTo: settings.mailbox.address || undefined,
     inReplyTo: refs[refs.length - 1],
     references: refs,
     headers: auto ? { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All' } : undefined,
-  });
+  }, { userId: u, ws });
   if (!r.ok) return { delivery: 'failed' };
   if (r.messageId) {
     t.messageIds.push(r.messageId);
@@ -500,7 +515,7 @@ async function routeMail(u: string, ws: string, mail: InboundEmail, settings: St
     { subject: normalizeSubject(mail.subject).slice(0, 200), description: text, requesterEmail: fromEmail, requesterName: name },
     { source: 'email', actor: name || fromEmail, messageId },
   );
-  if (settings.mailbox.autoAck && (await isEmailConfigured())) {
+  if (settings.mailbox.autoAck && (await isEmailConfigured({ userId: u, ws }))) {
     const fresh = (await getTicket(u, ws, ticket.id)) ?? ticket;
     const sent = await sendToRequester(
       u,
@@ -646,14 +661,14 @@ export async function sweepSla(u: string, ws: string): Promise<{ checked: number
     const existing = (await getBorgaState<ProactiveNotice[]>(key)) ?? [];
     await setBorgaState(key, [...notices, ...existing].slice(0, 100));
   }
-  if (emails.length && settings.escalationEmail && (await isEmailConfigured())) {
+  if (emails.length && settings.escalationEmail && (await isEmailConfigured({ userId: u, ws }))) {
     await sendThreadedEmail({
       to: settings.escalationEmail,
       subject: `[SLA] ${emails.length} breach${emails.length === 1 ? '' : 'es'} need attention`,
       text: emails.join('\n'),
       from: fromHeader(settings),
       headers: { 'Auto-Submitted': 'auto-generated' },
-    });
+    }, { userId: u, ws });
   }
   return out;
 }

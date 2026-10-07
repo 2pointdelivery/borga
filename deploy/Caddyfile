@@ -1,7 +1,17 @@
 # Automatic HTTPS (Let's Encrypt) for {$DOMAIN}. DNS A record must point at this VM first.
 {$DOMAIN} {
 	encode zstd gzip
-	reverse_proxy app:13000
+	header {
+		# Browsers must use https for this host from now on.
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	# The app rate-limits by client address, so the address must come from Caddy and never from the client: overwrite the
+	# forwarded header with the real peer instead of passing along whatever the client sent.
+	reverse_proxy app:13000 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+	}
 	# Provider webhooks and the browser both arrive here; Caddy sets X-Forwarded-* for the app.
 	log {
 		output stdout

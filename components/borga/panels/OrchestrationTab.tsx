@@ -24,6 +24,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   ResponsiveContainer,
   BarChart,
@@ -37,7 +38,9 @@ import {
   Cell,
 } from 'recharts';
 import { useBorga } from '@/lib/borga/store';
+import { fmtMoney } from '@/lib/borga/currencies';
 import { SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { EngineCrmCard } from './EngineCrmCard';
 import { InboundEndpoint } from '../InboundEndpoint';
 import { cn } from '@/lib/utils';
@@ -62,7 +65,7 @@ const PIE_COLORS = ['#f59e0b', '#0ea5e9', '#8b5cf6', '#10b981', '#f43f5e'];
 
 export function OrchestrationTab() {
   const {
-    ops, setBookingStatus, addDriver, log, workflows, runWorkflow, setWorkflow, addWorkflow, deleteWorkflow,
+    ops, setBookingStatus, addDriver, removeDriver, log, workflows, runWorkflow, setWorkflow, addWorkflow, deleteWorkflow,
     webhooks, addWebhook, toggleWebhook, deleteWebhook,
     activeWorkspace, activeWorkspaceId, userName,
   } = useBorga();
@@ -71,10 +74,12 @@ export function OrchestrationTab() {
   const [logMsg, setLogMsg] = useState<string[]>([]);
   const [driverOpen, setDriverOpen] = useState(false);
   const [driverForm, setDriverForm] = useState({ name: '', vehicle: '', licence: '' });
-  const [whOpen, setWhOpen] = useState(false);
+    const [whOpen, setWhOpen] = useState(false);
+    const currency = activeWorkspace()?.currency ?? 'USD';
   const [whForm, setWhForm] = useState({ name: '', event: 'booking.created' as string, url: '', secret: '' });
   const [wfOpen, setWfOpen] = useState(false);
-  const [wfForm, setWfForm] = useState({ name: '', engine: 'local' });
+  const [wfForm, setWfForm] = useState({ name: '' });
+  const [confirmTarget, setConfirmTarget] = useState<{ kind: 'webhook' | 'workflow' | 'driver'; id: string; name: string } | null>(null);
   const company = activeWorkspace();
 
   const probeEngine = () => {
@@ -91,6 +96,9 @@ export function OrchestrationTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWorkspaceId]);
 
+  // NOTE: a second probe without ?ws= used to run here on mount and could
+  // overwrite the workspace-scoped result above. One probe path only.
+
   const addNewWorkflow = () => {
     if (!wfForm.name.trim()) return;
     addWorkflow({
@@ -105,7 +113,7 @@ export function OrchestrationTab() {
       agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'task',
       message: `Workflow "${wfForm.name.trim()}" created for ${company?.name ?? 'workspace'}.`,
     });
-    setWfForm({ name: '', engine: 'local' });
+    setWfForm({ name: '' });
     setWfOpen(false);
   };
 
@@ -119,12 +127,14 @@ export function OrchestrationTab() {
         return;
       }
       const host = parsed.hostname.toLowerCase();
+      // Private ranges only: 10/8, 172.16/12, 192.168/16, plus loopback and link-local.
       const isInternal =
         host === 'localhost' ||
         host === '127.0.0.1' ||
         host.startsWith('192.168.') ||
         host.startsWith('10.') ||
-        host.startsWith('172.') ||
+        /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+        host.startsWith('169.254.') ||
         host.endsWith('.local') ||
         host === '0.0.0.0' ||
         host === '::1';
@@ -170,14 +180,6 @@ export function OrchestrationTab() {
   };
 
   useEffect(() => {
-    fetch('/api/borga/orchestrate')
-      .then((r) => r.json())
-      .then((d) => setEngine(d))
-      .catch(() => setEngine({ engine: '', mode: 'unreachable', ok: false }))
-      .finally(() => setChecking(false));
-  }, []);
-
-  useEffect(() => {
     fetch('/api/borga/config')
       .then((r) => r.json())
       .then((d: { keys: { envVar: string; source: string; masked: string | null }[] }) => {
@@ -191,8 +193,9 @@ export function OrchestrationTab() {
 
   const activeBookings = ops.bookings.filter((b) => b.status !== 'delivered' && b.status !== 'cancelled');
   const newDrivers = ops.drivers.filter((d) => d.status !== 'active').length;
-  const onTimeSla = ops.sla.find((s) => s.label === 'On-time delivery')?.value ?? 96;
-  const onTimeTarget = ops.sla.find((s) => s.label === 'On-time delivery')?.target ?? 98;
+  const onTimeSla = ops.sla.find((s) => s.label === 'On-time delivery')?.value ?? null;
+  const onTimeTarget = ops.sla.find((s) => s.label === 'On-time delivery')?.target ?? null;
+  const hasOpsData = ops.clients.length + ops.bookings.length + ops.drivers.length + ops.tracking.length > 0;
   const revenue = ops.analytics.revenue;
   const pieData = (Object.entries(ops.analytics.byStatus) as [BookingStatus, number][]).map(([name, value]) => ({ name, value }));
 
@@ -241,9 +244,9 @@ export function OrchestrationTab() {
   const kpis = [
     { label: 'Active bookings', value: String(activeBookings.length), icon: Truck, color: 'text-sky-600' },
     { label: 'Active clients', value: String(ops.clients.filter((c) => c.active).length), icon: Users, color: 'text-violet-600' },
-    { label: 'On-time SLA', value: `${onTimeSla}%`, sub: `target ${onTimeTarget}%`, icon: ShieldCheck, color: 'text-emerald-600' },
+    { label: 'On-time SLA', value: onTimeSla == null ? '—' : `${onTimeSla}%`, sub: onTimeTarget == null ? 'no SLA data yet' : `target ${onTimeTarget}%`, icon: ShieldCheck, color: 'text-emerald-600' },
     { label: 'New drivers', value: String(newDrivers), icon: UserPlus, color: 'text-amber-600' },
-    { label: 'Revenue', value: `$${Math.round(revenue / 1000)}K`, icon: Wallet, color: 'text-primary' },
+    { label: 'Revenue', value: revenue > 0 ? fmtMoney(revenue, currency) : '—', icon: Wallet, color: 'text-primary' },
     { label: 'Tracking events', value: String(ops.tracking.length), icon: Activity, color: 'text-rose-600' },
   ];
 
@@ -292,7 +295,7 @@ export function OrchestrationTab() {
 
       </Card>
 
-      <EngineCrmCard onConnectionChange={probeEngine} />
+      <EngineCrmCard />
 
       {/* Webhooks & API configuration */}
       <Card className="p-5">
@@ -316,10 +319,10 @@ export function OrchestrationTab() {
                   <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary ring-1 ring-primary/30">{w.event}</span>
                 </div>
                 <p className="truncate font-mono text-[11px] text-muted-foreground">{w.url}</p>
-                <p className="text-[10px] text-muted-foreground">{w.deliveries.toLocaleString()} deliveries — last {w.lastDelivery} — secret {w.secret}</p>
+                <p className="text-[10px] text-muted-foreground">{w.deliveries.toLocaleString()} deliveries — last {w.lastDelivery} — signing secret lives server-side (Developers → Webhooks)</p>
               </div>
               <Switch checked={w.active} onCheckedChange={() => toggleWebhook(w.id)} />
-              <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => deleteWebhook(w.id)} title="Delete webhook">
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => setConfirmTarget({ kind: 'webhook', id: w.id, name: w.name })} title="Delete webhook">
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -328,7 +331,7 @@ export function OrchestrationTab() {
       </Card>
 
       <details className="rounded-xl border p-4">
-        <summary className="cursor-pointer text-sm font-semibold">Operations dashboard <span className="font-normal text-muted-foreground">— sample logistics data for illustration; it is not pulled from your CRM</span></summary>
+        <summary className="cursor-pointer text-sm font-semibold">Operations dashboard <span className="font-normal text-muted-foreground">— shows only the clients, bookings and drivers you add here; nothing is pulled from your CRM</span></summary>
         <div className="mt-4 space-y-5">
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
@@ -343,6 +346,12 @@ export function OrchestrationTab() {
           </Card>
         ))}
       </div>
+
+      {!hasOpsData && (
+        <Card className="border-dashed p-4 text-sm text-muted-foreground">
+          No operations data yet. Nothing here is sample data: connect your system under Integrations, add drivers below, or sync bookings from the company engine above — clients and bookings arrive from the engine, and these figures fill in.
+        </Card>
+      )}
 
       {/* Analytics */}
       <div className="grid gap-5 lg:grid-cols-3">
@@ -467,7 +476,7 @@ export function OrchestrationTab() {
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                   <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{b.origin} → {b.dest}</span>
                   <span>{b.date}</span>
-                  <span>${b.value.toLocaleString()}</span>
+                  <span>{fmtMoney(b.value, currency)}</span>
                   <span>{b.vehicle}</span>
                   <span>driver: {b.driver ?? '…'}</span>
                 </div>
@@ -508,12 +517,21 @@ export function OrchestrationTab() {
           </div>
           <div className="mt-3 space-y-2">
             {ops.drivers.map((d) => (
-              <div key={d.id} className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
-                <div>
+              <div key={d.id} className="group flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
+                <div className="min-w-0">
                   <p className="text-sm font-medium">{d.name}</p>
                   <p className="text-[11px] text-muted-foreground">{d.vehicle} — {d.licence} — joined {d.joined}</p>
                 </div>
-                <Badge className={cn('capitalize', DRIVER_STYLE[d.status])}>{d.status}</Badge>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge className={cn('capitalize', DRIVER_STYLE[d.status])}>{d.status}</Badge>
+                  <button
+                    onClick={() => setConfirmTarget({ kind: 'driver', id: d.id, name: d.name })}
+                    className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                    title="Remove driver"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -542,7 +560,7 @@ export function OrchestrationTab() {
                       <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => setWorkflow(w.id, { status: 'idle', progress: 0 })}>Stop</Button>
                     )}
                     <button
-                      onClick={() => { deleteWorkflow(w.id); log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `Workflow "${w.name}" deleted from ${company?.name ?? 'company'}.` }); }}
+                      onClick={() => setConfirmTarget({ kind: 'workflow', id: w.id, name: w.name })}
                       className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                       title="Delete workflow"
                     >
@@ -557,7 +575,7 @@ export function OrchestrationTab() {
               <p className="py-4 text-center text-xs text-muted-foreground">No workflows for this company yet.</p>
             )}
           </div>
-          <div className="mt-3 rounded-lg bg-muted/40 p-2.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+          <div className="mt-3 rounded-lg bg-muted/40 p-2.5 font-mono text-[10px] leading-relaxed whitespace-pre-line text-muted-foreground">
             {logMsg.length ? logMsg.join('\n') : 'Engine log idle.'}
           </div>
         </Card>
@@ -625,11 +643,14 @@ export function OrchestrationTab() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Event</label>
-              <select value={whForm.event} onChange={(e) => setWhForm((s) => ({ ...s, event: e.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                {WEBHOOK_EVENTS.map((ev) => (
-                  <option key={ev} value={ev}>{ev}</option>
-                ))}
-              </select>
+              <Select value={whForm.event} onValueChange={(v) => setWhForm((s) => ({ ...s, event: v }))}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {WEBHOOK_EVENTS.map((ev) => (
+                    <SelectItem key={ev} value={ev}>{ev}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Endpoint URL</label>
@@ -645,6 +666,32 @@ export function OrchestrationTab() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmTarget}
+        onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
+        title={confirmTarget?.kind === 'webhook' ? `Delete webhook "${confirmTarget?.name ?? ''}"?` : confirmTarget?.kind === 'workflow' ? `Delete workflow "${confirmTarget?.name ?? ''}"?` : `Remove driver "${confirmTarget?.name ?? ''}"?`}
+        description={confirmTarget?.kind === 'webhook'
+          ? 'The endpoint and its signing-secret configuration are removed. External senders will get errors.'
+          : confirmTarget?.kind === 'workflow'
+            ? 'The workflow is removed. Runs already started keep their history in the activity log.'
+            : 'The driver is removed from the local roster.'}
+        confirmLabel={confirmTarget?.kind === 'webhook' ? 'Delete webhook' : confirmTarget?.kind === 'workflow' ? 'Delete workflow' : 'Remove driver'}
+        onConfirm={() => {
+          if (!confirmTarget) return;
+          if (confirmTarget.kind === 'webhook') {
+            deleteWebhook(confirmTarget.id);
+            log({ agentId: 'a-integrations', agentName: 'Iris', actor: 'user', kind: 'sync', message: `Webhook "${confirmTarget.name}" deleted.` });
+          } else if (confirmTarget.kind === 'workflow') {
+            deleteWorkflow(confirmTarget.id);
+            log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `Workflow "${confirmTarget.name}" deleted from ${company?.name ?? 'company'}.` });
+          } else {
+            removeDriver(confirmTarget.id);
+            log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: `Driver "${confirmTarget.name}" removed from the roster.` });
+          }
+          setConfirmTarget(null);
+        }}
+      />
     </div>
   );
 }

@@ -9,10 +9,13 @@ import {
   Play,
   Square,
   Timer,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
@@ -21,16 +24,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { fmtNum, type TimeEntry } from '@/lib/borga/data';
+import { type TimeEntry } from '@/lib/borga/data';
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useBorga } from '@/lib/borga/store';
+import { toast } from '@/lib/toast-bus';
 import { AgentAvatar, SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 function durationLabel(min: number): string {
@@ -55,10 +55,12 @@ function LiveDuration({ since }: { since: string }) {
 }
 
 export function TimeClockTab() {
-  const { employees, timeEntries, clockIn, clockOut, addTimeEntry, updateTimeEntry, deleteTimeEntry, log, userName, finance } = useBorga();
+  const { employees, timeEntries, clockIn, clockOut, addTimeEntry, updateTimeEntry, deleteTimeEntry, log, userName, finance, activeWorkspace } = useBorga();
+  const currency = activeWorkspace()?.currency ?? 'USD';
   const [query, setQuery] = useState('');
   const [manualOpen, setManualOpen] = useState(false);
   const [editing, setEditing] = useState<TimeEntry | null>(null);
+  const [confirmDeleteEntry, setConfirmDeleteEntry] = useState<TimeEntry | null>(null);
   const [manualForm, setManualForm] = useState({ employeeId: '', date: new Date().toISOString().slice(0, 10), inTime: '09:00', outTime: '17:00', note: '' });
 
   const activeByEmployee = useMemo(() => {
@@ -125,7 +127,10 @@ export function TimeClockTab() {
     if (!emp || !manualForm.date || !manualForm.inTime || !manualForm.outTime) return;
     const inIso = new Date(`${manualForm.date}T${manualForm.inTime}:00`).toISOString();
     const outIso = new Date(`${manualForm.date}T${manualForm.outTime}:00`).toISOString();
-    if (outIso <= inIso) return;
+    if (outIso <= inIso) {
+      toast({ title: 'Clock-out must be after clock-in', description: 'For overnight shifts, set the date to the clock-out day.', variant: 'error' });
+      return;
+    }
     const durationMin = Math.round((new Date(outIso).getTime() - new Date(inIso).getTime()) / 60000);
     if (editing) {
       updateTimeEntry(editing.id, {
@@ -202,7 +207,7 @@ export function TimeClockTab() {
               <div key={m.month} className="flex items-center justify-between rounded-lg border px-3 py-2">
                 <div>
                   <p className="text-xs font-medium">{new Date(`${m.month}-01T00:00:00`).toLocaleDateString([], { month: 'long', year: 'numeric' })}</p>
-                  <p className="text-[10px] text-muted-foreground">{m.hours}h across {m.headcount} people{m.reconciled ? '' : ` · est. $${fmtNum(m.estCost)} unpaid`}</p>
+                  <p className="text-[10px] text-muted-foreground">{m.hours}h across {m.headcount} people{m.reconciled ? '' : ` · est. ${fmtMoney(m.estCost, currency)} unpaid`}</p>
                 </div>
                 <span className={cn(
                   'rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase ring-1',
@@ -266,7 +271,9 @@ export function TimeClockTab() {
         <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-4 py-2.5">
           <div>
             <p className="text-sm font-semibold">Timesheet</p>
-            <p className="text-[11px] text-muted-foreground">{filteredEntries.length} entries — open shifts tick live</p>
+            <p className="text-[11px] text-muted-foreground">
+              {filteredEntries.length} entries — open shifts tick live{filteredEntries.length > 100 ? ' · showing the first 100, refine the search' : ''}
+            </p>
           </div>
           <div className="w-48">
             <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search entries…" className="h-8 text-xs" />
@@ -323,14 +330,14 @@ export function TimeClockTab() {
                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
                         title="Correct entry"
                       >
-                        <Timer className="h-3 w-3" />
+                        <Pencil className="h-3 w-3" />
                       </button>
                       <button
-                        onClick={() => { deleteTimeEntry(t.id); log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Timesheet entry removed for ${t.employeeName}.` }); }}
+                        onClick={() => setConfirmDeleteEntry(t)}
                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         title="Delete entry"
                       >
-                        <LogOut className="h-3 w-3" />
+                        <Trash2 className="h-3 w-3" />
                       </button>
                     </div>
                   </td>
@@ -352,17 +359,19 @@ export function TimeClockTab() {
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Team member *</label>
-                <Select value={manualForm.employeeId} onValueChange={(v) => setManualForm({ ...manualForm, employeeId: v })} disabled={!!editing}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Choose…" /></SelectTrigger>
-                  <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">Team member *</label>
+              <SearchSelect
+                options={employees.map((e) => ({ value: e.id, label: e.name, detail: e.department }))}
+                value={manualForm.employeeId}
+                onChange={(v) => setManualForm({ ...manualForm, employeeId: v })}
+                placeholder="Choose…"
+                searchPlaceholder="Search team"
+                clearable={false}
+                className="mt-1"
+                disabled={!!editing}
+              />
+            </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Date</label>
                 <Input type="date" value={manualForm.date} onChange={(e) => setManualForm({ ...manualForm, date: e.target.value })} className="mt-1" />
@@ -380,7 +389,7 @@ export function TimeClockTab() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Note</label>
-              <Input value={manualForm.note} onChange={(e) => setManualForm({ ...manualForm, note: e.target.value })} placeholder="Field dispatch shift" className="mt-1" />
+              <Textarea rows={2} value={manualForm.note} onChange={(e) => setManualForm({ ...manualForm, note: e.target.value })} placeholder="Field dispatch shift" className="mt-1" />
             </div>
             <p className="text-[11px] text-muted-foreground">Filed by {userName} — corrections are marked in the audit trail.</p>
           </div>
@@ -391,6 +400,20 @@ export function TimeClockTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteEntry}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteEntry(null); }}
+        title="Delete this timesheet entry?"
+        description={confirmDeleteEntry ? `The entry for ${confirmDeleteEntry.employeeName} is removed. Payroll-relevant history cannot be restored.` : ''}
+        confirmLabel="Delete entry"
+        onConfirm={() => {
+          if (!confirmDeleteEntry) return;
+          deleteTimeEntry(confirmDeleteEntry.id);
+          log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Timesheet entry removed for ${confirmDeleteEntry.employeeName}.` });
+          setConfirmDeleteEntry(null);
+        }}
+      />
     </div>
   );
 }

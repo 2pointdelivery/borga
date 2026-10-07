@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, Pause, Play, Trash2, Pencil, RefreshCw, Repeat } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -10,11 +11,12 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CURRENCY_SYMBOL, PAYMENT_METHOD_LABEL, fmtNum, type BillLine, type PaymentMethod } from '@/lib/borga/data';
+import { PAYMENT_METHOD_LABEL, type BillLine, type PaymentMethod } from '@/lib/borga/data';
 import { FREQUENCY_LABEL, TERMS_DAYS, isFinished, nextRunIso, type RecurringBill, type RecurringFrequency } from '@/lib/borga/recurring';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
 import { AccountSelect, DateInput, Field, ProjectSelect, TaxProfilesMultiSelect } from '../form-widgets';
 
 type EndMode = 'never' | 'date' | 'count';
@@ -51,7 +53,7 @@ const emptyForm = (taxId?: string): Form => ({
 export function RecurringBillsTab() {
   const { recurringBills, addRecurringBill, updateRecurringBill, deleteRecurringBill, runRecurringBills, bills, vendors, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -201,10 +203,14 @@ export function RecurringBillsTab() {
           <div className="grid gap-3">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Vendor">
-                <Select value={form.vendorId || undefined} onValueChange={pickVendor}>
-                  <SelectTrigger><SelectValue placeholder="Choose a vendor" /></SelectTrigger>
-                  <SelectContent>{vendors.map((v) => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}</SelectContent>
-                </Select>
+                <SearchSelect
+                  options={vendors.map((v) => ({ value: v.id, label: v.name, detail: v.service }))}
+                  value={form.vendorId}
+                  onChange={pickVendor}
+                  placeholder="Choose a vendor"
+                  searchPlaceholder="Search vendors"
+                  clearable={false}
+                />
               </Field>
               <Field label="Schedule name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Office rent" /></Field>
             </div>

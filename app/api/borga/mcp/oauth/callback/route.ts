@@ -8,9 +8,12 @@ import type { McpServer } from '@/lib/borga/data';
 export const runtime = 'nodejs';
 
 function popupPage(message: string, ok: boolean): string {
+  // The message can carry provider text (e.g. ?error=...), so escape it: this
+  // page runs on our own origin, where injected markup could read the session.
+  const safe = message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0a;color:#f5f5f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
 <div style="text-align:center;max-width:360px;padding:24px;">
-  <p style="font-size:15px;color:${ok ? '#34d399' : '#f87171'};">${message}</p>
+  <p style="font-size:15px;color:${ok ? '#34d399' : '#f87171'};">${safe}</p>
   <p style="font-size:12px;color:#a3a3a3;">This window will close automatically.</p>
 </div>
 <script>setTimeout(() => window.close(), 1500);</script>
@@ -27,7 +30,7 @@ export async function GET(req: Request) {
   if (errorParam) {
     return new NextResponse(popupPage(`Authorization was not completed: ${errorParam}`, false), { headers: { 'Content-Type': 'text/html' } });
   }
-  if (!code || !state) {
+  if (!code || !state || !/^[A-Za-z0-9_-]{1,128}$/.test(state)) {
     return new NextResponse(popupPage('Missing authorization code.', false), { headers: { 'Content-Type': 'text/html' } });
   }
 

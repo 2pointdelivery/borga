@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TicketsTab } from '../panels/TicketsTab';
+import { TicketAnalyticsTab } from '../panels/TicketAnalyticsTab';
 import { TicketSettingsTab } from '../panels/TicketSettingsTab';
 
 export function SupportPage({ initialTab }: { initialTab?: string }) {
@@ -11,9 +12,11 @@ export function SupportPage({ initialTab }: { initialTab?: string }) {
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>
         <TabsTrigger value="tickets">Tickets</TabsTrigger>
+        <TabsTrigger value="analytics">Analytics</TabsTrigger>
         <TabsTrigger value="settings">SLA &amp; Mailbox</TabsTrigger>
       </TabsList>
       <TabsContent value="tickets"><TicketsTab /></TabsContent>
+      <TabsContent value="analytics"><TicketAnalyticsTab /></TabsContent>
       <TabsContent value="settings"><TicketSettingsTab /></TabsContent>
     </Tabs>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Bell, Palette, User, Mic, Server, Globe, ShieldCheck, Phone, BrainCircuit } from 'lucide-react';
+import { Save, Bell, Palette, User, Mic, Server, Globe, ShieldCheck, BrainCircuit, Cookie } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,11 +10,13 @@ import { Badge } from '@/components/ui/badge';
 import { useBorga } from '@/lib/borga/store';
 import { useTheme } from '../theme-provider';
 import type { ThemeMode } from '@/lib/borga/store';
-import { ELEVENLABS_VOICES, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from '@/lib/borga/data';
+import { AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD } from '@/lib/borga/data';
+import { VoiceSetup } from '../VoiceSetup';
 import { SectionTitle } from '../bits';
 import { ValuationConfigEditor } from './ValuationConfigEditor';
 import { FeaturesCard } from './FeaturesCard';
 import { EmailUpdatesCard } from './EmailUpdatesCard';
+import { InvitesCard } from './InvitesCard';
 import { cn } from '@/lib/utils';
 
 const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
@@ -28,7 +30,7 @@ const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
 
 
 export function SettingsTab() {
-  const { userName, setUserName, log, elevenlabs, setElevenlabs, settings, setSettings, dbAvailable } = useBorga();
+  const { userName, setUserName, log, settings, setSettings, dbAvailable } = useBorga();
   const { mode, setMode } = useTheme();
   const [name, setName] = useState(userName);
 
@@ -37,8 +39,10 @@ export function SettingsTab() {
   };
 
   const save = () => {
-    setUserName(name.trim() || 'Lawrence');
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'system', message: `Preferences saved. Welcome back, ${name.trim() || 'Lawrence'}.` });
+    const next = name.trim();
+    if (!next) return; // an empty name never resets the identity
+    setUserName(next);
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `Preferences saved. Welcome back, ${next}.` });
   };
 
   return (
@@ -123,62 +127,32 @@ export function SettingsTab() {
                 Let agents act on the company&apos;s behalf. Outbound vendor payments of {AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD.toLocaleString()}+ and every outbound email to a customer or vendor are held in Approvals for your sign-off instead of executing immediately.
               </p>
             </div>
-            <Switch checked={!!settings.autonomousMode} onCheckedChange={(v) => setSettings({ autonomousMode: v })} />
+            <Switch checked={!!settings.autonomousMode} onCheckedChange={(v) => setSettings({ autonomousMode: v, autonomousModeChosen: true })} />
           </div>
           {settings.autonomousMode && (
             <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
-              Autonomous mode is on — check Overview → Approvals regularly, held payments and sends don&apos;t go out on their own.
+              Autonomous mode is on (the default). Check Overview → Approvals regularly: held payments and sends don&apos;t go out on their own, and turning it off lets them go out without sign-off.
             </p>
           )}
         </Card>
 
-        <Card className="p-5">
+        <Card className="p-5 lg:col-span-2">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Mic className="h-4 w-4 text-primary" /> Voice assistant
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {elevenlabs.connected
-              ? 'Speaks with your configured ElevenLabs voice; falls back to the browser voice below if ElevenLabs is unreachable.'
-              : 'Speaks with the browser’s built-in voice — connect ElevenLabs (below) for a higher-quality agent voice.'}
+          <p className="mt-1 mb-3 text-xs text-muted-foreground">
+            How Borga sounds and which model answers out loud. Phone calls are configured under Integrations → Connections (Twilio).
           </p>
-          <div className="mt-3 space-y-3">
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2.5">
-              <span className="text-xs text-muted-foreground">Active voice profile</span>
-              <code className="text-xs font-mono">
-                {elevenlabs.connected
-                  ? `${ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice)?.label ?? elevenlabs.voice} — ${ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice)?.tag ?? 'ElevenLabs'}`
-                  : 'Browser voice — rate 1.02 — pitch 0.72'}
-              </code>
+          <VoiceSetup showListening={false} inlineKey={false} />
+          <div className="mt-3 flex items-center justify-between gap-4 rounded-lg border px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Always listening</p>
+              <p className="text-xs text-muted-foreground">Mic stays on app-wide; Borga only acts once you say &ldquo;Borga&rdquo; first. Separate from voice replies in notifications.</p>
             </div>
-            <div className="flex items-center justify-between gap-4 rounded-lg border px-3 py-2.5">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">Always listening</p>
-                <p className="text-xs text-muted-foreground">Mic stays on app-wide; Borga only acts once you say &quot;Borga&quot; first</p>
-              </div>
-              <Switch checked={settings.notifications.voice} onCheckedChange={(v) => setNotif('voice', v)} />
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-5 lg:col-span-2">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Phone className="h-4 w-4 shrink-0 text-primary" /> Agent voice
-            <Badge variant={elevenlabs.connected ? 'secondary' : 'outline'} className="text-[10px]">{elevenlabs.connected ? 'ElevenLabs key saved' : 'Browser voice'}</Badge>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            The voice agents speak with. The ElevenLabs API key lives in <strong>Integrations → AI &amp; Voice</strong>; without it the browser&apos;s built-in voice is used. Phone calls are configured under Integrations → Connections (Twilio).
-          </p>
-          <div className="mt-3 max-w-sm">
-            <label className="text-xs font-medium text-muted-foreground">Agent voice</label>
-            <select
-              value={elevenlabs.voice}
-              onChange={(e) => setElevenlabs({ voice: e.target.value })}
-              className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {ELEVENLABS_VOICES.map((v) => (
-                <option key={v.id} value={v.id}>{v.label} — {v.tag}</option>
-              ))}
-            </select>
+            <Switch
+              checked={settings.alwaysListening ?? settings.notifications.voice}
+              onCheckedChange={(v) => setSettings({ ...settings, alwaysListening: v })}
+            />
           </div>
         </Card>
 
@@ -225,6 +199,28 @@ export function SettingsTab() {
       </div>
 
       <EmailUpdatesCard />
+      <InvitesCard />
+
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Cookie className="h-4 w-4 text-primary" /> Cookie settings
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Review, change or withdraw your cookie choice at any time — the banner opens with your saved preferences pre-selected. The choice is stored as a signed cookie and recorded server-side.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => window.dispatchEvent(new CustomEvent('borga:consent-reopen'))}
+          >
+            <Cookie className="h-3.5 w-3.5" /> Manage cookies
+          </Button>
+        </div>
+      </Card>
 
       <FeaturesCard />
 

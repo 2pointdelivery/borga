@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
   if ('res' in g) return g.res;
   const [settings, smtp, log, user, flags] = await Promise.all([
     loadEmailSettings(g.userId, g.ws),
-    isEmailConfigured(),
+    isEmailConfigured({ userId: g.userId, ws: g.ws }),
     readMailLog(g.userId, g.ws),
     getUserById(g.userId),
     loadFeatures(g.userId, g.ws),
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
       const user = await getUserById(userId);
       const to = b.to ? normalizeRecipients([b.to]) : settings.recipients.length ? settings.recipients : user?.email ? [user.email] : [];
       if (!to.length) return NextResponse.json({ ok: false, error: 'Add a recipient first.' }, { status: 400 });
-      if (!(await isEmailConfigured())) return NextResponse.json({ ok: false, error: 'SMTP is not configured. Add the SMTP settings under Integrations → AI & Voice first.' }, { status: 409 });
+      if (!(await isEmailConfigured({ userId, ws }))) return NextResponse.json({ ok: false, error: 'No mail server is set up. Add your SMTP server under Integrations → Connections first.' }, { status: 409 });
       const r = await sendTestEmail(userId, ws, to);
       return NextResponse.json({ ok: r.sent > 0, ...r, to, error: r.sent > 0 ? undefined : r.skipped ?? 'The mail server rejected the message.' });
     }

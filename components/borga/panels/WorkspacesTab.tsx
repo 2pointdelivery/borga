@@ -10,7 +10,7 @@ import {
   Globe,
 } from 'lucide-react';
 import { MONTH_NAMES } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
+import { fmtMoney } from '@/lib/borga/currencies';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +26,8 @@ import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { NewWorkspaceDialog, EditWorkspaceDialog } from '../WorkspaceDialogs';
 import { cn } from '@/lib/utils';
+
+const LANDING_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://borga.example.com';
 
 export function WorkspacesTab() {
   const {
@@ -48,8 +50,7 @@ export function WorkspacesTab() {
     };
   };
 
-  const fmt = (n: number, cur: Workspace['currency']) =>
-    `${CURRENCY_SYMBOL[cur]}${n >= 1000 ? `${(n / 1000).toFixed(0)}K` : n}`;
+  const fmt = (n: number, cur: Workspace['currency']) => fmtMoney(n, cur);
 
   return (
     <div className="borga-fade-up space-y-5">
@@ -68,12 +69,20 @@ export function WorkspacesTab() {
             <Card key={w.id} className={cn('flex flex-col p-5', isActive && 'ring-1 ring-primary/40')}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <span
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-bold text-white"
-                    style={{ background: `linear-gradient(135deg, ${w.color}, ${w.color}99)` }}
-                  >
-                    {w.name.slice(0, 2).toUpperCase()}
-                  </span>
+                  {w.logoDataUrl ? (
+                    <img
+                      src={w.logoDataUrl}
+                      alt={`${w.name} logo`}
+                      className="h-11 w-11 shrink-0 rounded-xl border object-contain bg-white"
+                    />
+                  ) : (
+                    <span
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-sm font-bold text-white"
+                      style={{ background: `linear-gradient(135deg, ${w.color}, ${w.color}99)` }}
+                    >
+                      {w.name.slice(0, 2).toUpperCase()}
+                    </span>
+                  )}
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold">{w.name}</p>
                     <p className="truncate text-[11px] text-muted-foreground">{w.industry}</p>
@@ -154,6 +163,16 @@ export function WorkspacesTab() {
         </button>
       </div>
 
+      {/* Landing page — link out from the app to the public site */}
+      <Card className="flex items-center justify-between gap-3 border-dashed p-4">
+        <p className="text-sm text-muted-foreground">The public marketing site lives at</p>
+        <a href={LANDING_URL} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sm font-medium text-primary hover:underline">
+          <Globe className="h-4 w-4" /> {LANDING_URL.replace(/^https?:\/\//, '')}
+        </a>
+      </Card>
+
+      {/* Quality of life: palette deep-links on keyboard, so any list item can queue actions and approvals to the right screen. */}
+
       <NewWorkspaceDialog open={createOpen} onOpenChange={setCreateOpen} />
       <EditWorkspaceDialog workspace={editing} open={!!editing} onOpenChange={(o) => { if (!o) setEditing(null); }} />
 
@@ -163,7 +182,7 @@ export function WorkspacesTab() {
           <DialogHeader>
             <DialogTitle>Delete {confirmDelete?.name}?</DialogTitle>
             <DialogDescription>
-              The workspace entry is removed from the registry. Its scoped data stays in the database until purged by an administrator.
+              The company entry is removed from the registry. Its scoped data stays in the database until purged by an administrator.
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">

@@ -2,12 +2,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { Command } from 'cmdk';
-import {
-  Sun,
-  Moon,
-  Mic,
-  CornerDownRight,
-} from 'lucide-react';
+import { Bell, Sun, Moon, Mic, CornerDownRight } from 'lucide-react';
 import { useVisibleNav } from './use-visible-nav';
 import { useBorga } from '@/lib/borga/store';
 import { useTheme } from './theme-provider';
@@ -19,7 +14,7 @@ export function CommandPalette({
   onOpenVoice: () => void;
 }) {
   const navPages = useVisibleNav();
-  const { paletteOpen, setPaletteOpen, setActiveAgentId } = useBorga();
+  const { paletteOpen, setPaletteOpen, setActiveAgentId, approvals } = useBorga();
   const { mode, setMode } = useTheme();
 
   useEffect(() => {
@@ -55,6 +50,9 @@ export function CommandPalette({
     [mode, setMode],
   );
 
+  // Anything waiting on a yes/no shows up in the palette itself.
+  const pendingApprovals = useMemo(() => approvals.filter((a) => a.status === 'pending').slice(0, 6), [approvals]);
+
   return (
     <Command.Dialog
       open={paletteOpen}
@@ -70,6 +68,22 @@ export function CommandPalette({
         <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">
           No result. Try a section name or an action.
         </Command.Empty>
+
+        <Command.Group heading="Needs you">
+          {pendingApprovals.map((a) => (
+            <Command.Item
+              key={`need-${a.id}`}
+              value={`approve ${a.title} approval pending`}
+              onSelect={() => navigate('overview', 'command')}
+              className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+            >
+              <Bell className="h-4 w-4 text-amber-500" />
+              {a.title}
+              <span className="ml-auto text-[10px] uppercase text-muted-foreground">{a.category === 'spend' ? `$${Math.round(a.amount).toLocaleString()}` : 'approve'}</span>
+            </Command.Item>
+          ))}
+          {pendingApprovals.length === 0 && <></>}
+        </Command.Group>
 
         <Command.Group heading="Go to">
           {navPages.map((p) => (

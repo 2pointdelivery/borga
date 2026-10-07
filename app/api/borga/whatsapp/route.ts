@@ -1,8 +1,11 @@
-import { NextResponse } from 'next/server';
-import { getApiKey, setApiKey, isAllowedKey } from '@/lib/borga/secrets';
-import { getBorgaState, setBorgaState, scopedKey } from '@/lib/borga/persistence';
+import { NextResponse, type NextRequest } from 'next/server';
+import { setApiKey, isAllowedKey } from '@/lib/borga/secrets';
+import { whatsappCredentials } from '@/lib/borga/provider-keys';
+import { getBorgaState, setBorgaState } from '@/lib/borga/persistence';
+import { userWsKey } from '@/lib/borga/keys';
+import { operatorFromRequest } from '@/lib/auth/operator';
 import { type WhatsAppConfig } from '@/lib/borga/data';
-import { featureGate } from '@/lib/borga/features-server';
+import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -42,38 +45,35 @@ function normalizePhoneNumber(phone: string): string {
   return cleaned;
 }
 
-// Load WhatsApp configuration (workspace-scoped)
-async function loadWhatsAppConfig(ws?: string | null): Promise<WhatsAppConfig> {
-  const config = await getBorgaState<WhatsAppConfig>(scopedKey(ws, 'whatsapp'));
+// The per-company connection state lives under the signed-in user's own workspace key, the same key the
+// dashboard reads. (It used to be an un-prefixed key: invisible to the dashboard and addressable by anyone
+// who knew a workspace id.)
+const waKey = (userId: string, ws: string | null) => (ws ? userWsKey(userId, ws, 'whatsapp') : null);
+
+// Load WhatsApp configuration (user + workspace scoped)
+async function loadWhatsAppConfig(userId: string, ws: string | null): Promise<WhatsAppConfig> {
+  const key = waKey(userId, ws);
+  const config = key ? await getBorgaState<WhatsAppConfig>(key) : null;
   return config || { connected: false, phone: '', waId: '', lastSync: '…' };
 }
 
 // Save WhatsApp configuration
-async function saveWhatsAppConfig(config: WhatsAppConfig, ws?: string | null): Promise<boolean> {
-  return setBorgaState(scopedKey(ws, 'whatsapp'), config);
+async function saveWhatsAppConfig(config: WhatsAppConfig, userId: string, ws: string | null): Promise<boolean> {
+  const key = waKey(userId, ws);
+  return key ? setBorgaState(key, config) : false;
 }
 
 // Get WhatsApp API credentials
-async function getWhatsAppCredentials(): Promise<{ accessToken: string; phoneNumberId: string; businessAccountId: string } | null> {
-  const accessToken = await getApiKey('WHATSAPP_ACCESS_TOKEN');
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
-  const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '';
-
-  if (!accessToken || !phoneNumberId) {
-    return null;
-  }
-
-  return { accessToken, phoneNumberId, businessAccountId };
-}
+const getWhatsAppCredentials = whatsappCredentials;
 
 // Send WhatsApp message
-async function sendWhatsAppMessage(message: WhatsAppMessage): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const credentials = await getWhatsAppCredentials();
+async function sendWhatsAppMessage(message: WhatsAppMessage, userId: string, ws: string | null): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const credentials = await getWhatsAppCredentials(userId, ws);
   if (!credentials) {
-    return { success: false, error: 'WhatsApp credentials not configured' };
+    return { success: false, error: 'WhatsApp is not connected for this company. Add its Meta credentials under Integrations → Connections.' };
   }
 
-  const { accessToken, phoneNumberId } = await credentials;
+  const { accessToken, phoneNumberId } = credentials;
 
   try {
     const response = await fetch(`${WHATSAPP_API_BASE}/${phoneNumberId}/messages`, {
@@ -120,13 +120,13 @@ async function sendWhatsAppMessage(message: WhatsAppMessage): Promise<{ success:
 }
 
 // Verify WhatsApp business number
-async function verifyWhatsAppNumber(): Promise<{ verified: boolean; phone?: string; error?: string }> {
-  const credentials = await getWhatsAppCredentials();
+async function verifyWhatsAppNumber(userId: string, ws: string | null): Promise<{ verified: boolean; phone?: string; error?: string }> {
+  const credentials = await getWhatsAppCredentials(userId, ws);
   if (!credentials) {
     return { verified: false, error: 'WhatsApp credentials not configured' };
   }
 
-  const { accessToken, phoneNumberId } = await credentials;
+  const { accessToken, phoneNumberId } = credentials;
 
   try {
     const response = await fetch(`${WHATSAPP_API_BASE}/${phoneNumberId}`, {
@@ -153,9 +153,9 @@ async function verifyWhatsAppNumber(): Promise<{ verified: boolean; phone?: stri
   }
 }
 
-export async function POST(req: Request) {
-  const off = await featureGate('whatsapp', null, null);
-  if (off) return off;
+export async function POST(req: NextRequest) {
+  const userId = await sessionUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   let body: {
     action?: string;
     to?: string;
@@ -176,6 +176,8 @@ export async function POST(req: Request) {
 
   const action = body.action ?? 'send';
   const ws = typeof body.ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(body.ws) ? body.ws : null;
+  const off = await featureGate('whatsapp', userId, ws);
+  if (off) return off;
 
   if (action === 'configure') {
     const { accessToken, persistKey } = body;
@@ -187,21 +189,26 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
+    // The saved token is the deployment-wide one shared by every company, so only an administrator may replace it.
+    if (persistKey && !(await operatorFromRequest(req))) {
+      return NextResponse.json({ ok: false, error: 'Only the deployment administrator can save the shared WhatsApp access token.' }, { status: 403 });
+    }
+
     // Persist the access token if requested
     if (persistKey && isAllowedKey('WHATSAPP_ACCESS_TOKEN')) {
       await setApiKey('WHATSAPP_ACCESS_TOKEN', accessToken.trim());
     }
 
     // Verify the configuration
-    const verification = await verifyWhatsAppNumber();
+    const verification = await verifyWhatsAppNumber(userId, ws);
     
     if (verification.verified) {
-      const config = await loadWhatsAppConfig(ws);
+      const config = await loadWhatsAppConfig(userId, ws);
       config.connected = true;
       config.phone = verification.phone || '';
       config.waId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
       config.lastSync = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      await saveWhatsAppConfig(config, ws);
+      await saveWhatsAppConfig(config, userId, ws);
 
       return NextResponse.json({ 
         ok: true, 
@@ -236,7 +243,7 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
-    const config = await loadWhatsAppConfig(ws);
+    const config = await loadWhatsAppConfig(userId, ws);
     if (!config.connected) {
       return NextResponse.json({ 
         ok: false, 
@@ -266,7 +273,7 @@ export async function POST(req: Request) {
       }
     }
 
-    const result = await sendWhatsAppMessage(message);
+    const result = await sendWhatsAppMessage(message, userId, ws);
 
     if (result.success) {
       return NextResponse.json({ 
@@ -285,14 +292,14 @@ export async function POST(req: Request) {
   }
 
   if (action === 'verify') {
-    const verification = await verifyWhatsAppNumber();
+    const verification = await verifyWhatsAppNumber(userId, ws);
     
     if (verification.verified) {
-      const config = await loadWhatsAppConfig(ws);
+      const config = await loadWhatsAppConfig(userId, ws);
       config.connected = true;
       config.phone = verification.phone || '';
       config.lastSync = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      await saveWhatsAppConfig(config, ws);
+      await saveWhatsAppConfig(config, userId, ws);
 
       return NextResponse.json({ 
         ok: true, 
@@ -302,10 +309,10 @@ export async function POST(req: Request) {
       });
     } else {
       // Mark as disconnected if verification fails
-      const config = await loadWhatsAppConfig(ws);
+      const config = await loadWhatsAppConfig(userId, ws);
       config.connected = false;
       config.lastSync = 'Verification failed';
-      await saveWhatsAppConfig(config, ws);
+      await saveWhatsAppConfig(config, userId, ws);
 
       return NextResponse.json({ 
         ok: false, 
@@ -317,8 +324,8 @@ export async function POST(req: Request) {
   }
 
   if (action === 'status') {
-    const config = await loadWhatsAppConfig(ws);
-    const credentials = await getWhatsAppCredentials();
+    const config = await loadWhatsAppConfig(userId, ws);
+    const credentials = await getWhatsAppCredentials(userId, ws);
     
     return NextResponse.json({ 
       ok: true, 
@@ -335,14 +342,16 @@ export async function POST(req: Request) {
   return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });
 }
 
-export async function GET(req: Request) {
-  const off = await featureGate('whatsapp', null, null);
-  if (off) return off;
+export async function GET(req: NextRequest) {
+  const userId = await sessionUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const url = new URL(req.url);
   const wsParam = url.searchParams.get('ws');
   const ws = wsParam && /^[a-zA-Z0-9_-]{1,64}$/.test(wsParam) ? wsParam : null;
-  const config = await loadWhatsAppConfig(ws);
-  const credentials = await getWhatsAppCredentials();
+  const off = await featureGate('whatsapp', userId, ws);
+  if (off) return off;
+  const config = await loadWhatsAppConfig(userId, ws);
+  const credentials = await getWhatsAppCredentials(userId, ws);
   
   return NextResponse.json({ 
     ok: true, 

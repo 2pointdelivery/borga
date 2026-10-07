@@ -11,6 +11,7 @@ import { toast } from '@/lib/toast-bus';
 import type { ProviderDef, ProviderId } from '@/lib/borga/providers';
 import { SectionTitle } from '../bits';
 import { Field } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface Status {
   provider: ProviderId;
@@ -36,6 +37,7 @@ function copy(text: string) {
 function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: ProviderDef; status: Status; webhookUrl?: string; ws: string; onChange: () => void }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<'save' | 'test' | 'delete' | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const url = `/api/borga/connections?ws=${encodeURIComponent(ws)}`;
   const call = async (body: Record<string, unknown>) => {
     const res = await fetch(url, { method: 'POST', headers: HEADERS, body: JSON.stringify(body) });
@@ -61,7 +63,6 @@ function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: Provider
     onChange();
   };
   const remove = async () => {
-    if (!window.confirm(`Remove the saved ${def.label} credentials?`)) return;
     setBusy('delete');
     await call({ action: 'delete', provider: def.id });
     setBusy(null);
@@ -85,7 +86,30 @@ function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: Provider
         )}
       </div>
 
-      <details className="text-xs text-muted-foreground">
+      {def.signup && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold">{def.signup.title}</p>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{def.signup.text}</p>
+          </div>
+          <a href={def.signup.url} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
+            {def.signup.label} <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      )}
+
+      {def.presets && def.presets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {def.presets.map((p) => (
+            <Button key={p.id} size="sm" variant="outline" className="gap-1.5" onClick={() => { setDraft({ ...draft, ...p.values }); toast({ title: `${p.label}`, description: p.note, variant: 'success' }); }}>
+              {p.label}
+            </Button>
+          ))}
+          <span className="text-[11px] text-muted-foreground">{def.presets[0].note}</span>
+        </div>
+      )}
+
+      <details className="text-xs text-muted-foreground" open={!!def.signup && !status.configured}>
         <summary className="cursor-pointer font-medium text-foreground">How to get these</summary>
         <ol className="mt-2 list-decimal space-y-1 pl-5">{def.steps.map((s) => <li key={s}>{s}</li>)}</ol>
       </details>
@@ -144,11 +168,20 @@ function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: Provider
           {busy === 'test' && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Test connection
         </Button>
         {status.configured && (
-          <Button size="sm" variant="ghost" onClick={remove} disabled={busy !== null} className="gap-1.5 text-rose-600">
+          <Button size="sm" variant="ghost" onClick={() => setConfirmRemove(true)} disabled={busy !== null} className="gap-1.5 text-rose-600">
             <Trash2 className="h-3.5 w-3.5" /> Remove
           </Button>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title={`Remove the saved ${def.label} credentials?`}
+        description="Integrations using them stop working until you save new ones."
+        confirmLabel="Remove credentials"
+        onConfirm={() => { setConfirmRemove(false); void remove(); }}
+      />
     </Card>
   );
 }

@@ -13,6 +13,11 @@
 # testing
 /coverage
 
+# environment — never commit real secrets (see .env.example for placeholders)
+.env
+.env.*
+!.env.example
+
 # next.js
 /.next/
 /out/
@@ -60,3 +65,7 @@ next-env.d.ts
 /remote-control/data/
 !/remote-control/data/.gitkeep
 
+
+# Local database dumps (contain user data): never commit
+/backups/
+deploy/backups/

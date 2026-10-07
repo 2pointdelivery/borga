@@ -15,6 +15,13 @@
       "when": 1790811739423,
       "tag": "0001_windy_pestilence",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1790869010667,
+      "tag": "0002_row_version",
+      "breakpoints": true
     }
   ]
 }

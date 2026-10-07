@@ -1,4 +1,6 @@
-// Borga — core domain types and seed data.
+﻿// Borga — core domain types and seed data.
+import { currencySymbol } from './currencies';
+import { withPersonaInstructions } from './agent-personas';
 
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
@@ -31,12 +33,15 @@ export interface Agent {
   type?: string; // agent division/type from the agency-agents catalog (e.g. "Engineering", "Healthcare")
   emoji?: string; // catalog emoji
   vibe?: string; // one-line tagline from the source persona
+  orchestratorId?: string; // which agent orchestrates this one; default: the command-center
 }
+
+export type KpiDirection = 'higher' | 'lower';
 
 export interface Department {
   id: string;
   name: string;
-  kpis: { label: string; value: number; target: number; unit: string; delta: number }[];
+  kpis: { label: string; value: number; target: number; unit: string; delta: number; direction?: KpiDirection; benchmark?: string; zeroTarget?: boolean }[];
 }
 
 export interface Task {
@@ -52,6 +57,8 @@ export interface Task {
   progress: number; // 0-100
   projectId?: string; // links this task to a Project
   customerId?: string; // links this task to a Customer account
+  /** Set when an agent created the task. Such tasks are never handed back to an agent automatically (that would loop). */
+  source?: 'agent';
 }
 
 export interface ActivityEvent {
@@ -74,7 +81,7 @@ export interface Connector {
   lastSync: string;
 }
 
-export type SocialChannel = 'linkedin' | 'twitter' | 'facebook' | 'instagram' | 'tiktok';
+export type SocialChannel = 'linkedin' | 'twitter' | 'facebook' | 'instagram' | 'tiktok' | 'threads' | 'youtube' | 'pinterest';
 export type SocialStatus = 'draft' | 'scheduled' | 'published';
 
 export interface SocialPost {
@@ -85,6 +92,12 @@ export interface SocialPost {
   scheduledAt: string;
   author: string;
   engagement: { likes: number; comments: number; shares: number };
+  /** External post id/URL after a live publish via Composio. */
+  externalRef?: string;
+  /** Why a post stayed queued (no linked account, media needed, …). */
+  publishNote?: string;
+  /** Team discussion thread inside the system. */
+  internalNotes?: { id: string; author: string; text: string; at: string }[];
 }
 
 export type LeadStage = 'new' | 'qualified' | 'proposal' | 'won' | 'lost';
@@ -101,7 +114,16 @@ export interface Lead {
   ownerId: string;
   priority: Priority;
   customerId?: string; // links this deal to a Customer account once converted/matched
+  /** When the lead was captured (ISO) and when someone last made contact (ISO). Drive the automatic follow-up. */
+  createdAt?: string;
+  lastContactAt?: string;
   crmId?: string; // id of this deal in the company CRM (Company Engine pull)
+  /** Three-question need diagnosis asked when the lead is captured. All optional — a lead without answers simply shows none. */
+  diagnosis?: {
+    problem?: string; // the single biggest problem they face right now
+    since?: string; // how long the issue has existed
+    tried?: string; // what they already tried that did not work
+  };
 }
 
 export interface Workflow {
@@ -114,7 +136,7 @@ export interface Workflow {
 }
 
 // ---- Agent fleet: one specialist per department, personas from agency-agents ----
-export const AGENTS: Agent[] = [
+const RAW_AGENTS: Agent[] = [
   {
     id: 'a-borga', name: 'Borga', role: 'Orchestrator — Brain Hub', department: 'Command',
     status: 'active', avatarColor: '#6366f1',
@@ -557,87 +579,103 @@ export const AGENTS: Agent[] = [
   },
 ];
 
-// Operational KPI baselines across every functional area. These seed the
-// "KPIs & Reports" tab and are fully editable/additive per company.
+// The literal above carried invented stats (for example 1284 tasks done, 97% accuracy). Every agent starts at zero.
+// Seeded agents also carried model ids that exist in no provider's catalog (for example "nvidia/mixtral-8x22b"), which would fail
+// as soon as an NVIDIA key was saved. The raw model is dropped here — an empty model means "use the workspace
+// default", which is what a new agent should do.
+export const AGENTS: Agent[] = RAW_AGENTS.map((a) => withBrainDefaults(withPersonaInstructions({ ...a, model: undefined, tasksCompleted: 0, accuracy: 0 })));
+
+// Workspace-default model, brain-linked, orchestrated by the command center — a fresh department never becomes a disconnected leaf.
+export function withBrainDefaults(a: Omit<Agent, 'model' | 'brainLinked' | 'orchestratorId'> & Partial<Agent>): Agent & { model: string; brainLinked: true; orchestratorId: 'a-borga' } {
+  return { ...a, model: a.model ?? '', brainLinked: true, orchestratorId: 'a-borga' };
+}
+
+// Operational KPI baselines across every functional area. These seed the KPIs
+// tab for every new company with best-practice labels, units and starting
+// targets. `direction` says whether higher or lower is better (so lower-is-
+// better metrics like burn or churn are not scored backwards), and `benchmark`
+// is the short best-practice note shown to the user. Targets are starting
+// benchmarks the user can edit; a KPI only counts toward the score once a value
+// has actually been measured (or comes from live company data).
 export const DEPARTMENTS: Department[] = [
   { id: 'sales', name: 'Sales', kpis: [
-      { label: 'Pipeline Coverage', value: 84, target: 100, unit: '%', delta: 6.2 },
-      { label: 'Deals Closed', value: 47, target: 60, unit: '', delta: 3.1 },
-      { label: 'Win Rate', value: 32, target: 40, unit: '%', delta: -1.4 },
-      { label: 'Avg Deal Size', value: 28400, target: 35000, unit: '$', delta: 4.8 },
-      { label: 'Sales Cycle', value: 38, target: 30, unit: '', delta: -2.6 },
+      { label: 'Pipeline Coverage', value: 0, target: 300, unit: '%', delta: 0, direction: 'higher', benchmark: 'Aim for 3–4× pipeline-to-quota coverage.' },
+      { label: 'Win Rate', value: 0, target: 30, unit: '%', delta: 0, direction: 'higher', benchmark: '20–30% is typical for B2B; 40%+ is strong.' },
+      { label: 'Sales Cycle', value: 0, target: 30, unit: '', delta: 0, direction: 'lower', benchmark: 'Shorter is better — set to your target cycle in days.' },
+      { label: 'Avg Deal Size', value: 0, target: 5000, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your average contract value target. Starter target: adjust it to your own plan.' },
+      { label: 'Deals Closed', value: 0, target: 5, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your quota for the period. Starter target: adjust it to your own plan.' },
     ] },
   { id: 'marketing', name: 'Marketing', kpis: [
-      { label: 'MQLs', value: 342, target: 400, unit: '', delta: 12.8 },
-      { label: 'Conv. Rate', value: 5.4, target: 6, unit: '%', delta: 0.9 },
-      { label: 'Reach', value: 128000, target: 150000, unit: '', delta: 8.3 },
-      { label: 'CAC', value: 412, target: 350, unit: '$', delta: -3.4 },
-      { label: 'Pipeline Influence', value: 61, target: 70, unit: '%', delta: 2.2 },
+      { label: 'MQLs', value: 0, target: 100, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your monthly qualified-lead goal. Starter target: adjust it to your own plan.' },
+      { label: 'Conv. Rate', value: 0, target: 3, unit: '%', delta: 0, direction: 'higher', benchmark: '2–5% landing-page conversion is typical.' },
+      { label: 'Reach', value: 0, target: 10000, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your audience reach goal. Starter target: adjust it to your own plan.' },
+      { label: 'CAC', value: 0, target: 300, unit: '$', delta: 0, direction: 'lower', benchmark: 'Keep LTV:CAC at 3:1 or better. Starter target: adjust it to your own plan.' },
+      { label: 'Pipeline Influence', value: 0, target: 50, unit: '%', delta: 0, direction: 'higher', benchmark: 'Share of pipeline touched by marketing. Starter target: adjust it to your own plan.' },
     ] },
   { id: 'finance', name: 'Finance', kpis: [
-      { label: 'Revenue', value: 892000, target: 1000000, unit: '$', delta: 4.6 },
-      { label: 'Burn Rate', value: 62000, target: 50000, unit: '$', delta: -2.1 },
-      { label: 'Gross Margin', value: 38, target: 45, unit: '%', delta: 1.7 },
-      { label: 'Runway', value: 14, target: 18, unit: '', delta: 1.0 },
-      { label: 'DPO', value: 32, target: 45, unit: '', delta: 2.5 },
+      { label: 'Revenue', value: 0, target: 50000, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your period revenue plan. Starter target: adjust it to your own plan.' },
+      { label: 'Burn Rate', value: 0, target: 40000, unit: '$', delta: 0, direction: 'lower', benchmark: 'Net monthly cash burn — lower is better. Starter target: adjust it to your own plan.' },
+      { label: 'Gross Margin', value: 0, target: 45, unit: '%', delta: 0, direction: 'higher', benchmark: 'Services 30–50%; SaaS best-in-class 70%+.' },
+      { label: 'Runway', value: 0, target: 18, unit: '', delta: 0, direction: 'higher', benchmark: 'Keep at least 12–18 months of runway.' },
+      { label: 'DPO', value: 0, target: 45, unit: '', delta: 0, direction: 'higher', benchmark: 'Pay suppliers later to protect cash — longer is better.' },
     ] },
   { id: 'support', name: 'Support', kpis: [
-      { label: 'CSAT', value: 4.6, target: 4.8, unit: '', delta: 0.2 },
-      { label: 'Tickets Resolved', value: 214, target: 250, unit: '', delta: 9.4 },
-      { label: 'SLA Met', value: 96, target: 98, unit: '%', delta: 1.1 },
-      { label: 'FRT (min)', value: 12, target: 8, unit: '', delta: -3.0 },
-      { label: 'NPS', value: 41, target: 50, unit: '', delta: 2.8 },
+      { label: 'CSAT', value: 0, target: 4.8, unit: '', delta: 0, direction: 'higher', benchmark: '4.5+ out of 5 is a strong benchmark.' },
+      { label: 'Tickets Resolved', value: 0, target: 100, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your resolution volume goal. Starter target: adjust it to your own plan.' },
+      { label: 'SLA Met', value: 0, target: 98, unit: '%', delta: 0, direction: 'higher', benchmark: 'Target 95–99% SLA compliance.' },
+      { label: 'FRT (min)', value: 0, target: 8, unit: '', delta: 0, direction: 'lower', benchmark: 'First response time — faster is better.' },
+      { label: 'NPS', value: 0, target: 50, unit: '', delta: 0, direction: 'higher', benchmark: '50+ is excellent; 30+ is good.' },
     ] },
   { id: 'engineering', name: 'Engineering', kpis: [
-      { label: 'Velocity', value: 86, target: 100, unit: '%', delta: 5.1 },
-      { label: 'Deploys', value: 41, target: 50, unit: '', delta: 2.4 },
-      { label: 'Bug Density', value: 3.2, target: 2.5, unit: '', delta: -0.8 },
-      { label: 'Uptime', value: 99.92, target: 99.95, unit: '%', delta: 0.1 },
-      { label: 'Lead Time', value: 4.1, target: 3, unit: '', delta: -1.2 },
+      { label: 'Velocity', value: 0, target: 100, unit: '%', delta: 0, direction: 'higher', benchmark: 'Sprint commitment completed (aim ~100%).' },
+      { label: 'Deploys', value: 0, target: 20, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your deploy frequency goal. Starter target: adjust it to your own plan.' },
+      { label: 'Bug Density', value: 0, target: 2.5, unit: '', delta: 0, direction: 'lower', benchmark: 'Lower defects per unit of work is better.' },
+      { label: 'Uptime', value: 0, target: 99.95, unit: '%', delta: 0, direction: 'higher', benchmark: '99.9%+ ("three nines") is the usual floor.' },
+      { label: 'Lead Time', value: 0, target: 3, unit: '', delta: 0, direction: 'lower', benchmark: 'Shorter time from commit to production.' },
     ] },
   { id: 'design', name: 'Design', kpis: [
-      { label: 'Adoption', value: 78, target: 90, unit: '%', delta: 4.2 },
-      { label: 'Components', value: 132, target: 150, unit: '', delta: 6.0 },
-      { label: 'Reviews', value: 19, target: 25, unit: '', delta: 2.1 },
-      { label: 'A11y Score', value: 88, target: 95, unit: '%', delta: 1.4 },
+      { label: 'Adoption', value: 0, target: 90, unit: '%', delta: 0, direction: 'higher', benchmark: 'Share of users on the current design system.' },
+      { label: 'Components', value: 0, target: 40, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your component coverage goal. Starter target: adjust it to your own plan.' },
+      { label: 'Reviews', value: 0, target: 10, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your design-review throughput goal. Starter target: adjust it to your own plan.' },
+      { label: 'A11y Score', value: 0, target: 95, unit: '%', delta: 0, direction: 'higher', benchmark: 'Aim for WCAG 2.1 AA (90+).' },
     ] },
   { id: 'people', name: 'People (HR)', kpis: [
-      { label: 'Headcount', value: 42, target: 55, unit: '', delta: 6.0 },
-      { label: 'eNPS', value: 47, target: 55, unit: '', delta: 3.2 },
-      { label: 'Time-to-Hire', value: 34, target: 28, unit: '', delta: -2.4 },
-      { label: 'Attrition', value: 11, target: 8, unit: '%', delta: -0.9 },
-      { label: 'Training Hrs', value: 28, target: 40, unit: '', delta: 4.1 },
+      { label: 'Headcount', value: 0, target: 10, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your hiring plan. Starter target: adjust it to your own plan.' },
+      { label: 'eNPS', value: 0, target: 55, unit: '', delta: 0, direction: 'higher', benchmark: '30+ is good; 50+ is excellent.' },
+      { label: 'Time-to-Hire', value: 0, target: 28, unit: '', delta: 0, direction: 'lower', benchmark: 'Shorter is better; ~30 days is a common target.' },
+      { label: 'Attrition', value: 0, target: 8, unit: '%', delta: 0, direction: 'lower', benchmark: 'Keep annual attrition below ~10%.' },
+      { label: 'Training Hrs', value: 0, target: 40, unit: '', delta: 0, direction: 'higher', benchmark: '~40 hours per employee per year.' },
     ] },
   { id: 'operations', name: 'Operations', kpis: [
-      { label: 'On-Time', value: 96, target: 98, unit: '%', delta: 0.7 },
-      { label: 'Utilization', value: 73, target: 80, unit: '%', delta: 1.9 },
-      { label: 'Cost / Unit', value: 18.4, target: 16, unit: '$', delta: -2.2 },
-      { label: 'Backlog', value: 64, target: 40, unit: '', delta: -4.5 },
-      { label: 'Quality', value: 99.1, target: 99.5, unit: '%', delta: 0.3 },
+      { label: 'On-Time', value: 0, target: 98, unit: '%', delta: 0, direction: 'higher', benchmark: '95%+ on-time delivery.' },
+      { label: 'Utilization', value: 0, target: 80, unit: '%', delta: 0, direction: 'higher', benchmark: '70–85% is a healthy utilization band.' },
+      { label: 'Cost / Unit', value: 0, target: 10, unit: '$', delta: 0, direction: 'lower', benchmark: 'Lower unit cost is better — set your target. Starter target: adjust it to your own plan.' },
+      { label: 'Backlog', value: 0, target: 10, unit: '', delta: 0, direction: 'lower', benchmark: 'Keep backlog within capacity — shorter is better. Starter target: adjust it to your own plan.' },
+      { label: 'Quality', value: 0, target: 99.5, unit: '%', delta: 0, direction: 'higher', benchmark: 'First-pass yield / QA pass rate.' },
     ] },
   { id: 'product', name: 'Product', kpis: [
-      { label: 'Activation', value: 58, target: 65, unit: '%', delta: 3.4 },
-      { label: 'Retention', value: 91, target: 94, unit: '%', delta: 1.2 },
-      { label: 'Features Shipped', value: 23, target: 30, unit: '', delta: 2.0 },
-      { label: 'Churn', value: 3.1, target: 2, unit: '%', delta: -0.6 },
+      { label: 'Activation', value: 0, target: 65, unit: '%', delta: 0, direction: 'higher', benchmark: '40–60%+ activation is typical for SaaS.' },
+      { label: 'Retention', value: 0, target: 94, unit: '%', delta: 0, direction: 'higher', benchmark: 'Best-in-class annual retention is 90%+.' },
+      { label: 'Features Shipped', value: 0, target: 4, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your roadmap throughput goal. Starter target: adjust it to your own plan.' },
+      { label: 'Churn', value: 0, target: 2, unit: '%', delta: 0, direction: 'lower', benchmark: 'Keep monthly churn low (<2%).' },
     ] },
   { id: 'success', name: 'Customer Success', kpis: [
-      { label: 'Renewal Rate', value: 89, target: 92, unit: '%', delta: 1.5 },
-      { label: 'Expansion', value: 22, target: 30, unit: '%', delta: 2.8 },
-      { label: 'Health Score', value: 74, target: 80, unit: '', delta: 1.1 },
-      { label: 'Touchpoints', value: 312, target: 350, unit: '', delta: 5.2 },
+      { label: 'Renewal Rate', value: 0, target: 92, unit: '%', delta: 0, direction: 'higher', benchmark: '90%+ gross renewal is strong.' },
+      { label: 'Expansion', value: 0, target: 30, unit: '%', delta: 0, direction: 'higher', benchmark: 'Net expansion of 20%+ offsets churn.' },
+      { label: 'Health Score', value: 0, target: 80, unit: '', delta: 0, direction: 'higher', benchmark: 'Account health — higher is better.' },
+      { label: 'Touchpoints', value: 0, target: 50, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your engagement goal. Starter target: adjust it to your own plan.' },
     ] },
   { id: 'security', name: 'Security & Compliance', kpis: [
-      { label: 'Critical Vulns', value: 2, target: 0, unit: '', delta: -1.0 },
-      { label: 'MTTR (hrs)', value: 6.5, target: 4, unit: '', delta: -1.4 },
-      { label: 'Audit Pass', value: 96, target: 100, unit: '%', delta: 1.0 },
-      { label: 'Coverage', value: 82, target: 90, unit: '%', delta: 2.0 },
+      { label: 'Critical Vulns', value: 0, target: 0, unit: '', delta: 0, direction: 'lower', zeroTarget: true, benchmark: 'Zero critical vulnerabilities is the target.' },
+      { label: 'MTTR (hrs)', value: 0, target: 4, unit: '', delta: 0, direction: 'lower', benchmark: 'Faster mean-time-to-remediate is better.' },
+      { label: 'Audit Pass', value: 0, target: 100, unit: '%', delta: 0, direction: 'higher', benchmark: 'Full audit pass rate.' },
+      { label: 'Coverage', value: 0, target: 90, unit: '%', delta: 0, direction: 'higher', benchmark: 'Asset and monitoring coverage.' },
     ] },
   { id: 'strategy', name: 'Strategy & Exec', kpis: [
-      { label: 'OKR Attain', value: 71, target: 80, unit: '%', delta: 2.6 },
-      { label: 'Valuation', value: 268, target: 400, unit: '$', delta: 5.5 },
-      { label: 'Market Share', value: 6.4, target: 9, unit: '%', delta: 0.8 },
-      { label: 'Innovation Index', value: 63, target: 75, unit: '', delta: 1.7 },
+      { label: 'OKR Attain', value: 0, target: 80, unit: '%', delta: 0, direction: 'higher', benchmark: '70–80% attainment is a healthy stretch.' },
+      { label: 'Valuation', value: 0, target: 1000000, unit: '$', delta: 0, direction: 'higher', benchmark: 'Set to your valuation goal. Starter target: adjust it to your own plan.' },
+      { label: 'Market Share', value: 0, target: 5, unit: '%', delta: 0, direction: 'higher', benchmark: 'Set to your market-share goal. Starter target: adjust it to your own plan.' },
+      { label: 'Innovation Index', value: 0, target: 70, unit: '', delta: 0, direction: 'higher', benchmark: 'Set to your innovation benchmark. Starter target: adjust it to your own plan.' },
     ] },
 ];
 
@@ -652,7 +690,7 @@ export const CONNECTORS: Connector[] = [
   { id: 'c-drive', name: 'Google Drive', provider: 'Composio — Drive', kind: 'composio', status: 'off', description: 'Search and summarise documents & schemas.', lastSync: '…' },
   { id: 'c-facebook', name: 'Facebook', provider: 'Composio — Social', kind: 'composio', status: 'off', description: 'Schedule and publish to Facebook pages.', lastSync: '…' },
   { id: 'c-linkedin', name: 'LinkedIn', provider: 'Composio — Social', kind: 'composio', status: 'off', description: 'Post updates and monitor engagement.', lastSync: '…' },
-  { id: 'c-crm', name: 'Company CRM', provider: 'Company Engine API', kind: 'crm', status: 'off', description: 'Pull customers and deals from your CRM (AI Platform → Company Engine).', lastSync: '…' },
+  { id: 'c-crm', name: 'Company CRM', provider: 'Company Engine API', kind: 'crm', status: 'off', description: 'Pull customers and deals from your CRM (Company → Company Engine).', lastSync: '…' },
   { id: 'c-graphify', name: 'Graphify', provider: 'knowledge graph', kind: 'data', status: 'off', description: 'Queryable knowledge graph over docs & code.', lastSync: '…' },
 ];
 
@@ -672,6 +710,7 @@ export const PRIORITY_COLOR: Record<Priority, string> = {
 
 export const CHANNEL_LABEL: Record<SocialChannel, string> = {
   linkedin: 'LinkedIn', twitter: 'X / Twitter', facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok',
+  threads: 'Threads', youtube: 'YouTube', pinterest: 'Pinterest',
 };
 export const CHANNEL_COLOR: Record<SocialChannel, string> = {
   linkedin: 'text-sky-600 bg-sky-500/10 ring-sky-500/30',
@@ -679,6 +718,9 @@ export const CHANNEL_COLOR: Record<SocialChannel, string> = {
   facebook: 'text-blue-600 bg-blue-500/10 ring-blue-500/30',
   instagram: 'text-pink-600 bg-pink-500/10 ring-pink-500/30',
   tiktok: 'text-cyan-600 bg-cyan-500/10 ring-cyan-500/30',
+  threads: 'text-zinc-700 bg-zinc-500/10 ring-zinc-500/30 dark:text-zinc-200',
+  youtube: 'text-red-600 bg-red-500/10 ring-red-500/30',
+  pinterest: 'text-rose-700 bg-rose-500/10 ring-rose-500/30',
 };
 
 export const STAGE_LABEL: Record<LeadStage, string> = {
@@ -708,6 +750,24 @@ export interface Goal {
   status: GoalStatus;
   progress: number; // 0-100
 }
+
+/**
+ * Best-practice KPI targets offered as one-tap presets when a goal is created
+ * or edited. They mirror the KPIs tab benchmarks; typing a custom target still
+ * works — a preset just fills the field.
+ */
+export const GOAL_KPI_PRESETS: string[] = [
+  'Win rate ≥ 30%',
+  'CSAT ≥ 4.8 / 5',
+  'SLA compliance ≥ 98%',
+  'First response ≤ 8 min',
+  'Churn ≤ 2% / mo',
+  'Gross margin ≥ 45%',
+  'Uptime ≥ 99.9%',
+  'NPS ≥ 50',
+  'Runway ≥ 18 mo',
+  'OKR attainment ≥ 80%',
+];
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 export type ApprovalCategory = 'budget' | 'spend' | 'hire' | 'policy' | 'other';
@@ -962,6 +1022,8 @@ export interface LlmProvider {
   accent: string;
   connectionId?: string;
   freeTierNote?: string;
+  /** When the model list was last loaded live from the provider (epoch ms). */
+  modelsLoadedAt?: number;
   /** Env var holding this provider's API key. Resolved server-side; never sent to the client. */
   envVar?: string;
   models: LlmModelInfo[];
@@ -972,11 +1034,11 @@ export interface LlmProvider {
 // providers and models without code changes — including free OpenRouter models.
 export const LLM_PROVIDERS: LlmProvider[] = [
   {
-    id: 'llm-demo', label: 'Demo (no key)', baseUrl: '', accent: '#64748B', connectionId: 'cn-demo',
-    envVar: '',
-    freeTierNote: 'Always on — no signup needed',
+    id: 'llm-muse', label: 'Muse', baseUrl: '', accent: '#7C3AED', connectionId: 'cn-muse',
+    envVar: 'MUSE_API_KEY',
+    freeTierNote: 'Remote Muse API — set its https base URL and API key',
     models: [
-      { id: 'demo', label: 'Demo', tier: 'free', tag: 'built-in' },
+      { id: 'muse', label: 'Muse', tier: 'free', tag: 'coding' },
     ],
   },
   {
@@ -984,34 +1046,13 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     envVar: 'GROQ_API_KEY',
     freeTierNote: 'Free tier — console.groq.com',
     models: [
-      { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile', tier: 'free', contextK: 128, tag: 'powerful' },
-      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant', tier: 'free', contextK: 128, tag: 'fast' },
-      { id: 'llama3-70b-8192', label: 'Llama 3 70B', tier: 'free', contextK: 8 },
-      { id: 'llama3-8b-8192', label: 'Llama 3 8B', tier: 'free', contextK: 8, tag: 'fast' },
-      { id: 'mixtral-8x7b-32768', label: 'Mixtral 8×7B', tier: 'free', contextK: 32 },
-      { id: 'gemma2-9b-it', label: 'Gemma 2 9B', tier: 'free', contextK: 8 },
-      { id: 'qwen-qwq-32b', label: 'QwQ 32B', tier: 'free', contextK: 128, tag: 'reasoning' },
-      { id: 'deepseek-r1-distill-llama-70b', label: 'DeepSeek R1 70B', tier: 'free', contextK: 128, tag: 'reasoning' },
-      { id: 'compound-beta', label: 'Compound Beta', tier: 'free', contextK: 128, tag: 'tool-use' },
+      { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B', tier: 'free', contextK: 128, tag: 'fast' },
+      { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B', tier: 'free', contextK: 128, tag: 'powerful' },
+      { id: 'allam-2-7b', label: 'ALLaM 2 7B', tier: 'free', contextK: 4 },
     ],
   },
   {
-    id: 'llm-ollama', label: 'Ollama (local)', baseUrl: 'http://127.0.0.1:11434/v1', accent: '#FF6B35', connectionId: 'cn-ollama',
-    envVar: '',
-    freeTierNote: 'Free — runs on your hardware',
-    models: [
-      { id: 'llama3.3', label: 'Llama 3.3 70B', tier: 'free', contextK: 128, tag: 'powerful' },
-      { id: 'llama3.2', label: 'Llama 3.2 3B', tier: 'free', contextK: 128, tag: 'fast' },
-      { id: 'mistral', label: 'Mistral 7B', tier: 'free', contextK: 32, tag: 'fast' },
-      { id: 'phi4', label: 'Phi-4 14B', tier: 'free', contextK: 16, tag: 'coding' },
-      { id: 'qwen2.5', label: 'Qwen 2.5 7B', tier: 'free', contextK: 128 },
-      { id: 'deepseek-r1', label: 'DeepSeek R1 8B', tier: 'free', contextK: 64, tag: 'reasoning' },
-      { id: 'gemma3', label: 'Gemma 3 12B', tier: 'free', contextK: 128 },
-      { id: 'codellama', label: 'Code Llama 34B', tier: 'free', contextK: 16, tag: 'coding' },
-    ],
-  },
-  {
-    id: 'llm-gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', accent: '#4285F4', connectionId: 'cn-gemini',
+    id: 'llm-gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', accent: '#4285F4', connectionId: 'cn-gemini',
     envVar: 'GEMINI_API_KEY',
     freeTierNote: 'Free tier — aistudio.google.com',
     models: [
@@ -1115,6 +1156,52 @@ export const LLM_PROVIDERS: LlmProvider[] = [
     ],
   },
   {
+    id: 'llm-pollinations', label: 'Pollinations', baseUrl: 'https://text.pollinations.ai/openai', accent: '#A855F7',
+    envVar: '',
+    freeTierNote: 'No key needed. Community-run: your prompts go to a third party, so avoid confidential data.',
+    models: [
+      { id: 'openai-fast', label: 'GPT-OSS 20B', tier: 'free', contextK: 128, tag: 'reasoning' },
+    ],
+  },
+  {
+    id: 'llm-llm7', label: 'LLM7', baseUrl: 'https://api.llm7.io/v1', accent: '#0EA5E9',
+    envVar: '',
+    freeTierNote: 'No key needed for the models marked free. Community-run: your prompts go to a third party, so avoid confidential data.',
+    models: [
+      { id: 'DeepSeek-V4-Flash-0731', label: 'DeepSeek V4 Flash', tier: 'free', contextK: 400, tag: 'reasoning' },
+      { id: 'codestral-latest', label: 'Codestral', tier: 'free', tag: 'coding' },
+      { id: 'GLM-5.3-Flash', label: 'GLM 5.3 Flash', tier: 'free', tag: 'fast' },
+      { id: 'minimax-m2.7', label: 'MiniMax M2.7', tier: 'free' },
+      { id: 'mistral-Nemo-Instruct-2407', label: 'Mistral NeMo', tier: 'free', tag: 'fast' },
+    ],
+  },
+  {
+    id: 'llm-cerebras', label: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1', accent: '#F15A29',
+    envVar: 'CEREBRAS_API_KEY',
+    freeTierNote: 'Free tier — cloud.cerebras.ai. Use "Load free models" for the current list.',
+    models: [
+      { id: 'llama-3.3-70b', label: 'Llama 3.3 70B', tier: 'free', contextK: 128, tag: 'powerful' },
+      { id: 'llama3.1-8b', label: 'Llama 3.1 8B', tier: 'free', contextK: 128, tag: 'fast' },
+    ],
+  },
+  {
+    id: 'llm-sambanova', label: 'SambaNova', baseUrl: 'https://api.sambanova.ai/v1', accent: '#EE7624',
+    envVar: 'SAMBANOVA_API_KEY',
+    freeTierNote: 'Free tier — cloud.sambanova.ai. Use "Load free models" for the current list.',
+    models: [
+      { id: 'Meta-Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B', tier: 'free', contextK: 128, tag: 'powerful' },
+    ],
+  },
+  {
+    id: 'llm-mistral', label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', accent: '#FA520F',
+    envVar: 'MISTRAL_API_KEY',
+    freeTierNote: 'Free Experiment plan — console.mistral.ai. Use "Load free models" for the current list.',
+    models: [
+      { id: 'mistral-small-latest', label: 'Mistral Small', tier: 'free', contextK: 128, tag: 'fast' },
+      { id: 'open-mistral-nemo', label: 'Mistral NeMo', tier: 'free', contextK: 128 },
+    ],
+  },
+  {
     id: 'llm-custom', label: 'Custom endpoint', baseUrl: '', accent: '#94A3B8', connectionId: 'cn-custom',
     envVar: 'LLM_API_KEY',
     models: [
@@ -1123,10 +1210,6 @@ export const LLM_PROVIDERS: LlmProvider[] = [
   },
 ];
 
-export const VOICE_PROVIDERS: { id: string; label: string; kind: string; accent: string }[] = [
-  { id: 'voice-elevenlabs', label: 'ElevenLabs', kind: 'Text-to-speech — 100+ voices', accent: '#000000' },
-  { id: 'voice-fish', label: 'Fish Audio', kind: 'Text-to-speech — Fish Bowl models', accent: '#22C55E' },
-];
 
 export type EmailAppStatus = 'connected' | 'connecting' | 'off';
 export interface EmailApp {
@@ -1143,6 +1226,20 @@ export const EMAIL_APPS: EmailApp[] = [
   { id: 'email-yahoo', label: 'Yahoo Mail', provider: 'Yahoo', composioAppName: 'yahoo_mail', accent: '#6001D2', description: 'Read and send Yahoo Mail messages' },
 ];
 
+/** Connection cards that belonged to the retired demo and local-model providers. Older companies still have them saved. */
+/** (cn-elevenlabs and cn-fish were voice cards with no key behind them: voice credentials live in Integrations → Connections.) */
+export const RETIRED_CONNECTION_IDS: string[] = ['cn-demo', 'cn-ollama', 'cn-elevenlabs', 'cn-fish'];
+
+/**
+ * Saved connection cards without the retired ones ("Demo (no key)" was always shown as connected, though it was never a real
+ * connection). `changed` says whether anything was removed, so the caller knows to save the cleaned list.
+ */
+export function repairConnections(saved: AppConnection[] | null | undefined): { connections: AppConnection[]; changed: boolean } {
+  if (!Array.isArray(saved)) return { connections: INITIAL_CONNECTIONS, changed: false };
+  const kept = saved.filter((c) => !RETIRED_CONNECTION_IDS.includes(c.id) && !(c.type === 'llm' && RETIRED_LLM_PROVIDERS.includes(`llm-${c.provider}`)));
+  return { connections: kept, changed: kept.length !== saved.length };
+}
+
 export const INITIAL_CONNECTIONS: AppConnection[] = [
   { id: 'cn-gmail', type: 'tool', provider: 'gmail', label: 'Gmail', status: 'off', account: '', scopes: 'read, send, manage labels', lastSync: '…' },
   { id: 'cn-calendar', type: 'tool', provider: 'google-calendar', label: 'Google Calendar', status: 'off', account: '', scopes: 'read, write events', lastSync: '…' },
@@ -1150,8 +1247,7 @@ export const INITIAL_CONNECTIONS: AppConnection[] = [
   { id: 'cn-hubspot', type: 'tool', provider: 'hubspot', label: 'HubSpot', status: 'off', account: '', scopes: 'contacts, deals, tickets', lastSync: '…' },
   { id: 'cn-stripe', type: 'tool', provider: 'stripe', label: 'Stripe', status: 'off', account: '', scopes: 'invoices, payments', lastSync: '…' },
   { id: 'cn-drive', type: 'tool', provider: 'google-drive', label: 'Google Drive', status: 'off', account: '', scopes: 'read, search', lastSync: '…' },
-  { id: 'cn-demo', type: 'llm', provider: 'demo', label: 'Demo (no key)', status: 'connected', account: 'built-in', scopes: 'chat completions — always on', lastSync: 'Just now' },
-  { id: 'cn-ollama', type: 'llm', provider: 'ollama', label: 'Ollama (local)', status: 'off', account: '', scopes: 'chat completions — local', lastSync: '…' },
+  { id: 'cn-muse', type: 'llm', provider: 'muse', label: 'Muse', status: 'off', account: '', scopes: 'chat completions — remote API', lastSync: '…' },
   { id: 'cn-groq', type: 'llm', provider: 'groq', label: 'Groq', status: 'off', account: '', scopes: 'chat completions — free tier', lastSync: '…' },
   { id: 'cn-nvidia', type: 'llm', provider: 'nvidia', label: 'NVIDIA NIM', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },
   { id: 'cn-gemini', type: 'llm', provider: 'gemini', label: 'Google Gemini', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },
@@ -1159,8 +1255,6 @@ export const INITIAL_CONNECTIONS: AppConnection[] = [
   { id: 'cn-openai', type: 'llm', provider: 'openai', label: 'OpenAI', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },
   { id: 'cn-openrouter', type: 'llm', provider: 'openrouter', label: 'OpenRouter', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },
   { id: 'cn-custom', type: 'llm', provider: 'custom', label: 'Custom endpoint', status: 'off', account: '', scopes: 'chat completions — OpenAI-compatible', lastSync: '…' },
-  { id: 'cn-elevenlabs', type: 'voice', provider: 'elevenlabs', label: 'ElevenLabs', status: 'off', account: '', scopes: 'text-to-speech — outbound calls', lastSync: '…' },
-  { id: 'cn-fish', type: 'voice', provider: 'fish', label: 'Fish Audio', status: 'off', account: '', scopes: 'text-to-speech', lastSync: '…' },
   { id: 'cn-whatsapp', type: 'tool', provider: 'whatsapp', label: 'WhatsApp Business', status: 'off', account: '', scopes: 'send, receive, templates', lastSync: '…' },
 ];
 
@@ -1239,53 +1333,14 @@ export interface OpsState {
   tracking: TrackingEvent[];
 }
 
+// A new company has no operations data. The Company Engine tab fills this from the connected API, or the user adds records.
 export const INITIAL_OPS: OpsState = {
-  clients: [
-    { id: 'c1', name: 'Northwind Logistics', contact: 'j.parker@northwind.io', city: 'Chicago', segment: 'Enterprise', active: true, bookingCount: 42 },
-    { id: 'c2', name: 'Ferry Freight', contact: 'm.diaz@ferryfreight.com', city: 'Newark', segment: 'Mid-market', active: true, bookingCount: 27 },
-    { id: 'c3', name: 'Gulfstream Marine', contact: 'r.lee@gulfstreammar.com', city: 'Houston', segment: 'Enterprise', active: true, bookingCount: 18 },
-    { id: 'c4', name: 'Atlas Distribution', contact: 's.kim@atlasdist.net', city: 'LA', segment: 'Mid-market', active: false, bookingCount: 9 },
-  ],
-  bookings: [
-    { id: 'b1', ref: 'BK-11024', client: 'Northwind Logistics', origin: 'Chicago IL', dest: 'Columbus OH', date: 'Today 09:00', status: 'in-transit', value: 12400, vehicle: 'TLX-420', driver: 'O. Rahman' },
-    { id: 'b2', ref: 'BK-11025', client: 'Ferry Freight', origin: 'Newark NJ', dest: 'Baltimore MD', date: 'Today 11:30', status: 'confirmed', value: 8600, vehicle: 'TLX-118', driver: 'D. Whitfield' },
-    { id: 'b3', ref: 'BK-11026', client: 'Gulfstream Marine', origin: 'Houston TX', dest: 'Dallas TX', date: 'Today 14:00', status: 'pending', value: 15900, vehicle: 'TRL-77', driver: '…' },
-    { id: 'b4', ref: 'BK-11022', client: 'Northwind Logistics', origin: 'Cleveland OH', dest: 'Detroit MI', date: 'Yesterday', status: 'delivered', value: 7300, vehicle: 'TLX-306', driver: 'O. Rahman' },
-    { id: 'b5', ref: 'BK-11020', client: 'Atlas Distribution', origin: 'LA CA', dest: 'Phoenix AZ', date: 'Mon', status: 'delivered', value: 10900, vehicle: 'TLX-512', driver: 'R. Osei' },
-    { id: 'b6', ref: 'BK-11019', client: 'Ferry Freight', origin: 'Newark NJ', dest: 'Boston MA', date: 'Sun', status: 'cancelled', value: 6200, vehicle: '…', driver: '…' },
-  ],
-  drivers: [
-    { id: 'd1', name: 'Omar Rahman', status: 'active', vehicle: 'TLX-420', joined: '2021', licence: 'CDL-A — HAZMAT' },
-    { id: 'd2', name: 'DeShawn Whitfield', status: 'active', vehicle: 'TLX-118', joined: '2022', licence: 'CDL-A' },
-    { id: 'd3', name: 'Roselyn Osei', status: 'active', vehicle: 'TLX-512', joined: '2022', licence: 'CDL-A — Tanker' },
-    { id: 'd4', name: 'Mateo Silva', status: 'onboarding', vehicle: 'TLX-221', joined: 'This week', licence: 'CDL-B (in review)' },
-    { id: 'd5', name: 'Grace Okafor', status: 'pending', vehicle: '…', joined: 'Screening', licence: 'CDL-A pending' },
-  ],
-  sla: [
-    { id: 's1', label: 'On-time delivery', value: 96, target: 98, unit: '%' },
-    { id: 's2', label: 'Avg pickup delay', value: 9, target: 15, unit: 'min' },
-    { id: 's3', label: 'Booking confirm time', value: 42, target: 60, unit: 'min' },
-    { id: 's4', label: 'Tracking coverage', value: 100, target: 95, unit: '%' },
-  ],
-  analytics: {
-    series: [
-      { label: 'W1', bookings: 118, revenue: 384, onTime: 95 },
-      { label: 'W2', bookings: 132, revenue: 412, onTime: 96 },
-      { label: 'W3', bookings: 141, revenue: 455, onTime: 94 },
-      { label: 'W4', bookings: 158, revenue: 491, onTime: 97 },
-      { label: 'W5', bookings: 149, revenue: 473, onTime: 96 },
-      { label: 'W6', bookings: 172, revenue: 528, onTime: 97 },
-    ],
-    byStatus: { pending: 14, confirmed: 22, 'in-transit': 31, delivered: 118, cancelled: 9 },
-    revenue: 528000,
-    activeFleet: 14,
-  },
-  tracking: [
-    { id: 't1', time: '14:32', ref: 'BK-11024', location: 'Toledo OH — I-75', state: 'in-transit', note: 'Arrived at hub 3, ETA 16:40.' },
-    { id: 't2', time: '13:05', ref: 'BK-11022', location: 'Detroit MI', state: 'delivered', note: 'Signed off by A. Mercer.' },
-    { id: 't3', time: '11:47', ref: 'BK-11025', location: 'Trenton NJ', state: 'confirmed', note: 'Loaded, awaiting departure window.' },
-    { id: 't4', time: '09:58', ref: 'BK-11026', location: 'Houston TX', state: 'pending', note: 'Awaiting vehicle assignment.' },
-  ],
+  clients: [],
+  bookings: [],
+  drivers: [],
+  sla: [],
+  analytics: { series: [], byStatus: { pending: 0, confirmed: 0, 'in-transit': 0, delivered: 0, cancelled: 0 }, revenue: 0, activeFleet: 0 },
+  tracking: [],
 };
 
 export const BOOKING_STATUS_ORDER: BookingStatus[] = ['pending', 'confirmed', 'in-transit', 'delivered', 'cancelled'];
@@ -1325,7 +1380,7 @@ export const DEFAULT_COMPOSIO: ComposioConfig = {
 // ---------------------------------------------------------------------------
 
 export type CommsChannel = 'email' | 'sms' | 'whatsapp' | 'telegram';
-export type CommsStatus = 'sent' | 'scheduled' | 'failed';
+export type CommsStatus = 'sent' | 'scheduled' | 'failed' | 'draft';
 
 export interface CommsMessage {
   id: string;
@@ -1389,6 +1444,10 @@ export interface AdCampaign {
   status: 'active' | 'paused' | 'ended';
   startDate?: string; // ISO — flight window start (pacing uses month-to-date when absent)
   endDate?: string; // ISO — flight window end
+  /** Creative draft (headline/body/link). Lives in the workspace until the campaign runs. */
+  draft?: { headline: string; body: string; link: string; imageText?: string };
+  /** Its marketing team discussion, kept on the record. */
+  internalNotes?: { id: string; author: string; text: string; at: string }[];
 }
 
 export type PacingVerdict = 'on-pace' | 'overspending' | 'underspending';
@@ -1449,6 +1508,22 @@ export const WEBHOOK_EVENTS = [
 export const INITIAL_WEBHOOKS: Webhook[] = [];
 
 // ---------------------------------------------------------------------------
+// Feature requests — owners ask for product improvements from the dashboard.
+// Stored per user (not per company: they concern the product, not the books).
+// ---------------------------------------------------------------------------
+
+export type FeatureRequestStatus = 'received' | 'planned' | 'shipped' | 'declined';
+
+export interface FeatureRequest {
+  id: string;
+  title: string;
+  details: string;
+  area: string;
+  status: FeatureRequestStatus;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // KPIs (additive, per department) + LLM selection
 // ---------------------------------------------------------------------------
 
@@ -1459,6 +1534,14 @@ export interface KpiEntry {
   unit: string; // '', '%' or '$'
   delta: number;
   live?: boolean; // true when the value is computed from live company data
+  /** true once a value has been measured (live data or a user entry); false/undefined = not measured yet. */
+  valueSet?: boolean;
+  /** 'higher' (default) = bigger is better; 'lower' = smaller is better. */
+  direction?: KpiDirection;
+  /** Short best-practice note shown to the user. */
+  benchmark?: string;
+  /** True when a target of exactly 0 is the goal itself (critical vulnerabilities), not a target that has not been set. */
+  zeroTarget?: boolean;
 }
 
 export interface KpiGroup {
@@ -1470,8 +1553,77 @@ export interface KpiGroup {
 export const INITIAL_KPI_GROUPS: KpiGroup[] = DEPARTMENTS.map((d) => ({
   id: d.id,
   name: d.name,
-  kpis: d.kpis.map((k) => ({ ...k })),
+  // Best-practice labels, units, targets and direction only. Values start
+  // unmeasured (valueSet: false) so a brand-new company never sees a fabricated
+  // score; values fill in from live data or from what the user enters.
+  kpis: d.kpis.map((k) => ({ ...k, value: 0, delta: 0, valueSet: false })),
 }));
+
+/**
+ * Whether a KPI has an actual measurement behind it. Live values and explicit
+ * user entries count; entries saved before `valueSet` existed fall back to
+ * "non-zero value" so older data keeps scoring.
+ */
+export function kpiMeasured(k: KpiEntry): boolean {
+  if (k.live) return true;
+  if (k.valueSet !== undefined) return k.valueSet;
+  return k.value !== 0;
+}
+
+/**
+ * Target attainment as 0–100, honouring direction. Returns null when the KPI
+ * cannot be scored (no target for a higher-is-better metric, or a lower-is-
+ * better metric that has no target and a non-zero value).
+ */
+export function kpiAttainment(k: KpiEntry): number | null {
+  // A KPI where zero is the goal (critical vulnerabilities) is met only by zero. Any other target of 0 just means "not set up".
+  if (k.zeroTarget && k.direction === 'lower' && k.target === 0 && kpiMeasured(k)) return k.value <= 0 ? 100 : 0;
+  // Without a target there is nothing to score against, for either direction.
+  if (k.target <= 0) return null;
+  if (k.direction === 'lower') {
+    if (k.value <= 0) return 100; // already at the best possible value
+    return Math.min(100, Math.round((k.target / k.value) * 100));
+  }
+  return Math.min(100, Math.round((k.value / k.target) * 100));
+}
+
+/**
+ * A company's KPI set completed against the best-practice baseline. Departments and KPIs the company is missing are added with
+ * their baseline target, direction and note; a KPI that has no measurement and a target of 0 (never set up) gets the baseline
+ * target. Everything the company changed or added itself, and every measured value, is kept exactly as it is.
+ * `changed` says whether anything was added, so the caller knows to save it.
+ */
+export function completeKpiGroups(saved: KpiGroup[] | null | undefined): { groups: KpiGroup[]; changed: boolean } {
+  if (!Array.isArray(saved) || saved.length === 0) return { groups: INITIAL_KPI_GROUPS.map((g) => ({ ...g, kpis: g.kpis.map((k) => ({ ...k })) })), changed: true };
+  let changed = false;
+  const groups = saved.map((g) => ({ ...g, kpis: [...(g.kpis ?? [])] }));
+  for (const base of INITIAL_KPI_GROUPS) {
+    const g = groups.find((x) => x.id === base.id);
+    if (!g) {
+      groups.push({ ...base, kpis: base.kpis.map((k) => ({ ...k })) });
+      changed = true;
+      continue;
+    }
+    for (const bk of base.kpis) {
+      const i = g.kpis.findIndex((k) => k.label === bk.label);
+      if (i < 0) {
+        g.kpis.push({ ...bk });
+        changed = true;
+      } else {
+        const k = g.kpis[i];
+        const untouched = !k.target && !kpiMeasured(k);
+        if (untouched && bk.target) {
+          g.kpis[i] = { ...k, target: bk.target, direction: k.direction ?? bk.direction, benchmark: k.benchmark ?? bk.benchmark, unit: k.unit || bk.unit };
+          changed = true;
+        } else if ((!k.benchmark && bk.benchmark) || (bk.zeroTarget && !k.zeroTarget)) {
+          g.kpis[i] = { ...k, benchmark: k.benchmark ?? bk.benchmark, direction: k.direction ?? bk.direction, zeroTarget: k.zeroTarget ?? bk.zeroTarget };
+          changed = true;
+        }
+      }
+    }
+  }
+  return { groups, changed };
+}
 
 export interface KpiOverride {
   value: number;
@@ -1508,16 +1660,15 @@ export function deriveKpiOverrides(state: {
   set('finance', 'Burn Rate', Math.round(burn), '$');
   if (revenue > 0) set('finance', 'Gross Margin', Math.round(((revenue - burn) / Math.max(1, revenue)) * 100), '%');
 
-  const pipeline = leads
-    .filter((l) => l.stage !== 'won' && l.stage !== 'lost')
-    .reduce((s, l) => s + (l.value || 0), 0);
-  set('sales', 'Pipeline Coverage', Math.round(pipeline), '$');
-  set('sales', 'Deals Closed', leads.filter((l) => l.stage === 'won').length, '');
+  const won = leads.filter((l) => l.stage === 'won');
+  const lost = leads.filter((l) => l.stage === 'lost');
+  set('sales', 'Deals Closed', won.length, '');
+  if (won.length + lost.length > 0) set('sales', 'Win Rate', Math.round((won.length / (won.length + lost.length)) * 100), '%');
+  if (won.length > 0) set('sales', 'Avg Deal Size', Math.round(won.reduce((sum, l) => sum + (l.value || 0), 0) / won.length), '$');
 
   set('people', 'Headcount', emps.filter((e) => e.status !== 'offboarded').length, '');
 
   set('strategy', 'Valuation', Math.round(deriveValuation(fin, know, state.ws).fmv * 100), '$');
-  set('strategy', 'Knowledge Base', know.length, '');
 
   return out;
 }
@@ -1536,11 +1687,21 @@ export interface LlmSelection {
 }
 
 export const DEFAULT_LLM: LlmSelection = {
-  providerId: 'llm-demo',
-  model: 'demo',
+  providerId: 'llm-pollinations',
+  model: 'openai-fast',
   online: false,
   latency: 0,
 };
+
+/** Provider ids removed from the catalog. Stored selections and catalogs that still reference them are migrated forward. */
+export const RETIRED_LLM_PROVIDERS: string[] = ['llm-demo', 'llm-ollama'];
+
+/** Maps a stored workspace LLM selection off retired providers (or the retired demo model) onto the current default. */
+export function normalizeLlmSelection(sel: LlmSelection | null | undefined): LlmSelection {
+  if (!sel || RETIRED_LLM_PROVIDERS.includes(sel.providerId)) return { ...DEFAULT_LLM };
+  if (sel.model === 'demo') return { ...sel, model: DEFAULT_LLM.model };
+  return sel;
+}
 
 // ---------------------------------------------------------------------------
 // Fundraising: opportunities scouted + auto-applied by the Nadia agent
@@ -1558,7 +1719,23 @@ export interface FundingOpportunity {
   matchScore: number; // 0-100 fit
   url: string;
   note: string;
+  // ── Autonomous pipeline (Nadia browses the site, summarizes, drafts) ──
+  /** Eligibility + requirements summarized from the program website. */
+  requirements?: string;
+  /** What the funder expects: deliverables, reporting, timelines. */
+  expectations?: string;
+  /** Documents the application needs (extracted checklist). */
+  documentsNeeded?: string[];
+  /** Ready-to-submit application draft (human reviews below-threshold ones). */
+  applicationDraft?: string;
+  /** ISO timestamp of the last successful site analysis. */
+  lastAnalyzedAt?: string | null;
+  /** Last analysis failure, so the UI can show retry instead of silence. */
+  analysisError?: string | null;
 }
+
+/** Fit at or above this auto-submits; below it a draft waits for review. */
+export const FUNDING_AUTO_APPLY_FIT = 85;
 
 export const INITIAL_FUNDRAISING: FundingOpportunity[] = [];
 
@@ -1624,6 +1801,9 @@ export interface McpServer {
   toolCount?: number;
   tools?: { name: string; description?: string }[];
   lastError?: string;
+  /** Set to 'composio' for entries provisioned from Composio: the server-side
+   *  COMPOSIO_API_KEY is used for the x-api-key header, so no token is stored. */
+  provider?: string;
   // OAuth discovery results (non-secret — safe to keep in regular workspace state).
   oauth?: {
     authorizationEndpoint?: string;
@@ -1644,6 +1824,10 @@ export interface ElevenLabsConfig {
   voice: string; // active voice id (see ELEVENLABS_VOICES)
   defaultVoice: string;
   lastSync: string;
+  /** A voice per agent (agent id -> ElevenLabs voice id). Agents without one use `voice`. */
+  agentVoices?: Record<string, string>;
+  /** Which service speaks when the company has both ElevenLabs and Fish Audio. Unset: ElevenLabs. */
+  engine?: 'elevenlabs' | 'fish';
 }
 
 export const ELEVENLABS_VOICES: { id: string; label: string; tag: string }[] = [
@@ -1712,38 +1896,8 @@ export const KNOWLEDGE_CATEGORIES: { id: KnowledgeCategoryId; label: string; hin
   { id: 'process', label: 'Process & Playbooks', hint: 'How agents should operate' },
 ];
 
-export const KNOWLEDGE_SEED: KnowledgeEntry[] = [
-  {
-    id: 'kb1', category: 'company',
-    title: 'What is our company name, purpose and mission?',
-    answer: 'Replace this placeholder with your company overview. Provide the company name, primary purpose, core mission and key differentiators.',
-    source: 'Company dashboard', updatedAt: 'Today 08:00',
-  },
-  {
-    id: 'kb2', category: 'services',
-    title: 'What products and services do we offer?',
-    answer: 'Replace this placeholder with details of your products, services, pricing tiers, SLAs and any unique value propositions. Include key specifications and delivery models.',
-    source: 'Product docs', updatedAt: 'Today 08:05',
-  },
-  {
-    id: 'kb3', category: 'funding',
-    title: 'What funding programs and grants are available?',
-    answer: 'Replace this placeholder with current funding programs, grant opportunities, application deadlines and funding status.',
-    source: 'Finance', updatedAt: 'Today 08:30',
-  },
-  {
-    id: 'kb4', category: 'content',
-    title: 'Where can we find our public content and resources?',
-    answer: 'Replace this placeholder with links to your website, blog, documentation, brand assets and any public resources agents should reference.',
-    source: 'Web', updatedAt: 'Today 09:00',
-  },
-  {
-    id: 'kb-valuation', category: 'company',
-    title: 'What is our current valuation and financial position?',
-    answer: 'Replace this placeholder with key financial metrics: valuation, revenue multiples, enterprise value, share price, financial projections, margins and funding status.',
-    source: 'Finance + Eqvista', updatedAt: 'Today 09:00',
-  },
-];
+// Empty on purpose: a company's knowledge base holds only what the company has written (onboarding adds the first entries).
+export const KNOWLEDGE_SEED: KnowledgeEntry[] = [];
 
 export const KNOWLEDGE_QUESTIONS: KbQuestion[] = [
   { id: 'q1', category: 'services', question: 'What are our exact service packages, pricing tiers and contract SLAs?', source: 'Sales team' },
@@ -1812,6 +1966,12 @@ export interface NotificationPrefs {
 
 export interface SettingsState {
   notifications: NotificationPrefs;
+  /** When the model a request was going to use fails, use the next activated one. On unless set to false. */
+  llmFallback?: boolean;
+  /** Provider ids in the order fallback tries them (unlisted activated providers follow, in catalog order). */
+  llmFallbackOrder?: string[];
+  /** Which events are handed to an agent automatically. Each defaults to on. */
+  automations?: { ticketTriage?: boolean; leadFollowUp?: boolean; overdueInvoices?: boolean; agentTasks?: boolean; borgaAssigns?: boolean };
   crmUrl: string; // per-company engine / CRM endpoint
   engineApiKey?: string; // legacy: replaced by the encrypted Company Engine connection
   /** Pull customers and deals from the Company Engine automatically while the dashboard is open. */
@@ -1820,20 +1980,37 @@ export interface SettingsState {
   crmLastPull?: { at: string; customers?: { added: number; updated: number; unchanged: number }; leads?: { added: number; updated: number; unchanged: number }; skipped?: number; error?: string };
   lastAutoMatchAt?: string; // ISO timestamp of last banking end-of-day auto-reconciliation
   autonomousMode?: boolean; // when true, agents may act on the company's behalf but must route payments and outbound third-party sends through approval
+  /** True once someone switched autonomous mode on or off themselves. Until then it follows the default (on), including for companies that only ever had the old default of off. */
+  autonomousModeChosen?: boolean;
   lastAutoTrainAt?: string; // ISO timestamp of last automatic agent-memory / knowledge-base sync
   /** Tier 5 kill switch: when true, the heartbeat never fires — chat/voice still work. */
   heartbeatPaused?: boolean;
   /** Tier 5 quiet window (24h "HH:MM"); non-urgent checks wait until after `end`. */
   quietHours?: { start: string; end: string };
+  /** Run-queue worker count for this workspace (1..8). Default: 3. */
+  queueWorkers?: number;
   /** Tier 6: per-workspace override for the payment approval threshold (USD). Falls back to AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD. */
   approvalThresholdUsd?: number;
+  /** Always-on microphone (wake word). Separate from notifications.voice (spoken replies); falls back to it for older workspaces. */
+  alwaysListening?: boolean;
+  /** The model that answers spoken requests. Unset: the company's chat model (with the usual fallback). */
+  voiceLlm?: { providerId: string; model: string };
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
-  notifications: { tasks: true, handoffs: true, sync: false, voice: true, kpi: false },
+  notifications: { tasks: true, handoffs: true, sync: false, voice: false, kpi: false },
   crmUrl: '', // Configure in Company Settings
-  autonomousMode: false,
+  autonomousMode: true,
 };
+
+/**
+ * Saved settings with the defaults filled in. Autonomous mode is on unless someone chose otherwise: a company saved before this
+ * default changed only has "off" because that used to be the default, not because anyone picked it.
+ */
+export function normalizeSettings(saved: Partial<SettingsState> | null | undefined): SettingsState {
+  const merged = { ...DEFAULT_SETTINGS, ...(saved ?? {}) } as SettingsState;
+  return { ...merged, autonomousMode: merged.autonomousModeChosen ? !!merged.autonomousMode : true };
+}
 
 // ---------------------------------------------------------------------------
 // Valuation — derived from the live financial ledger + the knowledge base
@@ -1950,10 +2127,56 @@ export interface AgentRun {
   startedAt: string;
   completedAt?: string;
   summary?: string;
-  triggeredBy: 'user' | 'scheduler' | 'webhook' | 'handoff';
+  triggeredBy: 'user' | 'scheduler' | 'webhook' | 'handoff' | 'automation';
 }
 
-export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = [
+// ---------------------------------------------------------------------------
+// Run queue: every agent run (manual, scheduled, webhook, edited plan) is a
+// job drained by a small worker pool — visible, cancellable, retryable.
+// ---------------------------------------------------------------------------
+
+export type RunJobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+
+/** One edited step from the Planner's "execute plan as-is" mode. */
+export interface PlannedStep {
+  thought: string;
+  toolName: string;
+  params: Record<string, unknown>;
+}
+
+export interface RunJob {
+  id: string;
+  agentId: string;
+  agentName: string;
+  goal: string;
+  triggeredBy: AgentRun['triggeredBy'];
+  status: RunJobStatus;
+  enqueuedAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  /** Which worker claimed the job ("w1", "w2", ...). */
+  workerId?: string | null;
+  /** Id of the AgentRun a completed job produced. */
+  runId?: string | null;
+  error?: string | null;
+  /** Set on a queued/running job to stop it at the next step boundary. */
+  cancelRequested?: boolean;
+  /** Scheduling priority: urgent jobs claim a worker first. */
+  urgent?: boolean;
+  /** 0 (P0, most important) to 3 (P3). Among jobs of the same urgency the lower number is claimed first; absent means by who started it. */
+  priority?: 0 | 1 | 2 | 3;
+  /** Links the job back to the ScheduledTask that enqueued it (stats update on finish). */
+  schedTaskId?: string | null;
+  /** Exact plan from the Planner; when present the worker executes these steps verbatim. */
+  plannedSteps?: PlannedStep[];
+  /** Company name baked into the run's system prompt. */
+  companyName?: string;
+  /** Live progress, appended step by step while the job runs. */
+  steps?: AgentRunStep[];
+  maxSteps?: number;
+}
+
+const SCHEDULED_TASK_TEMPLATES: ScheduledTask[] = [
   {
     id: 'sched-1', name: 'Morning Fleet Brief', agentId: 'a-borga',
     goal: 'Review all department KPIs, flag any below-target metrics, create follow-up tasks for issues found, store key observations as memories, and log a morning brief summary to the activity feed.',
@@ -1966,7 +2189,7 @@ export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = [
   },
   {
     id: 'sched-3', name: 'Grant Opportunity Scan', agentId: 'a-fundraising',
-    goal: 'Query current funding opportunities, score unreviewed ones by mission fit, create evaluation tasks for top matches above 80% fit, and store findings as observations.',
+    goal: 'Run the autonomous funding pipeline: browse every open program website, summarize requirements and expectations, draft each application, auto-apply at 85%+ fit, and store findings as observations.',
     interval: 'weekly', enabled: true, lastRun: null, nextRun: null, runCount: 0,
   },
   {
@@ -1980,6 +2203,9 @@ export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = [
     interval: 'daily', enabled: false, lastRun: null, nextRun: null, runCount: 0,
   },
 ];
+
+// Templates only: nothing runs on a schedule until the user switches it on.
+export const INITIAL_SCHEDULED_TASKS: ScheduledTask[] = SCHEDULED_TASK_TEMPLATES.map((t) => ({ ...t, enabled: false, nextRun: null }));
 
 // ---------------------------------------------------------------------------
 // Inbound webhook routing — maps event sources to responsible agents
@@ -2124,10 +2350,10 @@ export function deriveValuation(finance: FinanceEntry[], knowledge: KnowledgeEnt
 
 export type WorkspacePlan = 'trial' | 'growth' | 'scale' | 'enterprise';
 
-/** Display symbol per workspace currency — single source of truth for every money() helper. */
-export const CURRENCY_SYMBOL: Record<'USD' | 'CAD' | 'EUR' | 'GBP', string> = {
-  USD: '$', CAD: 'C$', EUR: '€', GBP: '£',
-};
+/** Display symbol per workspace currency — single source of truth for every money() helper. Works for every ISO 4217 code (lib/borga/currencies.ts). */
+export const CURRENCY_SYMBOL: Record<string, string> = new Proxy({} as Record<string, string>, {
+  get: (_target, code) => (typeof code === 'string' ? currencySymbol(code) : undefined),
+});
 
 // ---------------------------------------------------------------------------
 // Onboarding — when a company is created we collect structured context so the
@@ -2136,7 +2362,9 @@ export const CURRENCY_SYMBOL: Record<'USD' | 'CAD' | 'EUR' | 'GBP', string> = {
 // ---------------------------------------------------------------------------
 
 export type OnboardingStepId =
-  | 'profile' | 'industry' | 'financials' | 'team' | 'knowledge' | 'valuation';
+  | 'profile' | 'industry' | 'financials' | 'team' | 'knowledge' | 'valuation'
+  // optional steps: they never hold up finishing the setup
+  | 'website' | 'ai' | 'email' | 'voice';
 
 export interface OnboardingStep {
   id: OnboardingStepId;
@@ -2144,6 +2372,10 @@ export interface OnboardingStep {
   description: string;
   href: string;
   completed: boolean;
+  /** An optional step does not count towards finishing the setup. */
+  optional?: boolean;
+  /** The user chose to skip it for now. */
+  skipped?: boolean;
 }
 
 export interface WorkspaceOnboarding {
@@ -2160,7 +2392,22 @@ export const ONBOARDING_STEP_DEFS: Omit<OnboardingStep, 'completed'>[] = [
   { id: 'team', title: 'Team', description: 'Add employees and org structure.', href: '/app/hr' },
   { id: 'knowledge', title: 'Knowledge base', description: 'Answer key questions so agents have context.', href: '/app/company/knowledge' },
   { id: 'valuation', title: 'Valuation', description: 'Review your derived valuation model.', href: '/app/company/valuation' },
+  { id: 'website', title: 'Read your website', description: 'Let Borga pull what it can from your website into the knowledge base.', href: '/app/company/knowledge', optional: true },
+  { id: 'ai', title: 'AI model', description: 'Choose the model your agents think with.', href: '/app/integrations', optional: true },
+  { id: 'email', title: 'Email (SMTP)', description: 'Send invoices, replies and updates from your own address.', href: '/app/integrations', optional: true },
+  { id: 'voice', title: 'Voice', description: 'Turn on the voice assistant and pick how it sounds.', href: '/app/settings', optional: true },
 ];
+
+/**
+ * An onboarding record saved before the optional steps existed has no entry for them. Fill in whatever is missing (as not done) so
+ * the screens can always find every step, and keep what the company already did.
+ */
+export function normalizeOnboarding(o?: WorkspaceOnboarding): WorkspaceOnboarding {
+  const base = o ?? makeOnboarding();
+  const known = new Map(base.steps.map((s) => [s.id, s]));
+  const steps = ONBOARDING_STEP_DEFS.map((d) => ({ ...d, ...known.get(d.id), optional: d.optional, completed: known.get(d.id)?.completed ?? false }));
+  return { ...base, steps };
+}
 
 export function makeOnboarding(): WorkspaceOnboarding {
   return {
@@ -2171,11 +2418,17 @@ export function makeOnboarding(): WorkspaceOnboarding {
   };
 }
 
+/** Progress counts the required steps only: an optional step can be done or skipped without holding the setup up. */
 export function onboardingProgress(o?: WorkspaceOnboarding): { done: number; total: number; pct: number; complete: boolean } {
-  const steps = o?.steps ?? [];
+  const steps = (o?.steps ?? []).filter((s) => !s.optional && !ONBOARDING_STEP_DEFS.find((d) => d.id === s.id)?.optional);
   const done = steps.filter((s) => s.completed).length;
-  const total = steps.length || ONBOARDING_STEP_DEFS.length;
+  const total = steps.length || ONBOARDING_STEP_DEFS.filter((d) => !d.optional).length;
   return { done, total, pct: total ? Math.round((done / total) * 100) : 0, complete: !!o?.completed };
+}
+
+/** Optional steps the company has neither done nor skipped, for a gentle reminder. */
+export function pendingOptionalSteps(o?: WorkspaceOnboarding): OnboardingStep[] {
+  return normalizeOnboarding(o).steps.filter((s) => s.optional && !s.completed && !s.skipped);
 }
 
 export interface Workspace {
@@ -2184,8 +2437,11 @@ export interface Workspace {
   industry: string;
   plan: WorkspacePlan;
   color: string; // avatar accent, same convention as agents
-  currency: 'USD' | 'CAD' | 'EUR' | 'GBP';
+  /** ISO 4217 code, for example "USD", "GHS", "NGN" (see lib/borga/currencies.ts). */
+  currency: string;
   createdAt: string;
+  /** When the company was created, as a full timestamp (createdAt is only a month label). Billing uses it to tell new companies from ones that predate it. */
+  createdAtIso?: string;
 
   // ── Full company profile (Settings → Company information) ────────────────
   legalName?: string;
@@ -2246,6 +2502,28 @@ export interface Employee {
 export const LEAVE_BASE_DAYS = 20;
 export const LEAVE_ACCRUAL_PER_MONTH = 1.67;
 
+/** "2026-03" (month input) → "Mar 2026" (the display format employee records use). Pass-through for anything else. */
+export function formatStartedAt(monthInput: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(monthInput.trim());
+  if (!m) return monthInput;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  return d.toLocaleDateString([], { month: 'short', year: 'numeric' });
+}
+
+const START_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** "Mar 2026" or "2026-03" → "2026-03" for month inputs. Unparseable → ''. Timezone-proof by construction (no Date parsing). */
+export function toMonthInput(startedAt: string): string {
+  const iso = /^(\d{4})-(\d{2})/.exec(startedAt.trim());
+  if (iso) return `${iso[1]}-${iso[2]}`;
+  const named = /^([a-z]+)\s+(\d{4})$/i.exec(startedAt.trim());
+  if (named) {
+    const m = START_MONTHS.indexOf(named[1].slice(0, 3).toLowerCase());
+    if (m >= 0) return `${named[2]}-${String(m + 1).padStart(2, '0')}`;
+  }
+  return '';
+}
+
 /** Dynamic leave entitlement: base + monthly accrual since start date, minus approved paid leave. */
 export function computeLeaveBalance(
   employee: Pick<Employee, 'id' | 'startedAt' | 'leaveBalanceDays'>,
@@ -2271,6 +2549,35 @@ export const EMPLOYEE_STATUS_STYLE: Record<EmployeeStatus, string> = {
   'on-leave': 'bg-amber-500/10 text-amber-600 ring-amber-500/30',
   offboarded: 'bg-muted text-muted-foreground ring-border',
 };
+
+// ---------------------------------------------------------------------------
+// Payroll runs — one batch per month. A month is paid exactly once: a released
+// run for a monthKey blocks any further release for that month, and each run
+// keeps its per-employee lines for the audit trail.
+// ---------------------------------------------------------------------------
+
+export interface PayrollLine {
+  employeeId: string;
+  name: string;
+  amount: number; // monthly gross, workspace currency
+}
+
+export type PayrollRunStatus = 'draft' | 'released';
+
+export interface PayrollRun {
+  id: string;
+  monthKey: string; // YYYY-MM — the de-duplication key
+  periodLabel: string; // display, e.g. "October 2026"
+  lines: PayrollLine[];
+  total: number;
+  status: PayrollRunStatus;
+  createdAt: string;
+  releasedAt?: string;
+  financeEntryId?: string;
+  journalId?: string;
+}
+
+export const INITIAL_PAYROLL_RUNS: PayrollRun[] = [];
 
 export type LeaveKind = 'vacation' | 'sick' | 'parental' | 'unpaid';
 export type LeaveStatus = 'pending' | 'approved' | 'rejected';
@@ -2611,7 +2918,7 @@ export interface JournalEntry {
   status: 'draft' | 'posted' | 'voided';
   lines: JournalLine[];
   createdAt?: string; // ISO timestamp — every transaction is stamped
-  auto?: 'closing' | 'reversal'; // system-generated closing/reversal entries
+  auto?: 'closing' | 'reversal' | 'asset' | 'pos' | 'pos-refund'; // system-generated closing, reversal, fixed asset register and POS postings entries
   closesPeriod?: string; // closure id that produced this entry
   voidedAt?: string; // ISO — posted entries are never deleted, only voided
   voidReason?: string;
@@ -2965,6 +3272,13 @@ export const INITIAL_COA: GlAccount[] = [
   { id: 'gl-2400', code: '2400', name: 'Deferred Revenue', type: 'liability' },
   { id: 'gl-3200', code: '3200', name: 'Share Capital', type: 'equity' },
   { id: 'gl-4600', code: '4600', name: 'Other Income', type: 'revenue' },
+  // posted to by the fixed asset register (lib/borga/fixed-asset-standards.ts ASSET_ACCOUNTS)
+  { id: 'gl-1410', code: '1410', name: 'Accumulated Depreciation & Impairment', type: 'asset', description: 'Contra asset: depreciation and impairment losses to date' },
+  { id: 'gl-3300', code: '3300', name: 'Revaluation Surplus', type: 'equity', description: 'Revaluation gains held in equity (other comprehensive income)' },
+  { id: 'gl-4610', code: '4610', name: 'Gain on Disposal of Assets', type: 'revenue' },
+  { id: 'gl-4620', code: '4620', name: 'Impairment Reversal & Revaluation Gains', type: 'revenue' },
+  { id: 'gl-5910', code: '5910', name: 'Impairment & Revaluation Losses', type: 'expense' },
+  { id: 'gl-5920', code: '5920', name: 'Loss on Disposal of Assets', type: 'expense' },
 ];
 
 export const INITIAL_JOURNAL: JournalEntry[] = [];
@@ -2983,6 +3297,8 @@ export interface TaxProfile {
   rate: number; // percentage, e.g. 20 for 20%
   category: TaxCategory;
   description?: string;
+  /** The profile pre-selected on new invoices and bills. Stored on the profile so the choice survives a reload. */
+  isDefault?: boolean;
 }
 
 export const TAX_CATEGORY_LABEL: Record<TaxCategory, string> = {
@@ -2994,21 +3310,92 @@ export const TAX_CATEGORY_LABEL: Record<TaxCategory, string> = {
   custom: 'Custom',
 };
 
-export const INITIAL_TAX_PROFILES: TaxProfile[] = [
-  { id: 'tax-standard', name: 'Standard', rate: 20, category: 'vat', description: 'Default taxable rate', },
-  { id: 'tax-reduced', name: 'Reduced', rate: 5, category: 'vat', description: 'Reduced-rate goods & services' },
-  { id: 'tax-gst', name: 'GST', rate: 5, category: 'gst', description: 'Goods & Services Tax' },
-  { id: 'tax-vat-ca', name: 'VAT (Canada)', rate: 13, category: 'vat', description: 'Harmonized VAT' },
-  { id: 'tax-zero', name: 'Zero-rated', rate: 0, category: 'custom', description: 'Exempt / zero-rated supplies' },
-];
+// Starter tax profiles by country. A new company used to be seeded with "Standard 20% VAT", which would have charged 20% on
+// every invoice in the USA, Canada or Ghana. Now an unknown country starts at 0% ("set your rate"), and the profiles below are
+// applied when the company's country is set (see applyTaxPreset in the store). Only rates that are certain are filled in:
+// Canada GST 5%, Ontario HST 13% and Ghana standard VAT 15%. Everything else (US state and local sales tax, other Canadian
+// provinces, Ghana levies) is left at 0% for the company to enter. Every preset says it is a starter, to be confirmed.
+export type TaxRegion = 'US' | 'CA' | 'GH' | 'DK' | 'OTHER';
 
-export const DEFAULT_TAX_PROFILE_ID = 'tax-standard';
+const ZERO_RATED: TaxProfile = { id: 'tax-zero', name: 'Zero-rated', rate: 0, category: 'custom', description: 'Exempt / zero-rated supplies' };
+const CONFIRM = 'Starter rate: confirm with your accountant or the tax authority before relying on it.';
+
+export const TAX_PRESETS: Record<TaxRegion, { profiles: TaxProfile[]; note: string }> = {
+  OTHER: {
+    note: 'No tax rate is set. Add the rate that applies to your company (VAT, GST or sales tax) before sending invoices.',
+    profiles: [
+      { id: 'tax-default', name: 'Tax (set your rate)', rate: 0, category: 'custom', description: 'Placeholder at 0%. Change the rate to the one that applies to you.', isDefault: true },
+      ZERO_RATED,
+    ],
+  },
+  US: {
+    note: 'The United States has no federal sales tax. Rates differ by state, county and city, so enter the rate for where you sell. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-us-sales', name: 'Sales tax (set your state / local rate)', rate: 0, category: 'sales', description: CONFIRM, isDefault: true },
+      ZERO_RATED,
+    ],
+  },
+  CA: {
+    note: 'Canadian rates depend on the province. GST (5%) and Ontario HST (13%) are filled in; enter other provincial rates yourself. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-ca-gst', name: 'GST (federal)', rate: 5, category: 'gst', description: 'Federal Goods and Services Tax. ' + CONFIRM, isDefault: true },
+      { id: 'tax-ca-hst-on', name: 'HST (Ontario)', rate: 13, category: 'gst', description: 'Harmonized Sales Tax in Ontario. ' + CONFIRM },
+      { id: 'tax-ca-other', name: 'PST / QST / other HST (set your rate)', rate: 0, category: 'sales', description: 'Enter the rate for your province.' },
+      ZERO_RATED,
+    ],
+  },
+  DK: {
+    note: 'Danish VAT (moms) is 25% for almost all supplies. Some supplies are exempt (for example health care, education, insurance and most financial services): enter those as zero-rated. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-dk-vat', name: 'Moms (Danish VAT)', rate: 25, category: 'vat', description: 'Standard rate. ' + CONFIRM, isDefault: true },
+      ZERO_RATED,
+    ],
+  },
+  GH: {
+    note: 'Ghana standard VAT (15%) is filled in. Levies such as NHIL and GETFund, and any flat-rate scheme, are not: confirm the current rules with the Ghana Revenue Authority or your accountant. ' + CONFIRM,
+    profiles: [
+      { id: 'tax-gh-vat', name: 'VAT (Ghana standard)', rate: 15, category: 'vat', description: 'Standard-rated VAT. Levies may apply on top. ' + CONFIRM, isDefault: true },
+      { id: 'tax-gh-levy', name: 'Levy (set your rate)', rate: 0, category: 'custom', description: 'Enter any levy that applies to you, such as NHIL or GETFund.' },
+      ZERO_RATED,
+    ],
+  },
+};
+
+/** Maps free-text country names ("USA", "United States", "canada", "GH") to a preset region. */
+export function taxRegionFor(country?: string | null): TaxRegion {
+  const c = (country ?? '').trim().toLowerCase().replace(/\./g, '');
+  if (['us', 'usa', 'united states', 'united states of america'].includes(c)) return 'US';
+  if (['ca', 'canada'].includes(c)) return 'CA';
+  if (['gh', 'ghana'].includes(c)) return 'GH';
+  if (['dk', 'denmark', 'danmark'].includes(c)) return 'DK';
+  return 'OTHER';
+}
+
+export const INITIAL_TAX_PROFILES: TaxProfile[] = TAX_PRESETS.OTHER.profiles;
+
+/** Rates of every profile this app has ever seeded (including the old 20% set), to tell an untouched setup from an edited one. */
+const SEEDED_RATES: Record<string, number> = {
+  'tax-standard': 20, 'tax-reduced': 5, 'tax-gst': 5, 'tax-vat-ca': 13, 'tax-zero': 0,
+  ...Object.fromEntries(Object.values(TAX_PRESETS).flatMap((p) => p.profiles.map((t) => [t.id, t.rate]))),
+};
+
+/** True while every profile is still exactly as seeded, so choosing a country may replace the set without losing anyone's edits. */
+export function isUntouchedTaxSetup(profiles: TaxProfile[]): boolean {
+  return profiles.every((p) => SEEDED_RATES[p.id] === p.rate);
+}
+
+/** The default profile of a list: the flagged one, else the legacy default id, else the first. */
+export function defaultTaxIdOf(profiles: TaxProfile[]): string {
+  return (profiles.find((p) => p.isDefault) ?? profiles.find((p) => p.id === 'tax-standard') ?? profiles[0])?.id ?? DEFAULT_TAX_PROFILE_ID;
+}
+
+export const DEFAULT_TAX_PROFILE_ID = 'tax-default';
 
 // ---------------------------------------------------------------------------
 // Banking — connected accounts, imported statements and reconciliation
 // ---------------------------------------------------------------------------
 
-export type BankSource = 'manual' | 'csv' | 'composio-plaid';
+export type BankSource = 'manual' | 'csv' | 'composio-plaid' | 'saltedge';
 
 /** Account kind: the two classic bank account types plus every payment method (cash, mobile wallet, PayPal, Stripe, ...). */
 export type BankAccountKind = 'checking' | 'savings' | PaymentMethod;
@@ -3031,6 +3418,10 @@ export interface BankAccount {
   balance: number;
   source: BankSource;
   status: 'connected' | 'disconnected';
+  /** The bank's own id for the account (Salt Edge), so a re-import updates it instead of adding a copy. */
+  externalId?: string;
+  /** The bank connection this account is fed by. */
+  feedConnectionId?: string;
 }
 
 export interface BankTxn {
@@ -3044,6 +3435,8 @@ export interface BankTxn {
   status: 'unmatched' | 'matched' | 'excluded';
   matchedRef?: string; // ledger label or journal memo it reconciles against
   accountId?: string; // GlAccount.id — the GL account this reconciled line posts against
+  /** The bank's own id for the transaction: lines already imported are recognised by it and never added twice. */
+  externalId?: string;
 }
 
 /**
@@ -3163,12 +3556,6 @@ export interface BookClosure {
 // Localization option lists for the company form
 // ---------------------------------------------------------------------------
 
-export const COUNTRY_OPTIONS = [
-  'Canada', 'United States', 'United Kingdom', 'Australia', 'Germany', 'France',
-  'Denmark', 'Netherlands', 'Ireland', 'Singapore', 'South Africa', 'Nigeria', 'Kenya',
-  'Ghana', 'India', 'United Arab Emirates', 'Brazil', 'Mexico', 'Japan', 'New Zealand',
-] as const;
-
 export const TIMEZONE_OPTIONS = [
   'UTC',
   'America/St_Johns', 'America/Halifax', 'America/Toronto', 'America/Winnipeg',
@@ -3230,35 +3617,3 @@ export const INDUSTRY_OPTIONS = [
   'Government', 'Legal', 'Insurance', 'Telecommunications', 'Other',
 ] as const;
 
-export const REGIONS_BY_COUNTRY: Partial<Record<string, string[]>> = {
-  Canada: ['Alberta', 'British Columbia', 'Manitoba', 'New Brunswick', 'Newfoundland and Labrador', 'Northwest Territories', 'Nova Scotia', 'Nunavut', 'Ontario', 'Prince Edward Island', 'Quebec', 'Saskatchewan', 'Yukon'],
-  'United States': ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming', 'District of Columbia'],
-  'United Kingdom': ['England — Greater London', 'England — South East', 'England — South West', 'England — North West', 'England — North East', 'England — Midlands', 'England — Yorkshire', 'Scotland', 'Wales', 'Northern Ireland'],
-  Australia: ['New South Wales', 'Victoria', 'Queensland', 'Western Australia', 'South Australia', 'Tasmania', 'Australian Capital Territory', 'Northern Territory'],
-  Germany: ['Baden-Württemberg', 'Bayern', 'Berlin', 'Brandenburg', 'Bremen', 'Hamburg', 'Hessen', 'Niedersachsen', 'Nordrhein-Westfalen', 'Rheinland-Pfalz', 'Sachsen', 'Sachsen-Anhalt', 'Schleswig-Holstein', 'Thüringen'],
-  India: ['Delhi', 'Maharashtra', 'Karnataka', 'Tamil Nadu', 'Telangana', 'Gujarat', 'Rajasthan', 'Uttar Pradesh', 'West Bengal', 'Kerala', 'Punjab', 'Haryana'],
-  'South Africa': ['Gauteng', 'Western Cape', 'KwaZulu-Natal', 'Eastern Cape', 'Free State', 'Limpopo', 'Mpumalanga', 'North West', 'Northern Cape'],
-  Nigeria: ['Lagos', 'Abuja FCT', 'Rivers', 'Kano', 'Oyo', 'Kaduna', 'Enugu', 'Delta', 'Edo', 'Ogun'],
-  'United Arab Emirates': ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah', 'Fujairah', 'Umm Al Quwain'],
-};
-
-export const CITIES_BY_COUNTRY: Partial<Record<string, string[]>> = {
-  Canada: ['Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Ottawa', 'Edmonton', 'Winnipeg', 'Halifax', 'Saskatoon', 'Regina', 'Quebec City', 'Victoria'],
-  'United States': ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia', 'San Antonio', 'San Diego', 'Dallas', 'Austin', 'Seattle', 'Denver', 'Boston', 'Miami', 'Atlanta', 'San Francisco'],
-  'United Kingdom': ['London', 'Manchester', 'Birmingham', 'Leeds', 'Glasgow', 'Liverpool', 'Bristol', 'Edinburgh', 'Cardiff', 'Belfast', 'Newcastle'],
-  Australia: ['Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Canberra', 'Gold Coast', 'Hobart', 'Darwin'],
-  Germany: ['Berlin', 'Munich', 'Hamburg', 'Frankfurt', 'Cologne', 'Stuttgart', 'Düsseldorf', 'Leipzig', 'Dortmund'],
-  France: ['Paris', 'Marseille', 'Lyon', 'Toulouse', 'Nice', 'Nantes', 'Bordeaux', 'Lille'],
-  Netherlands: ['Amsterdam', 'Rotterdam', 'The Hague', 'Utrecht', 'Eindhoven', 'Groningen'],
-  Ireland: ['Dublin', 'Cork', 'Galway', 'Limerick', 'Waterford'],
-  Singapore: ['Singapore (Downtown)', 'Jurong', 'Tampines', 'Woodlands'],
-  'South Africa': ['Johannesburg', 'Cape Town', 'Durban', 'Pretoria', 'Port Elizabeth', 'Bloemfontein'],
-  Nigeria: ['Lagos', 'Abuja', 'Port Harcourt', 'Ibadan', 'Kano', 'Benin City', 'Enugu'],
-  Kenya: ['Nairobi', 'Mombasa', 'Kisumu', 'Nakuru', 'Eldoret'],
-  India: ['Mumbai', 'Delhi', 'Bengaluru', 'Chennai', 'Hyderabad', 'Pune', 'Kolkata', 'Ahmedabad', 'Jaipur'],
-  'United Arab Emirates': ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Al Ain'],
-  Brazil: ['São Paulo', 'Rio de Janeiro', 'Brasília', 'Salvador', 'Fortaleza', 'Belo Horizonte'],
-  Mexico: ['Mexico City', 'Guadalajara', 'Monterrey', 'Cancún', 'Tijuana', 'Puebla'],
-  Japan: ['Tokyo', 'Osaka', 'Yokohama', 'Nagoya', 'Sapporo', 'Kyoto', 'Fukuoka'],
-  'New Zealand': ['Auckland', 'Wellington', 'Christchurch', 'Hamilton', 'Dunedin'],
-};

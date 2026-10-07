@@ -1,15 +1,16 @@
 'use client';
 
+import { ConnectionSummary } from './ConnectionSummary';
 import { useCallback, useEffect, useState } from 'react';
-import { Brain, Loader2, RefreshCw, Trash2, Eye, KeyRound, CheckCircle2, XCircle } from 'lucide-react';
+import { Brain, Loader2, RefreshCw, Trash2, Eye } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Input } from '@/components/ui/input';
 import { useFeatures } from '@/lib/borga/features-client';
 import { Badge } from '@/components/ui/badge';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface State {
   featureOn: boolean;
@@ -35,9 +36,8 @@ export function SupermemoryCard() {
   const [s, setS] = useState<State | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [facts, setFacts] = useState<string[] | null>(null);
-  const [keyDraft, setKeyDraft] = useState('');
+  const [confirmPurge, setConfirmPurge] = useState(false);
   const toggleFeature = useFeatures((f) => f.toggle);
-  const connUrl = `/api/borga/connections?ws=${encodeURIComponent(ws)}`;
   const url = `/api/borga/supermemory?ws=${encodeURIComponent(ws)}`;
 
   const load = useCallback(async () => {
@@ -60,21 +60,47 @@ export function SupermemoryCard() {
 
   const toggle = async (key: keyof State['settings'], v: boolean) => {
     setS({ ...s, settings: { ...s.settings, [key]: v } });
-    const r = await post({ action: 'saveSettings', settings: { [key]: v } });
-    if (!r.ok) toast({ title: 'Not saved', description: r.error, variant: 'error' });
+    try {
+      const r = await post({ action: 'saveSettings', settings: { [key]: v } });
+      if (!r.ok) toast({ title: 'Not saved', description: r.error, variant: 'error' });
+    } catch (error) {
+      toast({ title: 'Not saved', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    }
     void load();
   };
 
   const run = async (name: 'syncNow' | 'profile' | 'purge') => {
-    if (name === 'purge' && !window.confirm('Delete everything Borga stored in Supermemory for this company? Your Borga data is not affected, and it can be sent again by syncing.')) return;
+    if (name === 'purge') {
+      setConfirmPurge(true);
+      return;
+    }
     setBusy(name);
-    const r = await post(name === 'purge' ? { action: 'purge', confirm: 'DELETE' } : { action: name });
-    setBusy(null);
-    if (!r.ok) return toast({ title: 'Supermemory', description: r.error ?? 'Request failed', variant: 'error' });
-    if (name === 'profile') setFacts((r.facts as string[]) ?? []);
-    if (name === 'syncNow') toast({ title: 'Sync finished', variant: 'success' });
-    if (name === 'purge') toast({ title: 'Deleted from Supermemory', description: `${(r.deletedDocuments as number | undefined) ?? 0} document(s) removed.`, variant: 'success' });
-    void load();
+    try {
+      const r = await post({ action: name });
+      if (!r.ok) return toast({ title: 'Supermemory', description: r.error ?? 'Request failed', variant: 'error' });
+      if (name === 'profile') setFacts((r.facts as string[]) ?? []);
+      if (name === 'syncNow') toast({ title: 'Sync finished', variant: 'success' });
+      void load();
+    } catch (error) {
+      toast({ title: 'Supermemory', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doPurge = async () => {
+    setConfirmPurge(false);
+    setBusy('purge');
+    try {
+      const r = await post({ action: 'purge', confirm: 'DELETE' });
+      if (!r.ok) return toast({ title: 'Supermemory', description: r.error ?? 'Request failed', variant: 'error' });
+      toast({ title: 'Deleted from Supermemory', description: `${(r.deletedDocuments as number | undefined) ?? 0} document(s) removed.`, variant: 'success' });
+      void load();
+    } catch (error) {
+      toast({ title: 'Supermemory', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    } finally {
+      setBusy(null);
+    }
   };
 
   const live = s.featureOn && s.keySource !== 'none';
@@ -113,75 +139,14 @@ export function SupermemoryCard() {
         />
       </label>
 
-      <div className="space-y-2 rounded-lg border px-3 py-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="flex items-center gap-1.5 text-sm font-medium"><KeyRound className="h-3.5 w-3.5 text-primary" /> API key
-            {s.connection?.configured && <Badge variant="secondary" className="font-mono text-[10px]">{s.connection.display}</Badge>}
-            {!s.connection?.configured && s.keySource === 'deployment' && <Badge variant="outline" className="text-[10px]">using the deployment key</Badge>}
-          </p>
-          <a href="https://console.supermemory.ai/keys" target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Get a key</a>
-        </div>
-        <div className="flex gap-2">
-          <Input type="password" autoComplete="off" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} placeholder={s.connection?.configured ? 'Paste a new key to replace it' : 'sm_…'} className="h-8 font-mono text-xs" />
-          <Button
-            size="sm"
-            disabled={!keyDraft.trim() || busy !== null}
-            onClick={async () => {
-              setBusy('key');
-              const res = await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'save', provider: 'supermemory', values: { apiKey: keyDraft.trim() } }) });
-              const j = (await res.json()) as { ok: boolean; error?: string };
-              setBusy(null);
-              if (!j.ok) return toast({ title: 'Key not saved', description: j.error, variant: 'error' });
-              setKeyDraft('');
-              toast({ title: 'Key saved (encrypted)', variant: 'success' });
-              void load();
-            }}
-          >
-            Save key
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!s.connection?.configured || busy !== null}
-            onClick={async () => {
-              setBusy('test');
-              await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'test', provider: 'supermemory' }) });
-              setBusy(null);
-              void load();
-            }}
-          >
-            {busy === 'test' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Test'}
-          </Button>
-          {s.connection?.configured && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-rose-600"
-              disabled={busy !== null}
-              onClick={async () => {
-                if (!window.confirm('Remove the saved Supermemory key for this company?')) return;
-                await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'delete', provider: 'supermemory' }) });
-                void load();
-              }}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-        {s.connection?.lastTest && (
-          <p className={'flex items-center gap-1.5 text-xs ' + (s.connection.lastTest.ok ? 'text-emerald-600' : 'text-rose-600')}>
-            {s.connection.lastTest.ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />} {s.connection.lastTest.message}
-          </p>
-        )}
-        <p className="text-[11px] text-muted-foreground">Stored encrypted for this company only. Operators can instead set <code>SUPERMEMORY_API_KEY</code> on the server for all companies.</p>
-      </div>
+      <ConnectionSummary providerId="supermemory" hint={s.keySource === 'deployment' ? 'Using the deployment key. Add your own in Connections to use it instead.' : undefined} />
 
       {!s.featureOn && (
         <p className="text-xs text-muted-foreground">
           Off by default because it sends data to Supermemory, a third party. {s.featureLocked ? 'The deployment has it disabled (BORGA_FEATURES_OFF).' : 'Add a key, then switch it on above.'}
         </p>
       )}
-      {s.featureOn && s.keySource === 'none' && <p className="text-xs text-amber-600">Switched on, but there is no API key yet. Paste one above (or set SUPERMEMORY_API_KEY on the server).</p>}
+      {s.featureOn && s.keySource === 'none' && <p className="text-xs text-amber-600">Switched on, but there is no API key yet. Add one in Connections (or set SUPERMEMORY_API_KEY on the server).</p>}
       {live && <p className="text-xs text-muted-foreground">Key source: {s.keySource === 'workspace' ? 'this company’s own key' : 'the deployment key'}. Data is isolated to this company.</p>}
 
       <div className="divide-y rounded-lg border">
@@ -217,6 +182,15 @@ export function SupermemoryCard() {
           <Trash2 className="h-3.5 w-3.5" /> Delete everything from Supermemory
         </Button>
       )}
+
+      <ConfirmDialog
+        open={confirmPurge}
+        onOpenChange={setConfirmPurge}
+        title="Delete everything from Supermemory?"
+        description="All vectors stored for this company are removed. Your Borga data is not affected, and it can be sent again by syncing."
+        confirmLabel="Delete from Supermemory"
+        onConfirm={doPurge}
+      />
     </Card>
   );
 }

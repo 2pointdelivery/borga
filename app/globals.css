@@ -246,6 +246,43 @@ html[data-theme='forest'] {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* Business advisor avatar: gentle hover-bob so the widget feels alive. */
+@keyframes borga-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}
+/* Short attention shake when something new needs the owner. */
+@keyframes borga-wiggle {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-9deg); }
+  45% { transform: rotate(7deg); }
+  70% { transform: rotate(-4deg); }
+  90% { transform: rotate(2deg); }
+}
+/* Popup teaser entrance. */
+@keyframes borga-teaser-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.borga-float {
+  animation: borga-float 4s ease-in-out infinite;
+}
+.borga-wiggle {
+  animation: borga-wiggle 0.6s ease-in-out;
+}
+.borga-teaser-in {
+  animation: borga-teaser-in 0.25s ease-out both;
+}
+/* Advisor talking mouth: opens and closes while it speaks. */
+@keyframes borga-talk {
+  0%, 100% { transform: scaleY(0.45); }
+  50% { transform: scaleY(1); }
+}
+.borga-talk-mouth {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: borga-talk 0.45s ease-in-out infinite;
+}
 .borga-eq {
   transform-origin: bottom;
   animation: borga-eq 1s ease-in-out infinite;
@@ -262,3 +299,13 @@ html[data-theme='forest'] {
 .borga-glow {
   box-shadow: 0 0 40px 4px color-mix(in oklab, var(--ring) 45%, transparent);
 }
+
+/* Landing page only: the page is sized in rem, and the root font-size scales with the viewport so the layout stays proportional.
+   The class is added to <html> while the landing page is mounted (see components/landing/landing-ui.tsx), never for the dashboard. */
+html.landing-grid { scroll-behavior: smooth; }
+@media (max-width: 1920px) { html.landing-grid { font-size: 0.833333vw; } }
+@media (max-width: 1440px) { html.landing-grid { font-size: 1.111111vw; } }
+@media (max-width: 1024px) { html.landing-grid { font-size: 1.5625vw; } }
+@media (max-width: 640px) { html.landing-grid { font-size: 4.444444vw; } }
+@media (prefers-reduced-motion: reduce) { html.landing-grid { scroll-behavior: auto; } }
+@keyframes landingSwap { from { opacity: 0; transform: translateY(var(--from, 14px)); } to { opacity: 1; transform: none; } }

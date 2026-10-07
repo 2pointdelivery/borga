@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import {
   Lock,
@@ -33,12 +34,10 @@ import {
   MONTH_NAMES,
   QUARTER_NAMES,
   closurePeriod,
-  fmtNum,
-  type BookClosure as BookClosureType,
+    type BookClosure as BookClosureType,
   type ClosurePeriodType,
   type SignoffReport,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
@@ -51,7 +50,7 @@ export function BookClosureTab() {
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(Math.abs(n))}`;
+  const money = (n: number) => fmtMoney(Math.abs(n), currency);
 
   const now = new Date();
   const [periodType, setPeriodType] = useState<ClosurePeriodType>('monthly');
@@ -146,7 +145,7 @@ export function BookClosureTab() {
     } else {
       const closingEntry = {
         id: closingId,
-        date: period.end.slice(5).replace('-', '/'),
+        date: period.end.slice(0, 10),
         dateIso: period.end,
         memo: `Year/period-end closing entry — ${period.label}`,
         reference: `CLOSE-${period.label.replace(/\s/g, '-')}`,

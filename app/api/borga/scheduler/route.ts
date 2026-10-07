@@ -1,3 +1,4 @@
+import { paymentRequired } from '@/lib/borga/billing-server';
 import { NextResponse, type NextRequest } from 'next/server';
 import { getBorgaState, setBorgaState } from '@/lib/borga/persistence';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
   const wsParam = url.searchParams.get('ws');
   const ws = wsParam && /^[a-zA-Z0-9_-]{1,64}$/.test(wsParam) ? wsParam : null;
   const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const tasks = await loadTasks(ws, userId);
   return NextResponse.json({ ok: true, tasks });
 }
@@ -35,6 +37,7 @@ export async function GET(req: NextRequest) {
 // POST — manage scheduled tasks and trigger tick (thin caller of lib/borga/heartbeat)
 export async function POST(req: NextRequest) {
   const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
   let body: Record<string, unknown> = {};
   try {
@@ -80,6 +83,7 @@ export async function POST(req: NextRequest) {
     if (body.goal) patch.goal = String(body.goal).slice(0, 1000);
     if (body.agentId) patch.agentId = String(body.agentId).slice(0, 50);
     if (VALID_INTERVALS.includes(body.interval as ScheduleInterval)) patch.interval = body.interval as ScheduleInterval;
+    if (typeof body.urgent === 'boolean') patch.urgent = body.urgent;
     if (typeof body.enabled === 'boolean') {
       patch.enabled = body.enabled;
       patch.nextRun = body.enabled ? computeNextRun(patch.interval ?? prev.interval) : null;
@@ -160,22 +164,25 @@ export async function POST(req: NextRequest) {
   }
 
   // tick — one beat for this workspace, via the shared heartbeat lib.
+  if ((action === 'tick' || action === 'trigger') && ws) {
+    const unpaid = await paymentRequired(userId, ws);
+    if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
+  }
+
   if (action === 'tick') {
-    const companyName = String(body.companyName ?? 'the company').slice(0, 80);
-    const result = await tickWorkspace(ws, userId, companyName);
+    const result = await tickWorkspace(ws, userId);
     return NextResponse.json({ ok: true, ...result });
   }
 
-  // trigger — manual run of one task (bypasses quiet hours, keeps overlap guard).
+  // trigger — enqueue one task now (bypasses quiet hours, keeps overlap guard).
   if (action === 'trigger') {
     const id = String(body.id ?? '');
-    const companyName = String(body.companyName ?? 'the company').slice(0, 80);
-    const result = await triggerTask(ws, userId, id, companyName);
+    const result = await triggerTask(ws, userId, id);
     if (!result.ok) {
       const status = result.error === 'Task not found' ? 404 : result.error?.includes('still running') ? 409 : 500;
       return NextResponse.json({ ok: false, error: result.error }, { status });
     }
-    return NextResponse.json({ ok: true, taskId: id, run: result.run });
+    return NextResponse.json({ ok: true, taskId: id, jobId: result.jobId });
   }
 
   return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });

@@ -4,10 +4,12 @@ import {
   Megaphone,
   Inbox,
   Wallet,
+  Boxes,
   Briefcase,
   Building2,
   Bot,
   PlugZap,
+  Code2,
   Settings,
   FolderKanban,
   LifeBuoy,
@@ -20,11 +22,13 @@ export type PageId =
   | 'communications'
   | 'support'
   | 'finance'
+  | 'inventory'
   | 'projects'
   | 'hr'
   | 'company'
   | 'ai'
   | 'integrations'
+  | 'developers'
   | 'settings';
 
 export interface PageTab {
@@ -47,7 +51,7 @@ export const NAV_PAGES: NavPage[] = [
     tabs: [
       { id: 'command', label: 'Command Center' },
       { id: 'analytics', label: 'Analytics' },
-      { id: 'kpis', label: 'KPIs & Reports' },
+      { id: 'kpis', label: 'KPIs' },
     ],
   },
   {
@@ -56,7 +60,6 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'pipeline', label: 'Pipeline' },
       { id: 'customers', label: 'Customers' },
       { id: 'invoices', label: 'Invoicing' },
-      { id: 'recurring', label: 'Recurring Invoices' },
     ],
   },
   {
@@ -78,6 +81,7 @@ export const NAV_PAGES: NavPage[] = [
     id: 'support', label: 'Support Desk', icon: LifeBuoy,
     tabs: [
       { id: 'tickets', label: 'Tickets' },
+      { id: 'analytics', label: 'Analytics' },
       { id: 'settings', label: 'SLA & Mailbox' },
     ],
   },
@@ -86,13 +90,23 @@ export const NAV_PAGES: NavPage[] = [
     tabs: [
       { id: 'ledger', label: 'Ledger' },
       { id: 'accounting', label: 'Accounting' },
+      { id: 'assets', label: 'Fixed Assets' },
       { id: 'banking', label: 'Banking' },
       { id: 'vendors', label: 'Vendors & AP' },
-      { id: 'recurring-bills', label: 'Recurring Bills' },
       { id: 'budgeting', label: 'Budgeting' },
       { id: 'revenue', label: 'Revenue Tracker' },
       { id: 'reports', label: 'Reports' },
       { id: 'closures', label: 'Book Closure' },
+      { id: 'filing', label: 'Filing' },
+    ],
+  },
+  {
+    id: 'inventory', label: 'Inventory', icon: Boxes,
+    tabs: [
+      { id: 'catalog', label: 'Catalog' },
+      { id: 'stock', label: 'Stock & Costing' },
+      { id: 'locations', label: 'Warehouses & Stores' },
+      { id: 'pos', label: 'Point of Sale' },
     ],
   },
   {
@@ -106,6 +120,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'timeclock', label: 'Time Clock' },
       { id: 'invites', label: 'Team Invites' },
       { id: 'teams', label: 'Teams' },
+      { id: 'org', label: 'Organogram' },
     ],
   },
   {
@@ -115,14 +130,14 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'valuation', label: 'Valuation' },
       { id: 'fundraising', label: 'Fundraising' },
       { id: 'knowledge', label: 'Knowledge Base' },
+      { id: 'engine', label: 'Company Engine' },
     ],
   },
   {
     id: 'ai', label: 'AI Platform', icon: Bot,
     tabs: [
       { id: 'agents', label: 'Agents' },
-      { id: 'runner', label: 'Agent Runner' },
-      { id: 'engine', label: 'Company Engine' },
+      { id: 'runs', label: 'Runs & Queue' },
       { id: 'planner', label: 'Planner' },
       { id: 'activity', label: 'Activity Log' },
     ],
@@ -134,6 +149,14 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'ai-providers', label: 'AI & Voice' },
       { id: 'connected', label: 'Connected Apps' },
       { id: 'connections', label: 'Connections (Twilio, Meta, Ads)' },
+    ],
+  },
+  {
+    id: 'developers', label: 'Developers', icon: Code2,
+    tabs: [
+      { id: 'api-keys', label: 'API Keys' },
+      { id: 'webhooks', label: 'Webhooks' },
+      { id: 'requests', label: 'Feature Requests' },
     ],
   },
   {

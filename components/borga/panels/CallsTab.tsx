@@ -1,15 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { Phone, PhoneOutgoing, PhoneIncoming, PhoneMissed, ChevronDown, Plus, Clock } from 'lucide-react';
+import { Phone, PhoneOutgoing, PhoneIncoming, PhoneMissed, ChevronDown, Plus, Clock, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useBorga } from '@/lib/borga/store';
 import { ELEVENLABS_VOICES, type CallRecord, type CallStatus } from '@/lib/borga/data';
 import { AgentAvatar, SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 const STATUS_STYLE: Record<CallStatus, string> = {
@@ -33,7 +36,7 @@ function fmtDur(sec: number) {
 }
 
 export function CallsTab() {
-  const { agents, calls, placeCall, leads, elevenlabs } = useBorga();
+  const { agents, calls, placeCall, deleteCall, leads, elevenlabs } = useBorga();
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [agentId, setAgentId] = useState('');
@@ -41,6 +44,7 @@ export function CallsTab() {
   const [manualPhone, setManualPhone] = useState('');
   const [leadName, setLeadName] = useState('');
   const [note, setNote] = useState('');
+  const [confirmDeleteCall, setConfirmDeleteCall] = useState<CallRecord | null>(null);
   const voice = ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice) ?? ELEVENLABS_VOICES[0];
 
   const total = calls.length;
@@ -53,16 +57,22 @@ export function CallsTab() {
     if (lead) {
       setManualPhone(lead.phone);
       setLeadName(lead.name);
+    } else if (/^[+()\-\s\d]{5,}$/.test(id)) {
+      // Custom-typed entry that looks like a phone number flows straight into the dial field.
+      setManualPhone(id);
+      setLeadName((n) => (n || 'Client'));
     }
   };
 
   const dial = () => {
     if (!agentId) return;
     const a = agents.find((x) => x.id === agentId);
+    const contact = manualPhone.trim();
+    if (!contact) return; // button is disabled, but never dial a placeholder
     placeCall({
       agentId: a!.id,
       agentName: a!.name,
-      contact: manualPhone.trim() || '+1 555 0100',
+      contact,
       leadName: leadName.trim() || 'Client',
       note: note.trim() || undefined,
     });
@@ -171,6 +181,11 @@ export function CallsTab() {
                         </p>
                       )}
                       <p className="mt-2 rounded-lg border bg-card px-2.5 py-1.5 text-muted-foreground">{c.note}</p>
+                      <div className="mt-2 flex justify-end">
+                        <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-rose-500" onClick={() => setConfirmDeleteCall(c)}>
+                          <Trash2 className="h-3 w-3" /> Delete log entry
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -192,21 +207,31 @@ export function CallsTab() {
           <div className="space-y-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground">Calling agent</label>
-              <select value={agentId} onChange={(e) => setAgentId(e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <option value="">Select agent—</option>
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name} — {a.role}</option>
-                ))}
-              </select>
+              <SearchSelect
+                options={agents.map((a) => ({ value: a.id, label: a.name, detail: a.department }))}
+                value={agentId}
+                onChange={setAgentId}
+                placeholder="Select agent…"
+                searchPlaceholder="Search agents"
+                clearable={false}
+                className="mt-1"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Lead / customer (auto-fills number)</label>
-              <select value={leadId} onChange={(e) => selectLead(e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <option value="">Custom / manual entry—</option>
-                {leads.filter((l) => l.stage !== 'lost').map((l) => (
-                  <option key={l.id} value={l.id}>{l.name} — {l.company}</option>
-                ))}
-              </select>
+              <SearchSelect
+                options={[
+                  { value: '', label: 'Custom / manual entry…' },
+                  ...leads.filter((l) => l.stage !== 'lost').map((l) => ({ value: l.id, label: l.name, detail: l.company })),
+                ]}
+                value={leadId}
+                onChange={selectLead}
+                placeholder="Custom / manual entry…"
+                searchPlaceholder="Search leads"
+                clearable={false}
+                allowCustom
+                className="mt-1"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Phone number to dial</label>
@@ -218,19 +243,32 @@ export function CallsTab() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Call note / objective</label>
-              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Follow up on the proposal" className="mt-1" />
+              <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Follow up on the proposal" className="mt-1" />
             </div>
             {!elevenlabs.connected && (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
                 ElevenLabs isn&apos;t connected yet — connect it in Settings to place real outbound calls. The call is still logged below.
               </p>
             )}
-            <Button className="w-full gap-1.5" onClick={dial} disabled={!agentId}>
+            <Button className="w-full gap-1.5" onClick={dial} disabled={!agentId || !manualPhone.trim()} title={!manualPhone.trim() ? 'Enter a phone number to dial' : undefined}>
               <Phone className="h-4 w-4" /> Dial via ElevenLabs
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteCall}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteCall(null); }}
+        title="Delete this call log entry?"
+        description={confirmDeleteCall ? `The log of the call from ${confirmDeleteCall.agentName} to ${confirmDeleteCall.contact} is removed. Calls that already happened are unaffected.` : ''}
+        confirmLabel="Delete entry"
+        onConfirm={() => {
+          if (!confirmDeleteCall) return;
+          deleteCall(confirmDeleteCall.id);
+          setConfirmDeleteCall(null);
+        }}
+      />
     </div>
   );
 }

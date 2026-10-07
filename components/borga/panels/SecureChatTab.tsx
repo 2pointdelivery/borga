@@ -9,6 +9,7 @@ import {
   KeyRound,
   Trash2,
   MessageSquare,
+  Search,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 import {
   getIdentity,
@@ -39,6 +41,8 @@ export function SecureChatTab() {
   const [draft, setDraft] = useState('');
   const [decrypted, setDecrypted] = useState<Record<string, DecryptedMessage[]>>({});
   const [sending, setSending] = useState(false);
+  const [contactQuery, setContactQuery] = useState('');
+  const [confirmClear, setConfirmClear] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Contacts come from the workspace directory (HR) plus the AI assistant.
@@ -49,6 +53,11 @@ export function SecureChatTab() {
     ],
     [employees],
   );
+
+  const visibleContacts = useMemo(() => {
+    const q = contactQuery.trim().toLowerCase();
+    return q ? contacts.filter((c) => `${c.name} ${c.sub}`.toLowerCase().includes(q)) : contacts;
+  }, [contacts, contactQuery]);
 
   const activeContact = contacts.find((c) => c.id === activeId) ?? null;
 
@@ -177,7 +186,9 @@ export function SecureChatTab() {
     }
   };
 
-  const messages = activeId ? decrypted[activeId] ?? [] : [];  return (
+  const messages = activeId ? decrypted[activeId] ?? [] : [];
+  return (
+    <>
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="End-to-end encrypted chat" sub="Live workspace messaging — AES-256-GCM over ECDH P-256. Only ciphertext is ever persisted." />
@@ -204,7 +215,7 @@ export function SecureChatTab() {
             <Badge variant="outline" className="shrink-0 text-[10px] text-emerald-600">verified device</Badge>
           </div>
         ) : (
-          <span className="text-xs text-muted-foreground">Generating keypair—</span>
+          <span className="text-xs text-muted-foreground">Generating keypair…</span>
         )}
       </Card>
 
@@ -213,10 +224,16 @@ export function SecureChatTab() {
         <Card className="overflow-hidden">
           <div className="border-b bg-muted/40 px-4 py-2.5">
             <p className="text-sm font-semibold">Workspace directory</p>
-            <p className="text-[11px] text-muted-foreground">{contacts.length} encrypted threads available</p>
+            <p className="text-[11px] text-muted-foreground">{contacts.length} contacts — {secureChats.length} thread{secureChats.length !== 1 ? 's' : ''}</p>
           </div>
-          <div className="max-h-[480px] overflow-y-auto">
-            {contacts.map((c) => {
+          <div className="border-b px-3 py-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+              <Input value={contactQuery} onChange={(e) => setContactQuery(e.target.value)} placeholder="Search contacts…" className="h-8 pl-8 text-xs" />
+            </div>
+          </div>
+          <div className="max-h-[440px] overflow-y-auto">
+            {visibleContacts.map((c) => {
               const thread = secureChats.find((t) => t.id === c.id);
               return (
                 <button
@@ -258,7 +275,7 @@ export function SecureChatTab() {
                   </div>
                 </div>
                 {secureChats.some((c) => c.id === activeId) && (
-                  <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => { deleteSecureThread(activeId); }}>
+                  <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setConfirmClear(true)}>
                     <Trash2 className="h-3.5 w-3.5" /> Clear
                   </Button>
                 )}
@@ -321,7 +338,19 @@ export function SecureChatTab() {
           )}
         </Card>
       </div>
+      <ConfirmDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear this conversation?"
+        description="The entire encrypted thread history is deleted from this device and cannot be undone."
+        confirmLabel="Clear thread"
+        onConfirm={() => {
+          if (activeId) deleteSecureThread(activeId);
+          setConfirmClear(false);
+        }}
+      />
     </div>
+    </>
   );
 }
 

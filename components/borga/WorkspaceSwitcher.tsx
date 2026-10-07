@@ -31,12 +31,20 @@ export function WorkspaceSwitcher() {
             className="flex max-w-[220px] items-center gap-2 rounded-lg border bg-background/60 px-2.5 py-1.5 text-sm font-medium transition-colors hover:bg-accent"
             title="Switch company workspace"
           >
-            <span
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-bold text-white"
-              style={{ background: `linear-gradient(135deg, ${active?.color ?? '#6366f1'}, ${(active?.color ?? '#6366f1')}99)` }}
-            >
-              {active?.name.slice(0, 2).toUpperCase() ?? 'WS'}
-            </span>
+            {active?.logoDataUrl ? (
+              <img
+                src={active.logoDataUrl}
+                alt={`${active.name} logo`}
+                className="h-6 w-6 shrink-0 rounded-md border object-contain bg-white"
+              />
+            ) : (
+              <span
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-bold text-white"
+                style={{ background: `linear-gradient(135deg, ${active?.color ?? '#6366f1'}, ${(active?.color ?? '#6366f1')}99)` }}
+              >
+                {active?.name.slice(0, 2).toUpperCase() ?? 'WS'}
+              </span>
+            )}
             <span className="truncate">{active?.name ?? 'Workspace'}</span>
             <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           </button>
@@ -49,12 +57,20 @@ export function WorkspaceSwitcher() {
               onClick={() => setActiveWorkspace(w.id)}
               className="gap-2"
             >
-              <span
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[9px] font-bold text-white"
-                style={{ background: w.color }}
-              >
-                {w.name.slice(0, 2).toUpperCase()}
-              </span>
+              {w.logoDataUrl ? (
+                <img
+                  src={w.logoDataUrl}
+                  alt={`${w.name} logo`}
+                  className="h-5 w-5 shrink-0 rounded border object-contain bg-white"
+                />
+              ) : (
+                <span
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[9px] font-bold text-white"
+                  style={{ background: w.color }}
+                >
+                  {w.name.slice(0, 2).toUpperCase()}
+                </span>
+              )}
               <span className="min-w-0 flex-1 truncate">{w.name}</span>
               <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
                 {PLAN_LABEL[w.plan as WorkspacePlan]}
@@ -77,7 +93,17 @@ export function WorkspaceSwitcher() {
   );
 }
 
-export function WorkspaceAvatar({ name, color, size = 8 }: { name: string; color: string; size?: number }) {
+export function WorkspaceAvatar({ name, color, size = 8, logoDataUrl }: { name: string; color: string; size?: number; logoDataUrl?: string }) {
+  if (logoDataUrl) {
+    return (
+      <img
+        src={logoDataUrl}
+        alt={`${name} logo`}
+        className="shrink-0 rounded-lg border object-contain bg-white"
+        style={{ width: size * 4, height: size * 4 }}
+      />
+    );
+  }
   return (
     <span
       className={cn('flex shrink-0 items-center justify-center rounded-lg font-semibold text-white')}

@@ -24,6 +24,7 @@ import {
 import { INVITE_STATUS_STYLE, type TeamInvite, type InviteStatus } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 function makeToken(): string {
@@ -40,6 +41,8 @@ export function InvitesTab() {
   const [acceptToken, setAcceptToken] = useState('');
   const [acceptError, setAcceptError] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [confirmRevoke, setConfirmRevoke] = useState<TeamInvite | null>(null);
+  const [confirmDeleteInvite, setConfirmDeleteInvite] = useState<TeamInvite | null>(null);
   const [form, setForm] = useState({ email: '', name: '', role: '', department: '' });
 
   // Deep-link support: /?invite=<token> pre-fills the accept box.
@@ -82,6 +85,7 @@ export function InvitesTab() {
     setOpen(false);
     void navigator.clipboard?.writeText(linkFor(invite)).catch(() => null);
     setCopiedId(invite.id);
+    setTimeout(() => setCopiedId((c) => (c === invite.id ? null : c)), 2000);
   };
 
   const copyLink = async (i: TeamInvite) => {
@@ -155,7 +159,7 @@ export function InvitesTab() {
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Team invites" sub={`${stats.pending} pending — ${stats.accepted} accepted — invites carry a signed token link`} />
+        <SectionTitle title="Team invites" sub={`${stats.pending} pending — ${stats.accepted} accepted — workspace invites carry a unique token link (14 days)`} />
         <Button onClick={() => setOpen(true)}>
           <UserPlus className="h-4 w-4" /> Invite teammate
         </Button>
@@ -225,7 +229,7 @@ export function InvitesTab() {
                       </a>
                       {st === 'pending' && (
                         <button
-                          onClick={() => { setInviteStatus(i.id, 'revoked'); log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Invite for ${i.email} revoked.` }); }}
+                          onClick={() => setConfirmRevoke(i)}
                           className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-amber-500/10 hover:text-amber-600"
                           title="Revoke invite"
                         >
@@ -233,7 +237,7 @@ export function InvitesTab() {
                         </button>
                       )}
                       <button
-                        onClick={() => { deleteInvite(i.id); log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Invite for ${i.email} deleted.` }); }}
+                        onClick={() => setConfirmDeleteInvite(i)}
                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         title="Delete invite"
                       >
@@ -323,6 +327,34 @@ export function InvitesTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmRevoke}
+        onOpenChange={(o) => { if (!o) setConfirmRevoke(null); }}
+        title={`Revoke the invite for ${confirmRevoke?.email ?? ''}?`}
+        description="The link stops working immediately and cannot be reactivated — you would need to invite them again."
+        confirmLabel="Revoke invite"
+        onConfirm={() => {
+          if (!confirmRevoke) return;
+          setInviteStatus(confirmRevoke.id, 'revoked');
+          log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Invite for ${confirmRevoke.email} revoked.` });
+          setConfirmRevoke(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteInvite}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteInvite(null); }}
+        title={`Delete the invite for ${confirmDeleteInvite?.email ?? ''}?`}
+        description="The invite record is removed permanently."
+        confirmLabel="Delete invite"
+        onConfirm={() => {
+          if (!confirmDeleteInvite) return;
+          deleteInvite(confirmDeleteInvite.id);
+          log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Invite for ${confirmDeleteInvite.email} deleted.` });
+          setConfirmDeleteInvite(null);
+        }}
+      />
     </div>
   );
 }

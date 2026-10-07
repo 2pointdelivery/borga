@@ -3,7 +3,9 @@
  * (bring-your-own app/token). Shared by client (forms) and server (validation).
  */
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory';
+import { MAILDOG_HOST, MAILDOG_URL } from './maildog';
+
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram' | 'fish';
 
 export interface FieldDef {
   key: string;
@@ -28,6 +30,10 @@ export interface ProviderDef {
   testable: boolean;
   /** Webhook path suffix, when the provider calls us back. */
   webhook?: 'meta' | 'twilio';
+  /** A service the company can create an account with to get these details, shown at the top of the form. */
+  signup?: { title: string; text: string; label: string; url: string };
+  /** Ready-made values for a known service: one click fills the fields that are the same for everybody. */
+  presets?: Array<{ id: string; label: string; values: Record<string, string>; note: string }>;
 }
 
 const E164 = '^\\+[1-9]\\d{6,14}$';
@@ -36,7 +42,7 @@ export const PROVIDERS: ProviderDef[] = [
   {
     id: 'company_engine',
     label: 'Company Engine (your CRM / company API)',
-    description: "This company's own API portal. Pulls customers and deals straight from your CRM into Borga, and runs engine workflows. Configure it under AI Platform → Company Engine.",
+    description: "This company's own API portal. Pulls customers and deals straight from your CRM into Borga, and runs engine workflows. Configure it under Company → Company Engine.",
     fields: [
       { key: 'baseUrl', label: 'API base URL', secret: false, required: true, placeholder: 'https://crm.yourcompany.com/api/v1', hint: 'https only (public address)', pattern: '^https?://\\S+' + '$' },
       { key: 'apiKey', label: 'API key / token', secret: true, required: true },
@@ -147,6 +153,89 @@ export const PROVIDERS: ProviderDef[] = [
       'Enable "Supermemory" under Settings → Features, then choose which data sources may be sent (Knowledge Base → Supermemory).',
     ],
     docsUrl: 'https://supermemory.ai/docs',
+    testable: true,
+  },
+  {
+    id: 'smtp',
+    label: 'Email (your own SMTP server)',
+    description: "Send this company's mail (ticket replies, update emails) from its own address through its own mail server, instead of the shared sender. Optional: without it, mail goes out from the deployment's shared sender if there is one.",
+    fields: [
+      { key: 'host', label: 'SMTP server', secret: false, required: true, placeholder: 'smtp.gmail.com', hint: 'A host name, not an IP address' },
+      { key: 'port', label: 'Port', secret: false, required: false, placeholder: '587', hint: '587 (STARTTLS) is the usual one; 465 is always encrypted. Allowed: 25, 465, 587, 2525.', pattern: '^\\d{2,5}' + '$' },
+      { key: 'secure', label: 'Encrypted from the start', secret: false, required: false, placeholder: 'no', hint: 'yes for port 465, no for 587. The connection is always encrypted either way.' },
+      { key: 'user', label: 'User name', secret: false, required: false, placeholder: 'you@yourcompany.com' },
+      { key: 'password', label: 'Password or app password', secret: true, required: false, hint: 'Gmail and Microsoft need an app password. Stored encrypted; never shown again.' },
+      { key: 'fromAddress', label: 'Send from', secret: false, required: true, placeholder: 'billing@yourcompany.com', hint: 'An address your mail provider lets this account send as' },
+      { key: 'fromName', label: 'Sender name', secret: false, required: false, placeholder: 'Your Company' },
+    ],
+    steps: [
+      `No mail server yet? Create a MailDog account at ${MAILDOG_URL}: it gives you your email address and SMTP details, with a sending domain that is already verified.`,
+      'Otherwise ask your mail provider (Google Workspace, Microsoft 365, Zoho, your host) for its SMTP server name and port, and create an app password if it requires one.',
+      'Enter them here with the address mail should come from, then press Test connection.',
+      'Press Send me a test email to see it arrive in your own inbox.',
+    ],
+    docsUrl: MAILDOG_URL,
+    testable: true,
+    signup: {
+      title: 'No mail server? Get one with MailDog',
+      text: 'MailDog gives your company its own email address and the SMTP details to send from it, on a domain that is already set up so your mail is trusted. Create an account, then come back and fill in the user name, password and address it gives you.',
+      label: 'Create a MailDog account',
+      url: MAILDOG_URL,
+    },
+    presets: [
+      {
+        id: 'maildog',
+        label: 'Use MailDog settings',
+        values: { host: MAILDOG_HOST, port: '587', secure: 'no' },
+        note: 'Fills in the server and port. Then add your MailDog user name, password and the address mail should come from (it must be on your MailDog domain).',
+      },
+    ],
+  },
+  {
+    id: 'saltedge',
+    label: 'Salt Edge (bank statements)',
+    description: "Connects the company's bank accounts and imports their transactions for reconciliation. Optional: a deployment-wide SALTEDGE_APP_ID and SALTEDGE_SECRET also work, so each company does not need its own.",
+    fields: [
+      { key: 'appId', label: 'App ID', secret: false, required: true, placeholder: 'Salt Edge App-id', pattern: '^\\S{6,64}' + '$' },
+      { key: 'secret', label: 'Secret', secret: true, required: true, hint: 'Stored encrypted; never shown again.' },
+    ],
+    steps: [
+      'Create a Salt Edge client (the test client is free) and copy its App ID and Secret from the Salt Edge dashboard.',
+      'Paste them here and press Test connection.',
+      "Press Connect a bank and sign in to the bank on Salt Edge's page. Borga never sees the bank password.",
+      'A Live client also needs request signing: set SALTEDGE_PRIVATE_KEY on the server and upload the matching public key in the Salt Edge dashboard.',
+    ],
+    docsUrl: 'https://docs.saltedge.com/v6/',
+    testable: true,
+  },
+  {
+    id: 'elevenlabs',
+    label: 'ElevenLabs (voices)',
+    description: "Gives this company's agents a spoken voice, in the dashboard and on phone calls. Bring your own key: the usage is billed to your ElevenLabs account.",
+    fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
+    steps: ['Open elevenlabs.io/app/api-key and create an API key.', 'Copy the secret key (it starts with sk_ and is shown once when created). The key ID shown in the list is not the key.', 'Paste it here and press Test connection.'],
+    docsUrl: 'https://elevenlabs.io/docs/api-reference',
+    testable: true,
+  },
+  {
+    id: 'deepgram',
+    label: 'Deepgram (speech to text)',
+    description: 'Turns push-to-talk recordings into text. Without it the browser built-in recognition is used. Bring your own key.',
+    fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
+    steps: ['Open console.deepgram.com and create an API key.', 'Paste it here and press Test connection.'],
+    docsUrl: 'https://developers.deepgram.com/docs',
+    testable: true,
+  },
+  {
+    id: 'fish',
+    label: 'Fish Audio (voices)',
+    description: 'An alternative spoken voice for the dashboard assistant and agent replies. Phone calls still use ElevenLabs. Bring your own key: usage is billed to your Fish Audio account.',
+    fields: [
+      { key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' },
+      { key: 'voiceId', label: 'Voice ID (reference model)', secret: false, required: false, hint: 'The model id from the voice page on fish.audio (the long hex code in its address). Leave empty to use the default voice.', placeholder: '802e3bc2b27e49c2995d23ef70e6ac89', pattern: '^[A-Za-z0-9]{8,64}$' },
+    ],
+    steps: ['Open fish.audio, go to your API keys and create a key.', 'Open a voice you like on fish.audio and copy the id from its address (or from your own cloned voice).', 'Paste both here and press Test connection.'],
+    docsUrl: 'https://docs.fish.audio/api-reference/introduction',
     testable: true,
   },
   {

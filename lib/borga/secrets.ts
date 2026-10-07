@@ -11,6 +11,9 @@ export const CONFIGURABLE_KEYS = [
   { envVar: 'ANTHROPIC_API_KEY', label: 'Anthropic Claude', hint: 'console.anthropic.com', kind: 'key' as const },
   { envVar: 'OPENAI_API_KEY', label: 'OpenAI', hint: 'platform.openai.com/api-keys', kind: 'key' as const },
   { envVar: 'OPENROUTER_API_KEY', label: 'OpenRouter', hint: 'openrouter.ai/keys', kind: 'key' as const },
+  { envVar: 'CEREBRAS_API_KEY', label: 'Cerebras', hint: 'cloud.cerebras.ai — free tier', kind: 'key' as const },
+  { envVar: 'SAMBANOVA_API_KEY', label: 'SambaNova', hint: 'cloud.sambanova.ai — free tier', kind: 'key' as const },
+  { envVar: 'MISTRAL_API_KEY', label: 'Mistral', hint: 'console.mistral.ai/api-keys — free Experiment plan', kind: 'key' as const },
   { envVar: 'ELEVENLABS_API_KEY', label: 'ElevenLabs', hint: 'elevenlabs.io/app/api-key', kind: 'key' as const },
   { envVar: 'DEEPGRAM_API_KEY', label: 'Deepgram', hint: 'console.deepgram.com — speech-to-text for push-to-talk', kind: 'key' as const },
   { envVar: 'COMPOSIO_API_KEY', label: 'Composio', hint: 'composio.dev — API key for toolkits', kind: 'key' as const },
@@ -21,16 +24,21 @@ export const CONFIGURABLE_KEYS = [
   { envVar: 'TWILIO_AUTH_TOKEN', label: 'Twilio Auth Token', hint: 'console.twilio.com — required for real outbound calls', kind: 'key' as const },
   { envVar: 'TWILIO_FROM_PHONE', label: 'Twilio From Number', hint: 'E.164 format, e.g. +14155550100 — your Twilio caller ID', kind: 'url' as const },
   { envVar: 'BORGA_ADMIN_TOKEN', label: 'Borga Engine', hint: 'Authentication token for orchestration engine', kind: 'key' as const },
-  { envVar: 'COMPANY_ENGINE_API_KEY', label: 'Company Engine (deployment key)', hint: 'Optional fallback key for the company API; each company can save its own under AI Platform → Company Engine', kind: 'key' as const },
+  { envVar: 'COMPANY_ENGINE_API_KEY', label: 'Company Engine (deployment key)', hint: 'Optional fallback key for the company API; each company can save its own under Company → Company Engine', kind: 'key' as const },
   { envVar: 'LLM_BASE_URL', label: 'Custom LLM base URL', hint: 'e.g. http://localhost:8000/v1', kind: 'url' as const },
   { envVar: 'LLM_API_KEY', label: 'Custom LLM API key', hint: 'Bearer token for custom endpoint', kind: 'key' as const },
-  { envVar: 'OLLAMA_BASE_URL', label: 'Ollama base URL', hint: 'default: http://127.0.0.1:11434/v1', kind: 'url' as const },
+  { envVar: 'MUSE_BASE_URL', label: 'Muse base URL', hint: 'remote Muse API (https), e.g. https://api.example.com/v1', kind: 'url' as const },
+  { envVar: 'MUSE_API_KEY', label: 'Muse API key', hint: 'Bearer key for the remote Muse API (leave empty if it needs none)', kind: 'key' as const },
   { envVar: 'SUPERMEMORY_API_KEY', label: 'Supermemory (deployment key)', hint: 'console.supermemory.ai/keys. Optional; a workspace can also save its own under Connections', kind: 'key' as const },
   { envVar: 'SMTP_HOST', label: 'SMTP Host', hint: 'e.g. smtp.gmail.com or smtp.sendgrid.net', kind: 'url' as const },
   { envVar: 'SMTP_PORT', label: 'SMTP Port', hint: '587 (STARTTLS) or 465 (SSL)', kind: 'key' as const },
   { envVar: 'SMTP_USER', label: 'SMTP Username', hint: 'Account / API user', kind: 'key' as const },
   { envVar: 'SMTP_PASS', label: 'SMTP Password', hint: 'App password or API key', kind: 'key' as const },
   { envVar: 'SMTP_SECURE', label: 'SMTP Secure', hint: 'Set "true" for port 465 (SSL)', kind: 'key' as const },
+  { envVar: 'MAILDOG_USER', label: 'MailDog user name', hint: 'your MailDog account user name (it is your email address); account at maildog.io', kind: 'key' as const },
+  { envVar: 'MAILDOG_PASSWORD', label: 'MailDog password', hint: 'your MailDog account password; used with mail.maildog.io on port 587', kind: 'key' as const },
+  { envVar: 'MAILDOG_PORT', label: 'MailDog port', hint: '587 (STARTTLS, default) or 465 (SSL)', kind: 'key' as const },
+  { envVar: 'MAILDOG_FROM', label: 'MailDog from address', hint: 'e.g. Borga <noreply@yourdomain.com>; must be on your MailDog domain (defaults to the user name)', kind: 'url' as const },
   { envVar: 'EMAIL_FROM', label: 'From Address', hint: 'e.g. Borga <noreply@yourdomain.com>', kind: 'url' as const },
 ] as const;
 
@@ -47,6 +55,8 @@ export function isAllowedKey(envVar: string): envVar is ConfigurableEnvVar {
 function encKey(): Buffer {
   const raw = process.env.BORGA_SECRET_KEY ?? '';
   if (/^[0-9a-f]{64}$/i.test(raw)) return Buffer.from(raw, 'hex');
+  // A key derived from DATABASE_URL is guessable by anyone who has the URL; development only.
+  if (process.env.NODE_ENV === 'production') throw new Error('BORGA_SECRET_KEY (64 hex characters) must be set in production');
   const seed = process.env.DATABASE_URL ?? 'borga-secrets-please-set-BORGA_SECRET_KEY-in-env';
   return createHash('sha256').update(seed).digest();
 }

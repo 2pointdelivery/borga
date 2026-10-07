@@ -1,7 +1,9 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useState, useCallback } from 'react';
-import { Plus, Trash2, ArrowLeft, CheckSquare, Receipt, LayoutGrid, GripVertical, CalendarClock, Users, X, Check } from 'lucide-react';
+import { Plus, Trash2, ArrowLeft, CheckSquare, Receipt, GripVertical, CalendarClock, Users, X, Check, Pencil, AlertTriangle } from 'lucide-react';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,9 +29,7 @@ import {
   PROJECT_STATUS_LABEL,
   PROJECT_STATUS_STYLE,
   computeProjectActualSpend,
-  CURRENCY_SYMBOL,
-  fmtNum,
-  type Project,
+      type Project,
   type ProjectStatus,
   type Task,
   type TaskStatus,
@@ -38,11 +38,13 @@ import {
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { TaskEditDialog } from './TaskEditDialog';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { AccountSelect } from '../form-widgets';
 import { cn } from '@/lib/utils';
 
 const STATUSES: ProjectStatus[] = ['planning', 'active', 'on-hold', 'completed', 'cancelled'];
 const UNASSIGNED = '__none__';
-const NO_ACCOUNT = '__none__';
 const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
   { id: 'todo', label: 'To do' },
   { id: 'in-progress', label: 'In progress' },
@@ -52,14 +54,14 @@ const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
 export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } = {}) {
   const {
     projects, addProject, updateProject, deleteProject,
-    tasks, addTask, updateTask, deleteTask,
+    tasks, addTask, updateTask,
     finance, addFinanceEntry,
     bills,
     customers, coa,
     agents, activeWorkspace, log,
   } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [selectedId, setSelectedId] = useState<string | null>(initialProjectId ?? null);
   const selected = projects.find((p) => p.id === selectedId) ?? null;
@@ -71,10 +73,12 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
   const [taskDraft, setTaskDraft] = useState('');
   const [editTask, setEditTask] = useState<Task | null>(null);
   const [expenseDraft, setExpenseDraft] = useState({ label: '', amount: '', accountId: '' });
+  const [incomeDraft, setIncomeDraft] = useState({ label: '', amount: '', accountId: '' });
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [milestoneDraft, setMilestoneDraft] = useState({ title: '', dueDateIso: '' });
   const [addMemberId, setAddMemberId] = useState('');
   const expenseAccounts = coa.filter((a) => a.type === 'expense' || a.type === 'cost');
+  const revenueAccounts = coa.filter((a) => a.type === 'revenue');
 
   const createProject = useCallback(() => {
     if (!form.name.trim()) return;
@@ -96,9 +100,16 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
   }, [form, addProject, log]);
 
   const removeProject = (p: Project) => {
+    setConfirmDeleteProject(p);
+  };
+
+  const doRemoveProject = () => {
+    const p = confirmDeleteProject;
+    if (!p) return;
     deleteProject(p.id);
     if (selectedId === p.id) setSelectedId(null);
     log({ agentId: 'a-pm', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Project "${p.name}" deleted (linked tasks and expenses were unlinked, not removed).` });
+    setConfirmDeleteProject(null);
   };
 
   const addProjectTask = useCallback(() => {
@@ -112,7 +123,7 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
       bucket: 'week',
       assignee: agents.find((a) => a.id === selected.ownerId)?.name ?? 'Borga',
       tags: [],
-      due: '…',
+      due: 'This week',
       progress: 0,
       projectId: selected.id,
     });
@@ -137,6 +148,24 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
     setExpenseDraft({ label: '', amount: '', accountId: '' });
   }, [selected, expenseDraft, expenseAccounts, addFinanceEntry]);
 
+  const addProjectIncome = useCallback(() => {
+    if (!selected || !incomeDraft.label.trim() || !Number(incomeDraft.amount)) return;
+    const account = revenueAccounts.find((a) => a.id === incomeDraft.accountId);
+    addFinanceEntry({
+      id: `f-${Date.now()}`,
+      label: incomeDraft.label.trim(),
+      amount: Math.abs(Number(incomeDraft.amount)),
+      category: account?.name ?? selected.name,
+      kind: 'revenue',
+      dateIso: new Date().toISOString().slice(0, 10),
+      createdAt: new Date().toISOString(),
+      source: 'manual',
+      projectId: selected.id,
+      accountId: account?.id,
+    });
+    setIncomeDraft({ label: '', amount: '', accountId: '' });
+  }, [selected, incomeDraft, revenueAccounts, addFinanceEntry]);
+
   const addMilestone = useCallback(() => {
     if (!selected || !milestoneDraft.title.trim()) return;
     const m: Milestone = { id: `ms-${Date.now()}`, title: milestoneDraft.title.trim(), dueDateIso: milestoneDraft.dueDateIso || undefined, done: false };
@@ -149,9 +178,31 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
     updateProject(selected.id, { milestones: (selected.milestones ?? []).map((x) => (x.id === m.id ? { ...x, done: !x.done } : x)) });
   };
 
-  const deleteMilestone = (id: string) => {
+  const doDeleteMilestone = () => {
+    if (!selected || !confirmDeleteMilestone) return;
+    updateProject(selected.id, { milestones: (selected.milestones ?? []).filter((x) => x.id !== confirmDeleteMilestone) });
+    setConfirmDeleteMilestone(null);
+  };
+
+  const [confirmDeleteProject, setConfirmDeleteProject] = useState<Project | null>(null);
+  const [confirmDeleteMilestone, setConfirmDeleteMilestone] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState('');
+
+  const commitName = () => {
+    if (!selected || !nameDraft.trim()) return;
+    updateProject(selected.id, { name: nameDraft.trim() });
+    log({ agentId: 'a-pm', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Project renamed to "${nameDraft.trim()}".` });
+    setEditingName(false);
+  };
+
+  const commitDesc = () => {
     if (!selected) return;
-    updateProject(selected.id, { milestones: (selected.milestones ?? []).filter((x) => x.id !== id) });
+    updateProject(selected.id, { description: descDraft.trim() });
+    log({ agentId: 'a-pm', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Project "${selected.name}" description updated.` });
+    setEditingDesc(false);
   };
 
   const addTeamMember = () => {
@@ -178,7 +229,9 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
   if (selected) {
     const linkedCustomer = customers.find((c) => c.id === selected.customerId);
     const projectTasks = tasks.filter((t) => t.projectId === selected.id);
-    const projectExpenses = finance.filter((f) => f.projectId === selected.id);
+    const projectExpenses = finance.filter((f) => f.projectId === selected.id && f.kind === 'expense' && !f.voidedAt);
+    const projectIncome = finance.filter((f) => f.projectId === selected.id && f.kind === 'revenue' && !f.voidedAt);
+    const incomeTotal = projectIncome.reduce((s, f) => s + f.amount, 0);
     // "Certified" payments — vendor bills approved for payment or settled against
     // this project (scheduled/paid), as opposed to a bill merely recorded as unpaid.
     const projectBills = bills.filter((b) => b.projectId === selected.id);
@@ -188,6 +241,28 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
     const todo = projectTasks.filter((t) => t.status === 'todo').length;
     const inProgress = projectTasks.filter((t) => t.status === 'in-progress').length;
     const done = projectTasks.filter((t) => t.status === 'done').length;
+
+    // ── Analytics ─────────────────────────────────────────────────────────
+    const remaining = selected.budgetAmount - actual;
+    const completion = projectTasks.length ? Math.round((done / projectTasks.length) * 100) : 0;
+    const milestoneList = selected.milestones ?? [];
+    const milestonesDone = milestoneList.filter((m) => m.done).length;
+    const taskStatusData = [
+      { name: 'To do', value: todo },
+      { name: 'In progress', value: inProgress },
+      { name: 'Done', value: done },
+    ];
+    const spendByCategory = Object.entries(
+      projectExpenses.reduce<Record<string, number>>((acc, f) => {
+        const key = f.category || 'Uncategorised';
+        acc[key] = (acc[key] ?? 0) + f.amount;
+        return acc;
+      }, {}),
+    )
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+    const certifiedTotal = certifiedPayments.reduce((s, b) => s + b.amount, 0);
+    const unpaidTotal = projectBills.filter((b) => b.status === 'unpaid').reduce((s, b) => s + b.amount, 0);
 
     return (
       <div className="borga-fade-up space-y-5">
@@ -202,12 +277,38 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
 
         <Card className="p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-lg font-semibold">{selected.name}</h3>
-                <Badge className={cn('text-[10px] capitalize ring-1', PROJECT_STATUS_STYLE[selected.status])}>{PROJECT_STATUS_LABEL[selected.status]}</Badge>
-              </div>
-              <p className="mt-1 max-w-xl text-sm text-muted-foreground">{selected.description || 'No description yet.'}</p>
+            <div className="min-w-0 flex-1">
+              {editingName ? (
+                <div className="flex max-w-md items-center gap-2">
+                  <Input autoFocus value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') setEditingName(false); }} className="h-8 text-base font-semibold" />
+                  <Button size="sm" onClick={commitName} disabled={!nameDraft.trim()}>Save</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditingName(false)}>Cancel</Button>
+                </div>
+              ) : (
+                <div className="group flex items-center gap-2">
+                  <h3 className="text-lg font-semibold">{selected.name}</h3>
+                  <Badge className={cn('text-[10px] capitalize ring-1', PROJECT_STATUS_STYLE[selected.status])}>{PROJECT_STATUS_LABEL[selected.status]}</Badge>
+                  <button onClick={() => { setNameDraft(selected.name); setEditingName(true); }} className="text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover:opacity-100" title="Rename project">
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+              {editingDesc ? (
+                <div className="mt-1 flex max-w-xl items-start gap-2">
+                  <Textarea rows={2} value={descDraft} onChange={(e) => setDescDraft(e.target.value)} placeholder="What this project is about…" className="text-sm" />
+                  <div className="flex shrink-0 flex-col gap-1">
+                    <Button size="sm" onClick={commitDesc}>Save</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingDesc(false)}>Cancel</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="group mt-1 flex max-w-xl items-start gap-2">
+                  <p className="text-sm text-muted-foreground">{selected.description || 'No description yet.'}</p>
+                  <button onClick={() => { setDescDraft(selected.description ?? ''); setEditingDesc(true); }} className="mt-0.5 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover:opacity-100" title="Edit description">
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
             </div>
             <Select value={selected.status} onValueChange={(v) => updateProject(selected.id, { status: v as ProjectStatus })}>
               <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
@@ -240,16 +341,18 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
 
           <div className="mt-4">
             <p className="text-[11px] font-medium text-muted-foreground">Customer account</p>
-            <Select
+            <SearchSelect
+              options={[
+                { value: UNASSIGNED, label: 'None — internal project' },
+                ...customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry })),
+              ]}
               value={selected.customerId || UNASSIGNED}
-              onValueChange={(v) => updateProject(selected.id, { customerId: v === UNASSIGNED ? undefined : v })}
-            >
-              <SelectTrigger className="mt-1 w-64"><SelectValue placeholder="None" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={UNASSIGNED}>None — internal project</SelectItem>
-                {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+              onChange={(v) => updateProject(selected.id, { customerId: v === UNASSIGNED ? undefined : v })}
+              placeholder="None"
+              searchPlaceholder="Search customers"
+              clearable={false}
+              className="mt-1 w-64"
+            />
             {linkedCustomer && <p className="mt-1 text-[11px] text-muted-foreground">Rolls up under {linkedCustomer.name} on the Customers page.</p>}
           </div>
         </Card>
@@ -261,6 +364,7 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
             <TabsTrigger value="milestones">Milestones</TabsTrigger>
             <TabsTrigger value="team">Team</TabsTrigger>
             <TabsTrigger value="finances">Finances</TabsTrigger>
+            <TabsTrigger value="analytics">Analytics</TabsTrigger>
           </TabsList>
 
           {/* ── Tasks (list) ────────────────────────────────────────────────── */}
@@ -371,7 +475,7 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
                       </button>
                       <div className="flex items-center gap-2">
                         {m.dueDateIso && <span className="text-[11px] text-muted-foreground">{m.dueDateIso}</span>}
-                        <button onClick={() => deleteMilestone(m.id)} className="text-muted-foreground hover:text-destructive"><X className="h-3.5 w-3.5" /></button>
+                        <button onClick={() => setConfirmDeleteMilestone(m.id)} className="text-muted-foreground hover:text-destructive" title="Delete milestone"><X className="h-3.5 w-3.5" /></button>
                       </div>
                     </div>
                   ))}
@@ -384,14 +488,15 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
             <Card className="p-5">
               <p className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Users className="h-4 w-4" /> Project team</p>
               <div className="mb-3 flex gap-2">
-                <Select value={addMemberId} onValueChange={setAddMemberId}>
-                  <SelectTrigger className="flex-1"><SelectValue placeholder="Add a team member…" /></SelectTrigger>
-                  <SelectContent>
-                    {agents.filter((a) => !(selected.teamAgentIds ?? []).includes(a.id)).map((a) => (
-                      <SelectItem key={a.id} value={a.id}>{a.name} — {a.role}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={agents.filter((a) => !(selected.teamAgentIds ?? []).includes(a.id)).map((a) => ({ value: a.id, label: a.name, detail: a.department }))}
+                  value={addMemberId}
+                  onChange={setAddMemberId}
+                  placeholder="Add a team member…"
+                  searchPlaceholder="Search agents"
+                  clearable={false}
+                  className="flex-1"
+                />
                 <Button size="icon" onClick={addTeamMember} disabled={!addMemberId}><Plus className="h-4 w-4" /></Button>
               </div>
               <div className="space-y-1.5">
@@ -418,6 +523,18 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
 
           {/* ── Finances ────────────────────────────────────────────────────── */}
           <TabsContent value="finances">
+            <div className="mb-4 grid grid-cols-3 gap-3">
+              {[
+                { label: 'Income', value: money(incomeTotal), color: 'text-emerald-600' },
+                { label: 'Spend', value: money(actual), color: 'text-muted-foreground' },
+                { label: 'Net', value: `${incomeTotal - actual < 0 ? '−' : ''}${money(Math.abs(incomeTotal - actual))}`, color: incomeTotal - actual < 0 ? 'text-rose-500' : 'text-emerald-600' },
+              ].map((s) => (
+                <Card key={s.label} className="p-3">
+                  <p className="text-[11px] text-muted-foreground">{s.label}</p>
+                  <p className={cn('mt-1 truncate font-mono text-sm font-semibold', s.color)}>{s.value}</p>
+                </Card>
+              ))}
+            </div>
             <Card className="p-5">
               <div className="mb-4">
                 <p className="text-[11px] font-medium text-muted-foreground">Actual spend vs. budget</p>
@@ -428,6 +545,42 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
                   </span>
                 </div>
               </div>
+              <p className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Receipt className="h-4 w-4" /> Linked income</p>
+              <div className="mb-3 grid grid-cols-[1fr_1fr_110px_40px] gap-2">
+                <Input
+                  value={incomeDraft.label}
+                  onChange={(e) => setIncomeDraft((f) => ({ ...f, label: e.target.value }))}
+                  placeholder="Income description…"
+                />
+                <AccountSelect
+                  value={incomeDraft.accountId || undefined}
+                  onChange={(v) => setIncomeDraft((f) => ({ ...f, accountId: v ?? '' }))}
+                  placeholder="GL account"
+                  types={['revenue']}
+                />
+                <Input
+                  type="number"
+                  value={incomeDraft.amount}
+                  onChange={(e) => setIncomeDraft((f) => ({ ...f, amount: e.target.value }))}
+                  placeholder="Amount"
+                />
+                <Button size="icon" onClick={addProjectIncome}><Plus className="h-4 w-4" /></Button>
+              </div>
+              <div className="space-y-1.5">
+                {projectIncome.length === 0 && <p className="py-4 text-center text-xs text-muted-foreground">No income linked yet.</p>}
+                {projectIncome.map((f) => (
+                  <div key={f.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+                    <div>
+                      <span>{f.label}</span>
+                      {f.category && <span className="ml-2 text-[11px] text-muted-foreground">{f.category}</span>}
+                    </div>
+                    <span className="font-mono text-xs text-emerald-600">+{money(f.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="mt-4 p-5">
               <p className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><Receipt className="h-4 w-4" /> Linked expenses</p>
               <div className="mb-3 grid grid-cols-[1fr_1fr_110px_40px] gap-2">
                 <Input
@@ -435,13 +588,12 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
                   onChange={(e) => setExpenseDraft((f) => ({ ...f, label: e.target.value }))}
                   placeholder="Expense description…"
                 />
-                <Select value={expenseDraft.accountId || NO_ACCOUNT} onValueChange={(v) => setExpenseDraft((f) => ({ ...f, accountId: v === NO_ACCOUNT ? '' : v }))}>
-                  <SelectTrigger><SelectValue placeholder="GL account" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_ACCOUNT}>No account</SelectItem>
-                    {expenseAccounts.map((a) => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <AccountSelect
+                  value={expenseDraft.accountId || undefined}
+                  onChange={(v) => setExpenseDraft((f) => ({ ...f, accountId: v ?? '' }))}
+                  placeholder="GL account"
+                  types={['expense', 'cost']}
+                />
                 <Input
                   type="number"
                   value={expenseDraft.amount}
@@ -497,9 +649,127 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
               )}
             </Card>
           </TabsContent>
+
+          {/* ── Analytics ───────────────────────────────────────────────────── */}
+          <TabsContent value="analytics">
+            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+              {[
+                { label: 'Budget', value: money(selected.budgetAmount), icon: Receipt, color: 'text-muted-foreground' },
+                { label: 'Actual spend', value: money(actual), icon: Receipt, color: 'text-sky-600' },
+                { label: 'Remaining', value: money(remaining), icon: AlertTriangle, color: remaining < 0 ? 'text-rose-500' : 'text-emerald-600' },
+                { label: 'Task completion', value: `${completion}%`, icon: CheckSquare, color: 'text-violet-600' },
+              ].map((s) => {
+                const Icon = s.icon;
+                return (
+                  <Card key={s.label} className="p-3">
+                    <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Icon className={cn('h-3.5 w-3.5', s.color)} /> {s.label}</p>
+                    <p className={cn('mt-1 truncate text-lg font-semibold', s.label === 'Remaining' && remaining < 0 && 'text-rose-500')}>{s.value}</p>
+                  </Card>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <Card className="p-5">
+                <SectionTitle title="Task status" sub={`${projectTasks.length} linked task${projectTasks.length === 1 ? '' : 's'} across three columns`} />
+                {projectTasks.length === 0 ? (
+                  <p className="py-10 text-center text-xs text-muted-foreground">No tasks linked to this project yet.</p>
+                ) : (
+                  <div className="mt-4 h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={taskStatusData} margin={{ left: -22, right: 4, top: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} />
+                        <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} />
+                        <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} />
+                        <Bar dataKey="value" name="Tasks" fill="var(--chart-2)" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </Card>
+
+              <Card className="p-5">
+                <SectionTitle title="Spend by category" sub={`${money(actual)} posted against this project`} />
+                {spendByCategory.length === 0 ? (
+                  <p className="py-10 text-center text-xs text-muted-foreground">No expenses linked yet — add them on the Finances tab.</p>
+                ) : (
+                  <div className="mt-4 h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={spendByCategory} margin={{ left: -22, right: 4, top: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} interval={0} />
+                        <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} />
+                        <Tooltip contentStyle={{ background: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 12, fontSize: 12 }} formatter={(v: number) => money(v)} />
+                        <Bar dataKey="value" name="Spend" fill="var(--chart-3)" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            <Card className="mt-4 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <SectionTitle title="Delivery health" sub="Milestones, payments and budget signals for this project" />
+                <Badge variant="outline" className="text-[10px]">{milestonesDone}/{milestoneList.length} milestones</Badge>
+              </div>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span className="font-medium">Tasks complete</span>
+                    <span className="text-muted-foreground">{done}/{projectTasks.length}</span>
+                  </div>
+                  <Progress value={completion} className="h-2" />
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span className="font-medium">Milestones reached</span>
+                    <span className="text-muted-foreground">{milestonesDone}/{milestoneList.length}</span>
+                  </div>
+                  <Progress value={milestoneList.length ? (milestonesDone / milestoneList.length) * 100 : 0} className="h-2" />
+                </div>
+                <div>
+                  <div className="mb-1 flex items-center justify-between text-xs">
+                    <span className="font-medium">Budget consumed</span>
+                    <span className={cn('text-muted-foreground', actual > selected.budgetAmount && selected.budgetAmount > 0 && 'text-rose-500')}>{pct}%</span>
+                  </div>
+                  <Progress value={pct} className="h-2" />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border px-3 py-2">
+                    <p className="text-[11px] text-muted-foreground">Certified payments</p>
+                    <p className="font-mono text-sm font-medium">{money(certifiedTotal)}</p>
+                  </div>
+                  <div className="rounded-lg border px-3 py-2">
+                    <p className="text-[11px] text-muted-foreground">Unpaid vendor bills</p>
+                    <p className={cn('font-mono text-sm font-medium', unpaidTotal > 0 && 'text-amber-600')}>{money(unpaidTotal)}</p>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </TabsContent>
         </Tabs>
 
         <TaskEditDialog task={editTask} open={!!editTask} onOpenChange={(o) => !o && setEditTask(null)} />
+
+        <ConfirmDialog
+          open={!!confirmDeleteProject}
+          onOpenChange={(o) => { if (!o) setConfirmDeleteProject(null); }}
+          title={`Delete project "${confirmDeleteProject?.name ?? ''}"?`}
+          description="The project is deleted. Linked tasks and expenses are unlinked, not removed — they stay on their boards."
+          confirmLabel="Delete project"
+          onConfirm={doRemoveProject}
+        />
+
+        <ConfirmDialog
+          open={!!confirmDeleteMilestone}
+          onOpenChange={(o) => { if (!o) setConfirmDeleteMilestone(null); }}
+          title="Delete this milestone?"
+          description="The milestone is removed from the project timeline."
+          confirmLabel="Delete milestone"
+          onConfirm={doDeleteMilestone}
+        />
       </div>
     );
   }
@@ -566,13 +836,17 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
             </div>
             <div>
               <p className="mb-1 text-xs font-medium text-muted-foreground">Customer account</p>
-              <Select value={form.customerId || UNASSIGNED} onValueChange={(v) => setForm((f) => ({ ...f, customerId: v === UNASSIGNED ? '' : v }))}>
-                <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={UNASSIGNED}>None — internal project</SelectItem>
-                  {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <SearchSelect
+                options={[
+                  { value: UNASSIGNED, label: 'None — internal project' },
+                  ...customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry })),
+                ]}
+                value={form.customerId || UNASSIGNED}
+                onChange={(v) => setForm((f) => ({ ...f, customerId: v === UNASSIGNED ? '' : v }))}
+                placeholder="None"
+                searchPlaceholder="Search customers"
+                clearable={false}
+              />
             </div>
           </div>
           <DialogFooter>

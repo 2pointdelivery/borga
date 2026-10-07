@@ -1,5 +1,7 @@
 import type { ProviderId } from './providers';
 import { smBase } from './supermemory-core';
+import { createSaltEdgeClient, SaltEdgeError } from './saltedge';
+import { parseSmtp } from './smtp-core';
 
 /**
  * Live credential checks. Pure (fetch is injected) so they are unit-tested with
@@ -117,6 +119,64 @@ async function testSupermemory(v: Record<string, string>, f: Fetch): Promise<Tes
   return { ok: true, message: 'Connected to Supermemory.' };
 }
 
+async function testSmtp(v: Record<string, string>): Promise<TestResult> {
+  const r = parseSmtp(v);
+  if (!r.ok) return { ok: false, message: r.error };
+  // loaded here, not at the top: the transport is server-only and this module is also imported by tests
+  const { verifySmtp } = await import('./smtp-transport');
+  const c = await verifySmtp(r.settings);
+  return { ok: c.ok, message: c.message, details: c.ok ? ['Nothing was sent. Press Send me a test email to see a message arrive.'] : undefined };
+}
+
+async function testSaltEdge(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const pem = (process.env.SALTEDGE_PRIVATE_KEY ?? '').replace(/\\n/g, '\n') || undefined;
+  const client = createSaltEdgeClient({ appId: v.appId, secret: v.secret, privateKeyPem: pem }, { fetch: f, timeoutMs: TIMEOUT_MS });
+  try {
+    await client.request('GET', '/customers', { query: { per_page: 1 } });
+  } catch (e) {
+    if (e instanceof SaltEdgeError) {
+      if (e.status === 401 || e.status === 403 || /ApiKey|Unauthor|Signature/i.test(e.errorClass)) return { ok: false, message: `Salt Edge rejected the credentials: ${e.message}`, details: pem ? [] : ['A Live client also needs SALTEDGE_PRIVATE_KEY set on the server for request signing.'] };
+      return { ok: false, message: `Salt Edge returned: ${e.message}` };
+    }
+    throw e;
+  }
+  return { ok: true, message: 'Connected to Salt Edge.', details: [pem ? 'Requests are signed (Live client).' : 'Requests are not signed: fine for a test client.'] };
+}
+
+async function testElevenLabs(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const headers = { 'xi-api-key': v.apiKey };
+  const detail = (j: Record<string, unknown>) => {
+    const d = j.detail;
+    return typeof d === 'string' ? d : d && typeof d === 'object' ? String((d as { message?: unknown }).message ?? '') : '';
+  };
+  const user = await getJson(f, 'https://api.elevenlabs.io/v1/user', { headers });
+  if (user.status < 400) return { ok: true, message: 'Connected to ElevenLabs.' };
+  // A restricted key can lack the permission to read the account yet still speak and list voices (the things Borga needs): ask for those.
+  const voices = await getJson(f, 'https://api.elevenlabs.io/v1/voices', { headers });
+  if (voices.status < 400) return { ok: true, message: 'Connected to ElevenLabs.', details: ['This key cannot read account details (a restricted key), which Borga does not need.'] };
+  const why = detail(voices.json) || detail(user.json);
+  if (voices.status === 401 || voices.status === 403) return { ok: false, message: `ElevenLabs rejected the API key${why ? `: ${why.slice(0, 200)}` : '.'}` };
+  return { ok: false, message: `ElevenLabs answered ${voices.status}${why ? `: ${why.slice(0, 200)}` : ''}.` };
+}
+
+async function testDeepgram(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, 'https://api.deepgram.com/v1/auth/token', { headers: { Authorization: `Token ${v.apiKey}` } });
+  if (r.status === 401 || r.status === 403) return { ok: false, message: 'Deepgram rejected the API key.' };
+  if (r.status >= 400) return { ok: false, message: `Deepgram answered ${r.status}.` };
+  return { ok: true, message: 'Connected to Deepgram.' };
+}
+
+async function testFish(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, 'https://api.fish.audio/wallet/self/api-credit', { headers: { Authorization: `Bearer ${v.apiKey}` } });
+  if (r.status === 401 || r.status === 403) return { ok: false, message: 'Fish Audio rejected the API key.' };
+  if (r.status >= 400) return { ok: false, message: `Fish Audio answered ${r.status}.` };
+  if (v.voiceId) {
+    const m = await getJson(f, `https://api.fish.audio/model/${encodeURIComponent(v.voiceId)}`, { headers: { Authorization: `Bearer ${v.apiKey}` } });
+    if (m.status === 404) return { ok: false, message: 'The key works, but Fish Audio has no voice with that ID.' };
+  }
+  return { ok: true, message: v.voiceId ? 'Connected to Fish Audio and the voice was found.' : 'Connected to Fish Audio (default voice).' };
+}
+
 export async function runProviderTest(id: ProviderId, values: Record<string, string>, f: Fetch = fetch): Promise<TestResult> {
   try {
     switch (id) {
@@ -125,6 +185,11 @@ export async function runProviderTest(id: ProviderId, values: Record<string, str
       case 'google_ads': return await testGoogleAds(values, f);
       case 'linkedin': return await testLinkedIn(values, f);
       case 'supermemory': return await testSupermemory(values, f);
+      case 'saltedge': return await testSaltEdge(values, f);
+      case 'smtp': return await testSmtp(values);
+      case 'elevenlabs': return await testElevenLabs(values, f);
+      case 'deepgram': return await testDeepgram(values, f);
+      case 'fish': return await testFish(values, f);
       case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
       case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
     }

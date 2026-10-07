@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Plus,
   Pencil,
@@ -23,8 +23,10 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ConfirmDialog } from '../ConfirmDialog';
 import {
   AD_PLATFORM_LABEL,
   AD_STATUS_STYLE,
@@ -34,21 +36,30 @@ import {
   type AdPlatform,
 } from '@/lib/borga/data';
 import { computeCashRunway } from '@/lib/borga/insights';
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { CampaignEditDialog } from './SocialEditDialogs';
 import { cn } from '@/lib/utils';
 
 export function AdvertisingTab() {
-  const { ads, addCampaign, setCampaignStatus, log, finance, bankAccounts } = useBorga();
+  const { ads, addCampaign, setCampaignStatus, log, finance, bankAccounts, activeWorkspace } = useBorga();
+  const currency = activeWorkspace()?.currency ?? 'USD';
   const [adOpen, setAdOpen] = useState(false);
+  const [confirmThinRunway, setConfirmThinRunway] = useState(false);
   const [editCampaign, setEditCampaign] = useState<AdCampaign | null>(null);
-  const [adForm, setAdForm] = useState({ name: '', platform: 'google' as AdPlatform, budget: '', spent: '', status: 'active' as AdCampaign['status'] });
+  const [adForm, setAdForm] = useState<{ name: string; platform: AdPlatform; budget: string; spent: string; status: AdCampaign['status']; draft?: AdCampaign['draft'] }>({ name: '', platform: 'google', budget: '', spent: '', status: 'active' });
 
   // Cash-runway guard: paid media is the first lever pulled when runway thins.
-  const { cash, monthlyBurn, months: runwayMonths } = computeCashRunway(finance, bankAccounts);
+  const { months: runwayMonths } = computeCashRunway(finance, bankAccounts);
   const activeAds = ads.filter((a) => a.status === 'active');
   const activeDailyPace = activeAds.reduce((s, a) => s + campaignPacing(a).dailyRunRate, 0);
+  // Pausing the weakest campaign frees its own monthly run rate (not a share of the budget).
+  const worstPace = useMemo(() => {
+    const sorted = [...activeAds].sort((a, b) => a.roas - b.roas);
+    const w = sorted[0];
+    return w ? campaignPacing(w) : { dailyRunRate: 0 };
+  }, [activeAds]);
 
   const totalBudget = ads.reduce((s, a) => s + a.budget, 0);
   const totalSpent = ads.reduce((s, a) => s + a.spent, 0);
@@ -59,10 +70,19 @@ export function AdvertisingTab() {
   const submitCampaign = () => {
     if (!adForm.name.trim()) return;
     if (adForm.status === 'active' && runwayMonths < 6) {
-      const ok = window.confirm(`Cash runway is ${runwayMonths.toFixed(1)} months. Launching "${adForm.name.trim()}" adds to the ${fmtNum(Math.round(activeDailyPace * 30))}/mo active ad pace. Launch anyway?`);
-      if (!ok) return;
+      setConfirmThinRunway(true);
+      return;
+    }
+    saveCampaign(false);
+  };
+
+  const saveCampaign = (overrodeRunwayGuard: boolean) => {
+    if (overrodeRunwayGuard) {
       log({ agentId: 'a-paidmedia', agentName: 'Paige', actor: 'system', kind: 'system', message: `Campaign launched despite thin runway (${runwayMonths.toFixed(1)} mo) — flagged for finance review.` });
     }
+    const draft = adForm.draft?.headline || adForm.draft?.body || adForm.draft?.link || adForm.draft?.imageText
+      ? { headline: adForm.draft.headline.trim(), body: adForm.draft.body.trim(), link: adForm.draft.link.trim(), imageText: adForm.draft.imageText?.trim() }
+      : undefined;
     addCampaign({
       id: `ad-${Date.now()}`,
       name: adForm.name.trim(),
@@ -74,6 +94,7 @@ export function AdvertisingTab() {
       conversions: 0,
       roas: 0,
       status: adForm.status,
+      draft,
     });
     log({ agentId: 'a-paidmedia', agentName: 'Paige', actor: 'user', kind: 'task', message: `Paid campaign launched: ${adForm.name.trim()} (${AD_PLATFORM_LABEL[adForm.platform]}).` });
     setAdForm({ name: '', platform: 'google', budget: '', spent: '', status: 'active' });
@@ -105,9 +126,9 @@ export function AdvertisingTab() {
             {runwayMonths < 6 ? 'Thin cash runway' : 'Runway watch'} — {runwayMonths.toFixed(1)} months at current burn
           </p>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            Active campaigns pace at ${fmtNum(Math.round(activeDailyPace * 30))}/mo ({fmtNum(Math.round(activeDailyPace))}/day).{' '}
+            Active campaigns pace at {fmtMoney(Math.round(activeDailyPace * 30), currency)}/mo ({fmtNum(Math.round(activeDailyPace))}/day).{' '}
             {runwayMonths < 6
-              ? `Pausing the lowest-ROAS campaign frees ~${fmtNum(Math.round(Math.min(...activeAds.map((a) => a.spent / Math.max(1, a.budget))) * totalBudget / 12))}/mo toward runway.`
+              ? `Pausing the lowest-ROAS campaign frees ~${fmtNum(Math.round(worstPace.dailyRunRate * 30))}/mo toward runway.`
               : 'Monitor pacing weekly; throttle the weakest ROAS campaign first if burn accelerates.'}
           </p>
         </Card>
@@ -116,10 +137,11 @@ export function AdvertisingTab() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card className="p-3">
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><DollarSign className="h-3.5 w-3.5" /> Total budget</p>
-          <p className="mt-1 text-xl font-semibold">${fmtNum(totalBudget)}</p>
-        </Card>        <Card className="p-3">
+          <p className="mt-1 text-xl font-semibold">{fmtMoney(totalBudget, currency)}</p>
+        </Card>
+        <Card className="p-3">
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><CircleDollarSign className="h-3.5 w-3.5" /> Spent</p>
-          <p className="mt-1 text-xl font-semibold">${fmtNum(totalSpent)}</p>
+          <p className="mt-1 text-xl font-semibold">{fmtMoney(totalSpent, currency)}</p>
         </Card>
         <Card className="p-3">
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><MousePointerClick className="h-3.5 w-3.5" /> Clicks / Conv.</p>
@@ -180,21 +202,20 @@ export function AdvertisingTab() {
                 <button onClick={() => setEditCampaign(a)} className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary" title="Edit campaign">
                   <Pencil className="h-3 w-3" />
                 </button>
-                <select
-                  value={a.status}
-                  onChange={(e) => setCampaignStatus(a.id, e.target.value as AdCampaign['status'])}
-                  className={cn('h-6 rounded-md px-1 text-[10px] font-medium ring-1 outline-none', AD_STATUS_STYLE[a.status])}
-                >
-                  <option value="active">active</option>
-                  <option value="paused">paused</option>
-                  <option value="ended">ended</option>
-                </select>
+                <Select value={a.status} onValueChange={(v) => setCampaignStatus(a.id, v as AdCampaign['status'])}>
+                  <SelectTrigger className={cn('h-6 w-24 px-1 text-[10px] font-medium', AD_STATUS_STYLE[a.status])}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">active</SelectItem>
+                    <SelectItem value="paused">paused</SelectItem>
+                    <SelectItem value="ended">ended</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-lg bg-muted/20 p-2">
-                <p className="text-sm font-semibold">${fmtNum(a.spent)}</p>
-                <p className="text-[10px] text-muted-foreground">of ${fmtNum(a.budget)}</p>
+                <p className="text-sm font-semibold">{fmtMoney(a.spent, currency)}</p>
+                <p className="text-[10px] text-muted-foreground">of {fmtMoney(a.budget, currency)}</p>
               </div>
 
               <div className="rounded-lg bg-muted/20 p-2">
@@ -206,6 +227,13 @@ export function AdvertisingTab() {
                 <p className="text-[10px] text-muted-foreground">conv.</p>
               </div>
             </div>
+            {a.draft?.headline && (
+              <div className="mt-2 rounded-lg border border-dashed bg-muted/10 p-2.5">
+                <p className="text-[11px] font-semibold">{a.draft.headline}</p>
+                {a.draft.body && <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{a.draft.body}</p>}
+                {a.draft.link && <p className="mt-1 truncate text-[10px] text-primary">{a.draft.link}</p>}
+              </div>
+            )}
             <div className="mt-2 flex items-center justify-between text-[11px]">
               <span className="text-muted-foreground">{a.clicks.toLocaleString()} clicks</span>
               <span className="font-medium text-primary">ROAS {a.roas}x</span>
@@ -228,8 +256,7 @@ export function AdvertisingTab() {
               <label className="text-xs font-medium text-muted-foreground">Campaign name</label>
               <Input value={adForm.name} onChange={(e) => setAdForm((s) => ({ ...s, name: e.target.value }))} placeholder="e.g. Q4 Retargeting" className="mt-1" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
+            <div className="grid grid-cols-2 gap-3">              <div>
                 <label className="text-xs font-medium text-muted-foreground">Platform</label>
                 <Select value={adForm.platform} onValueChange={(v) => setAdForm((s) => ({ ...s, platform: v as AdPlatform }))}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
@@ -262,6 +289,28 @@ export function AdvertisingTab() {
                 <Input type="number" value={adForm.spent} onChange={(e) => setAdForm((s) => ({ ...s, spent: e.target.value }))} placeholder="0" className="mt-1" />
               </div>
             </div>
+            <div className="rounded-xl border p-3 space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Ad draft</p>
+              <p className="text-[11px] text-muted-foreground">Draft the actual ad copy; it lives on the campaign until it runs.</p>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Headline</label>
+                <Input className="mt-1" value={adForm.draft?.headline ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: e.target.value, body: s.draft?.body ?? '', link: s.draft?.link ?? '' } }))} placeholder="Fast, reliable freight across Europe" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Body</label>
+                <Textarea rows={2} className="mt-1" value={adForm.draft?.body ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: e.target.value, link: s.draft?.link ?? '' } }))} placeholder="Door-to-door with fixed time windows. Request a freight quote today." />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Link</label>
+                  <Input className="mt-1" value={adForm.draft?.link ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: s.draft?.body ?? '', link: e.target.value } }))} placeholder="https://…/quote" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Image alt text (optional)</label>
+                  <Input className="mt-1" value={adForm.draft?.imageText ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: s.draft?.body ?? '', link: s.draft?.link ?? '', imageText: e.target.value } }))} placeholder="Fleet on the road" />
+                </div>
+              </div>
+            </div>
             <Button className="w-full gap-1.5" onClick={submitCampaign}>
               <Megaphone className="h-4 w-4" /> Launch campaign
             </Button>
@@ -270,6 +319,15 @@ export function AdvertisingTab() {
       </Dialog>
 
       <CampaignEditDialog campaign={editCampaign} open={!!editCampaign} onOpenChange={(o) => { if (!o) setEditCampaign(null); }} />
+
+      <ConfirmDialog
+        open={confirmThinRunway}
+        onOpenChange={setConfirmThinRunway}
+        title="Thin cash runway — launch anyway?"
+        description={`Cash runway is ${runwayMonths.toFixed(1)} months. Launching "${adForm.name.trim()}" adds to the ${fmtNum(Math.round(activeDailyPace * 30))}/mo active ad pace, and the override is flagged for finance review.`}
+        confirmLabel="Launch anyway"
+        onConfirm={() => { setConfirmThinRunway(false); saveCampaign(true); }}
+      />
     </div>
   );
 }

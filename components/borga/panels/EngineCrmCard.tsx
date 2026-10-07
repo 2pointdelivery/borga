@@ -8,12 +8,12 @@ import { Switch } from '@/components/ui/switch';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { useCrmPull } from '../use-crm-pull';
-import { ConnectionPanel } from './ConnectionsTab';
+import { ConnectionSummary } from './ConnectionSummary';
 
 const fmt = (s?: { added: number; updated: number; unchanged: number }) => (s ? s.added + ' new, ' + s.updated + ' updated, ' + s.unchanged + ' unchanged' : 'not pulled');
 
 /** The company's API portal: connection settings plus a pull of customers and deals from its CRM. */
-export function EngineCrmCard({ onConnectionChange }: { onConnectionChange?: () => void }) {
+export function EngineCrmCard() {
   const { settings, setSettings, customers, leads } = useBorga();
   const pull = useCrmPull();
   const [busy, setBusy] = useState(false);
@@ -21,19 +21,24 @@ export function EngineCrmCard({ onConnectionChange }: { onConnectionChange?: () 
 
   const run = async () => {
     setBusy(true);
-    const r = await pull();
-    setBusy(false);
-    if (!r.ok && !r.customers && !r.leads) return toast({ title: 'Pull failed', description: r.error, variant: 'error' });
-    toast({
-      title: r.error ? 'Pulled with problems' : 'CRM data pulled',
-      description: 'Customers: ' + fmt(r.customers) + '. Deals: ' + fmt(r.leads) + '.' + (r.skipped ? ' ' + r.skipped + ' record(s) skipped (no id or name).' : '') + (r.truncated ? ' Stopped at the safety limit (1000 records / 10 pages).' : '') + (r.error ? ' ' + r.error : ''),
-      variant: r.error ? 'warning' : 'success',
-    });
+    try {
+      const r = await pull();
+      if (!r.ok && !r.customers && !r.leads) return toast({ title: 'Pull failed', description: r.error, variant: 'error' });
+      toast({
+        title: r.error ? 'Pulled with problems' : 'CRM data pulled',
+        description: 'Customers: ' + fmt(r.customers) + '. Deals: ' + fmt(r.leads) + '.' + (r.skipped ? ' ' + r.skipped + ' record(s) skipped (no id or name).' : '') + (r.truncated ? ' Stopped at the safety limit (1000 records / 10 pages).' : '') + (r.error ? ' ' + r.error : ''),
+        variant: r.error ? 'warning' : 'success',
+      });
+    } catch (error) {
+      toast({ title: 'Pull failed', description: error instanceof Error ? error.message : 'Network error — try again.', variant: 'error' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div className="space-y-4">
-      <ConnectionPanel providerId="company_engine" onChange={onConnectionChange} />
+      <ConnectionSummary providerId="company_engine" />
       <Card className="space-y-3 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-semibold"><Database className="h-4 w-4 text-primary" /> CRM data</div>

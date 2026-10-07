@@ -18,12 +18,12 @@ function b64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function b64urlDecode(s: string): Uint8Array {
-  const b = s.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+/** Constant-time string compare so signature checks do not leak prefix matches. */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 async function hmac(data: string): Promise<string> {
@@ -79,9 +79,19 @@ export async function verifySessionToken(token: string | undefined | null): Prom
   const [userId, expStr, sig] = parts;
   if (!userId || !expStr || !sig) return null;
   const expected = await hmac(`${userId}.${expStr}`);
-  if (expected !== sig) return null;
+  if (!safeEqual(expected, sig)) return null;
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp < Date.now()) return null;
+  // A signed-out or reset session is refused here, so every route and the proxy honour it. Needs the database, so it is skipped
+  // where there is none; a database error never locks everyone out (the signature and expiry above already held).
+  if (typeof window === 'undefined' && process.env.DATABASE_URL) {
+    try {
+      const { isSessionRevoked } = await import('./session-revocation');
+      if (await isSessionRevoked(userId, token, exp, MAX_AGE_MS)) return null;
+    } catch {
+      /* fail open on infrastructure errors */
+    }
+  }
   return userId;
 }
 

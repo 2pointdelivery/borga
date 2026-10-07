@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getConnection } from '@/lib/borga/connections-server';
 import { guardEngineUrl } from '@/lib/borga/engine-http';
 import { sessionUserId } from '@/lib/borga/features-server';
+import { paymentRequired } from '@/lib/borga/billing-server';
 import { userWsKey } from '@/lib/borga/keys';
 import { getApiKey } from '@/lib/borga/secrets';
 import { getBorgaState } from '@/lib/borga/persistence';
@@ -192,7 +193,7 @@ async function getWorkflowStatus(engineUrl: string, adminToken: string | null, w
   }
 
   try {
-    const response = await fetch(`${engineUrl}/orchestrations/${workflowId}`, {
+    const response = await fetch(`${engineUrl}/orchestrations/${encodeURIComponent(workflowId)}`, {
       headers: {
         'Authorization': `Bearer ${adminToken}`,
         'Content-Type': 'application/json',
@@ -313,12 +314,17 @@ export async function POST(req: NextRequest) {
 
   // Resolve the active company's engine (workspace settings → env fallback).
   const wsId = isValidWsId(body.ws) ? body.ws : null;
-  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId, await sessionUserId(req));
+  const callerId = await sessionUserId(req);
+  if (callerId && wsId) {
+    const unpaid = await paymentRequired(callerId, wsId);
+    if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
+  }
+  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId, callerId);
 
   // Validate engine URL
   if (!isValidEngineUrl(ENGINE_URL)) {
     return NextResponse.json(
-      { ok: false, engine: ENGINE_URL, mode: 'unconfigured', error: 'No engine endpoint configured for this workspace. Set it under AI Platform → Company Engine.' },
+      { ok: false, engine: ENGINE_URL, mode: 'unconfigured', error: 'No engine endpoint configured for this workspace. Set it under Company → Company Engine.' },
       { status: 400 },
     );
   }

@@ -207,7 +207,20 @@ export function mergeCustomers(existing: Customer[], incoming: CrmCustomer[], no
   for (const inc of incoming) {
     let idx = next.findIndex((c) => c.crmId === inc.crmId);
     if (idx < 0 && inc.email) idx = next.findIndex((c) => !c.crmId && lc(c.email) === lc(inc.email));
-    if (idx < 0) idx = next.findIndex((c) => !c.crmId && lc(c.name) === lc(inc.name));
+    // Name alone is not identity: two different companies can share one.
+    // Merge on name only with a corroborating signal (same website, phone,
+    // or city). Otherwise create a separate record — a visible duplicate the
+    // user can merge beats silently fusing two companies into one.
+    if (idx < 0) {
+      idx = next.findIndex((c) => {
+        if (c.crmId || lc(c.name) !== lc(inc.name)) return false;
+        if (inc.website && c.website && lc(c.website) === lc(inc.website)) return true;
+        if (inc.phone && c.phone && lc(c.phone) === lc(inc.phone)) return true;
+        if (inc.city && c.city && lc(c.city) === lc(inc.city)
+          && (!inc.country || !c.country || lc(c.country) === lc(inc.country))) return true;
+        return false;
+      });
+    }
     if (idx < 0) {
       next.unshift({
         id: `cu-crm-${slug(inc.crmId)}`, crmId: inc.crmId, name: inc.name, industry: inc.industry, website: inc.website, email: inc.email, phone: inc.phone,

@@ -1,5 +1,5 @@
 import 'server-only';
-import { eq, like, sql } from 'drizzle-orm';
+import { and, eq, like, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { borgaState } from '@/db/schemas/borga';
 
@@ -70,8 +70,9 @@ export async function setBorgaState<T>(key: string, value: T): Promise<boolean> 
       () => db
         .insert(borgaState)
         .values({ key, value, updatedAt: new Date() })
-        .onDuplicateKeyUpdate({ 
-          set: { value, updatedAt: new Date() } 
+        .onDuplicateKeyUpdate({
+          // The version moves on every write, so a dashboard holding an older copy can tell it is stale.
+          set: { value, updatedAt: new Date(), version: sql`${borgaState.version} + 1` },
         }),
       `setBorgaState(${key})`
     );
@@ -147,6 +148,52 @@ export async function getBorgaStatesByPrefixOrThrow(prefix: string): Promise<Rec
     acc[row.key] = row.value;
     return acc;
   }, {} as Record<string, unknown>);
+}
+
+/** A stored document together with its version. */
+export interface VersionedRow {
+  value: unknown;
+  version: number;
+}
+
+/** Like getBorgaStatesByPrefixOrThrow, but each row carries its version so a client can save conditionally. */
+export async function getBorgaRowsByPrefixOrThrow(prefix: string): Promise<Record<string, VersionedRow>> {
+  const rows = await retryWithBackoff(
+    () => db.select().from(borgaState).where(like(borgaState.key, `${escapeLike(prefix)}%`)),
+    'getBorgaRowsByPrefix',
+  );
+  return rows.reduce((acc, row) => {
+    acc[row.key] = { value: row.value, version: Number(row.version) };
+    return acc;
+  }, {} as Record<string, VersionedRow>);
+}
+
+/** One document with its version, or null when it does not exist. Errors propagate. */
+export async function getBorgaRowOrThrow(key: string): Promise<VersionedRow | null> {
+  const rows = await retryWithBackoff(() => db.select().from(borgaState).where(eq(borgaState.key, key)).limit(1), `getBorgaRow(${key})`);
+  return rows[0] ? { value: rows[0].value, version: Number(rows[0].version) } : null;
+}
+
+export type ConditionalWrite = { ok: true; version: number } | { ok: false; current: VersionedRow | null };
+
+/**
+ * Optimistic write: saves only if the stored version is still `expected` (0 means "the row must not exist yet").
+ * Otherwise nothing is written and the current row is returned, so the caller can show a conflict or see that both sides agree.
+ * Errors propagate: a database failure must not look like a conflict or a success.
+ */
+export async function setBorgaStateIfVersion<T>(key: string, value: T, expected: number): Promise<ConditionalWrite> {
+  const now = new Date();
+  if (expected <= 0) {
+    const [h] = await db.insert(borgaState).ignore().values({ key, value, updatedAt: now });
+    if ((h as { affectedRows?: number }).affectedRows === 1) return { ok: true, version: 1 };
+  } else {
+    const [h] = await db
+      .update(borgaState)
+      .set({ value, updatedAt: now, version: sql`${borgaState.version} + 1` })
+      .where(and(eq(borgaState.key, key), eq(borgaState.version, expected)));
+    if ((h as { affectedRows?: number }).affectedRows === 1) return { ok: true, version: expected + 1 };
+  }
+  return { ok: false, current: await getBorgaRowOrThrow(key) };
 }
 
 /**

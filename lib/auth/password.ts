@@ -24,10 +24,15 @@ export function verifyPassword(password: string, stored: string): boolean {
 // database dump can't be used to reset passwords. We use a keyed HMAC (rather
 // than scrypt) so the stored value is deterministic and can be looked up
 // directly in the database without iterating over every user.
-const RESET_SECRET = process.env.SESSION_SECRET ?? 'borga-reset-v1';
+function resetSecret(): string {
+  const s = process.env.SESSION_SECRET;
+  if (s && s.length >= 16) return s;
+  if (process.env.NODE_ENV === 'production') throw new Error('SESSION_SECRET (16+ chars) must be set in production');
+  return 'borga-reset-v1';
+}
 
 export function hashToken(token: string): string {
-  return crypto.createHmac('sha256', RESET_SECRET).update(token).digest('hex');
+  return crypto.createHmac('sha256', resetSecret()).update(token).digest('hex');
 }
 
 export function verifyToken(token: string, stored: string): boolean {

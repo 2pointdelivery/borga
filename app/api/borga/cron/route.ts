@@ -1,7 +1,10 @@
+import { timingSafeEqual } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
+import { paymentRequired } from '@/lib/borga/billing-server';
 import { tickWorkspace, listScheduledWorkspaces } from '@/lib/borga/heartbeat';
 import { loadFeatures } from '@/lib/borga/features-server';
 import { listTicketWorkspaces, pollMailbox, sweepSla } from '@/lib/borga/tickets-server';
+import { listFilingWorkspaces, sweepFilings } from '@/lib/borga/filings-server';
 import { listConnectionWorkspaces } from '@/lib/borga/connections-server';
 import { runDueSyncJobs } from '@/lib/borga/sync-jobs';
 import '@/lib/borga/sync-registry';
@@ -26,8 +29,9 @@ export const runtime = 'nodejs';
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET ?? '';
   if (!secret) return false;
-  const header = req.headers.get('authorization') ?? '';
-  return header === `Bearer ${secret}`;
+  const given = Buffer.from(req.headers.get('authorization') ?? '');
+  const want = Buffer.from(`Bearer ${secret}`);
+  return given.length === want.length && timingSafeEqual(given, want);
 }
 
 export async function POST(req: NextRequest) {
@@ -50,7 +54,7 @@ export async function POST(req: NextRequest) {
   for (const t of targets) {
     try {
       const flags = (await loadFeatures(t.userId, t.ws)).flags;
-      results[`${t.userId}/${t.ws}`] = flags.heartbeat ? await tickWorkspace(t.ws, t.userId) : { skipped: 'feature "heartbeat" is off' };
+      results[`${t.userId}/${t.ws}`] = flags.heartbeat ? ((await paymentRequired(t.userId, t.ws)) ? { skipped: 'workspace needs an active subscription' } : await tickWorkspace(t.ws, t.userId)) : { skipped: 'feature "heartbeat" is off' };
     } catch (e) {
       results[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
     }
@@ -68,6 +72,15 @@ export async function POST(req: NextRequest) {
       tickets[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
     }
   }
+  // Tax filing reminders for companies that have confirmed their filing setup.
+  const filings: Record<string, unknown> = {};
+  for (const t of await listFilingWorkspaces()) {
+    try {
+      filings[`${t.userId}/${t.ws}`] = await sweepFilings(t.userId, t.ws);
+    } catch (e) {
+      filings[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
+    }
+  }
   // Integration sync jobs (ads, comps, scheduled posts ...) for every workspace with a connection.
   const sync: Record<string, unknown> = {};
   for (const t of await listConnectionWorkspaces()) {
@@ -78,7 +91,7 @@ export async function POST(req: NextRequest) {
     }
   }
   const webhooksPending = await processAllPendingDeliveries().catch(() => -1);
-  return NextResponse.json({ ok: true, workspaces: targets.length, results, tickets, sync, webhooksPending });
+  return NextResponse.json({ ok: true, workspaces: targets.length, results, tickets, filings, sync, webhooksPending });
 }
 
 export async function GET(req: NextRequest) {

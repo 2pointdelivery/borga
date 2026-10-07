@@ -1,24 +1,7 @@
 import { NextResponse } from 'next/server';
+import { fetchPublic, readTextCapped } from '@/lib/borga/safe-url';
 
 export const runtime = 'nodejs';
-
-// Internal IP ranges blocked to prevent SSRF
-const BLOCKED_PATTERNS = [
-  /^localhost$/i,
-  /^127\./,
-  /^0\./,
-  /^10\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^192\.168\./,
-  /^::1$/,
-  /\.local$/i,
-  /^0\.0\.0\.0$/,
-  /^169\.254\./,
-];
-
-function isBlockedHost(hostname: string): boolean {
-  return BLOCKED_PATTERNS.some((re) => re.test(hostname));
-}
 
 // Enhanced text extraction with better content preservation
 function extractText(html: string): string {
@@ -266,20 +249,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'Only http:// and https:// URLs are allowed.' }, { status: 400 });
   }
 
-  if (isBlockedHost(parsedUrl.hostname)) {
-    return NextResponse.json({ ok: false, error: 'Internal/private URLs are not allowed.' }, { status: 400 });
-  }
-
   try {
-    const res = await fetch(parsedUrl.href, {
+    // Resolves DNS and re-checks every redirect hop, so private hosts are unreachable by any route.
+    const res = await fetchPublic(parsedUrl.href, {
       headers: { 
         'User-Agent': 'Borga-Research-Agent/1.0 (Agentic command center; research only)',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
       },
       signal: AbortSignal.timeout(15000),
-      redirect: 'follow',
-    });
+    }, { allowHttp: true });
 
     if (!res.ok) {
       return NextResponse.json({
@@ -304,7 +283,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const html = await res.text();
+    const html = await readTextCapped(res);
     const text = extractText(html);
     const links = extractLinks(html, parsedUrl.href);
     const title = extractTitle(html, parsedUrl.hostname);
@@ -348,6 +327,9 @@ export async function POST(req: Request) {
     return NextResponse.json(response);
   } catch (err) {
     console.error('Browse fetch error', err);
+    if (err instanceof Error && /private or internal|credentials|Only https|redirects/.test(err.message)) {
+      return NextResponse.json({ ok: false, error: 'Internal/private URLs are not allowed.' }, { status: 400 });
+    }
     return NextResponse.json({
       ok: true,
       mode: 'url',

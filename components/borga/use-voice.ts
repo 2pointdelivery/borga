@@ -1,32 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { agentStatusNow } from '@/lib/borga/agent-status';
 import { useBorga } from '@/lib/borga/store';
+import { resolveVoiceRef } from '@/lib/borga/voice-ids';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
 
-// ElevenLabs voice names (as stored in ElevenLabsConfig.voice) → voice IDs.
-// Mirrors the map in app/api/borga/elevenlabs/route.ts.
-const ELEVEN_VOICE_IDS: Record<string, string> = {
-  rachel: '21m00Tcm4TlvDq8ikWAM',
-  domi: 'AZnzlk1XvdvUeBnXmlld',
-  bella: 'EXAVITQu4vr4xnSDxMaL',
-  antoni: 'ErXwobaYiN019PkySvjV',
-  elli: 'MF3mGyEYCl7XYWbV9V6O',
-  josh: 'TxGEqnHWrfWFTfGW9XjX',
-  arnold: 'VR6AewLTigWG4xSOukaG',
-  adam: 'pNInz6obpgDQGcFmaJgB',
-  sam: 'yoZ06aMxZJJ28mfd3POQ',
-  george: 'VR6AewLTigWG4xSOukaG',
-};
-
-function elevenVoiceId(name?: string): string | undefined {
-  if (!name) return undefined;
-  return ELEVEN_VOICE_IDS[name.toLowerCase()];
-}
+const elevenVoiceId = resolveVoiceRef;
 
 // Detect a deep male English voice for Borga.
 function pickBorgaVoice(): SpeechSynthesisVoice | null {
@@ -169,7 +153,7 @@ function scheduleRestart(setVoice: (p: any) => void, delay = 150) {
 }
 
 export function useVoice() {
-  const { setVoice, log, userName, setUserName, llm, activeWorkspaceId, activeWorkspace, elevenlabs, settings } = useBorga();
+  const { setVoice, log, userName, setUserName, llm, activeWorkspaceId, activeWorkspace, elevenlabs, settings, agents, agentBusy } = useBorga();
 
   const historyRef = useRef<ChatMessage[]>([
     { role: 'system', content: 'System name Borga. Assistant is Borga.' },
@@ -232,8 +216,8 @@ export function useVoice() {
         try {
           const res = await fetch('/api/borga/voice/tts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, voiceId: elevenVoiceId(elevenlabs.voice) }),
+            headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+            body: JSON.stringify({ text, voiceId: elevenVoiceId(elevenlabs.voice), engine: elevenlabs.engine, ws: activeWorkspaceId }),
           });
           if (res.ok && res.headers.get('content-type')?.startsWith('audio/')) {
             const blob = await res.blob();
@@ -264,7 +248,7 @@ export function useVoice() {
       utter.onerror = finish;
       speech.speak(utter);
     },
-    [speech, elevenlabs, resumeSoon],
+    [speech, elevenlabs, resumeSoon, activeWorkspaceId],
   );
 
   const askBorga = useCallback(
@@ -274,14 +258,16 @@ export function useVoice() {
       try { engine.rec?.stop(); } catch { /* ignore */ }
       setVoice({ thinking: true });
       historyRef.current.push({ role: 'user', content: prompt });
+      if (historyRef.current.length > 40) historyRef.current.splice(1, historyRef.current.length - 40);
       try {
         const res = await fetch('/api/borga/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
           body: JSON.stringify({
-            providerId: llm.providerId,
-            model: llm.model,
-            messages: historyRef.current.filter((m) => m.role !== 'system'),
+            providerId: settings.voiceLlm?.providerId || llm.providerId,
+            model: settings.voiceLlm?.providerId ? settings.voiceLlm.model : llm.model,
+            // the last few turns are enough for a spoken exchange; the whole session would grow every request
+            messages: historyRef.current.filter((m) => m.role !== 'system').slice(-12),
             ws: activeWorkspaceId,
             companyName: activeWorkspace()?.name,
           }),
@@ -291,7 +277,7 @@ export function useVoice() {
         historyRef.current.push({ role: 'assistant', content: reply });
         setVoice({ thinking: false, lastReply: reply, transcript: '' });
         speak(reply);
-        log({ agentId: 'a1', agentName: 'Borga', actor: 'agent', kind: 'voice', message: `Replied to: —${prompt.slice(0, 60)}…` });
+        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'voice', message: `Replied to: “${prompt.slice(0, 60)}…”` });
         return reply;
       } catch {
         const reply = 'Borga had trouble reaching its model. Please try again.';
@@ -300,7 +286,7 @@ export function useVoice() {
         return reply;
       }
     },
-    [llm, log, setVoice, speak, interrupt, activeWorkspaceId, activeWorkspace],
+    [llm, settings.voiceLlm, log, setVoice, speak, interrupt, activeWorkspaceId, activeWorkspace],
   );
 
   const parseCommand = useCallback(
@@ -310,7 +296,7 @@ export function useVoice() {
       if (setMyName) {
         const name = setMyName[1].replace(/^./, (c) => c.toUpperCase());
         setUserName(name);
-        return `Nice to meet you, ${name}. I—ll remember that.`;
+        return `Nice to meet you, ${name}. I'll remember that.`;
       }
       if (t.includes('theme') && t.includes('dark')) {
         document.documentElement.classList.add('dark');
@@ -320,9 +306,13 @@ export function useVoice() {
         document.documentElement.classList.remove('dark');
         return 'Switching to light mode.';
       }
-      if (t.includes('open planner') || t.includes('show planner')) return 'Opening the planner.';
+      if (t.includes('open planner') || t.includes('show planner')) {
+        window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: 'ai', tab: 'planner' } }));
+        return 'Opening the planner.';
+      }
       if (t.includes('hello') || t.includes('hi ') || t === 'hi') {
-        return `Hello ${userName}. Everything is on track — three agents are active right now. What should we tackle?`;
+        const n = agents.filter((a) => agentStatusNow(a, agentBusy) === 'active').length;
+        return `Hello ${userName}. ${n} of ${agents.length} agents are active. What should we tackle?`;
       }
       if (t.includes('who are you') || t.includes('your name')) {
         return 'I am Borga, your command-center orchestrator. I coordinate the specialist agents and keep your business moving.';
@@ -332,7 +322,7 @@ export function useVoice() {
       }
       return null;
     },
-    [setUserName, userName],
+    [setUserName, userName, agents, agentBusy],
   );
 
   const handleFinalCommand = useCallback(
@@ -351,7 +341,7 @@ export function useVoice() {
       if (local) {
         setVoice({ lastReply: local, transcript: '' });
         speak(local);
-        log({ agentId: 'a1', agentName: 'Borga', actor: 'agent', kind: 'voice', message: `Replied to: —${trimmed.slice(0, 60)}…` });
+        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'voice', message: `Replied to: “${trimmed.slice(0, 60)}…”` });
         return;
       }
       void askBorga(trimmed);
@@ -472,9 +462,9 @@ export function useVoice() {
         return;
       }
       try {
-        const res = await fetch('/api/borga/voice/stt', {
+        const res = await fetch(`/api/borga/voice/stt?ws=${encodeURIComponent(activeWorkspaceId)}`, {
           method: 'POST',
-          headers: { 'Content-Type': blob.type || 'audio/webm' },
+          headers: { 'Content-Type': blob.type || 'audio/webm', 'X-Borga-Client': 'borga-dashboard' },
           body: blob,
         });
         if (res.ok) {
@@ -497,7 +487,7 @@ export function useVoice() {
       }
     };
     recorder.stop();
-  }, [handleFinalCommand, setVoice, resumeSoon]);
+  }, [handleFinalCommand, setVoice, resumeSoon, activeWorkspaceId]);
 
   return {
     startListening,

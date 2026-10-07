@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useBorga } from '@/lib/borga/store';
 import { COMMS_CHANNEL_COLOR, type ChatChannel, type ChatThread, type Lead } from '@/lib/borga/data';
+import { SearchSelect } from './SearchSelect';
 import { cn } from '@/lib/utils';
 
 const CHANNEL_LABEL: Record<ChatChannel, string> = { whatsapp: 'WhatsApp', sms: 'SMS', email: 'Email', telegram: 'Telegram' };
@@ -29,14 +30,17 @@ export function WhatsAppPanel({ open, onOpenChange }: { open: boolean; onOpenCha
       connectApp('cn-whatsapp', { status: 'off', account: '', lastSync: '…' });
       log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'task', message: 'WhatsApp Business connection removed.' });
     } else {
+      // Demo mode is honest about what it is: a local stand-in so the team
+      // can try the chat flows. The real WhatsApp Business API is wired via
+      // Integrations (the same route the inbox composer sends through).
       setWhatsapp({
         connected: true,
-        phone: 'Demo number',
+        phone: 'Demo number (not linked)',
         waId: 'WABA-DEMO',
         lastSync: `${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
       });
-      connectApp('cn-whatsapp', { status: 'connected', account: 'Demo number', scopes: 'send, receive, templates', lastSync: 'Just now' });
-      log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'task', message: 'WhatsApp Business connected — agent-to-client chat live.' });
+      connectApp('cn-whatsapp', { status: 'connected', account: 'Demo number (not linked)', scopes: 'local demo', lastSync: 'Just now' });
+      log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: 'WhatsApp demo mode enabled — messages stay local. Link the WhatsApp Business API under Integrations for real delivery.' });
     }
   };
 
@@ -60,7 +64,8 @@ export function WhatsAppPanel({ open, onOpenChange }: { open: boolean; onOpenCha
       id: `ch-${Date.now()}`,
       leadId: lead.id,
       clientName: lead.name,
-      contact: lead.email || `+1 555 01${(lead.id.length * 7) % 99}`,
+      // WhatsApp-style threads need a real phone; leads without one start as email-free local threads.
+      contact: lead.phone.trim() || lead.email.trim() || `${lead.name} (no contact on file)`,
       channel: 'whatsapp',
       agent: 'Atlas',
       messages: [{ id: `cm-${Date.now()}`, role: 'agent', sender: 'Atlas', text: `Hi ${lead.name} — reaching out from our team. How can we help today?`, at: 'Just now' }],
@@ -77,10 +82,10 @@ export function WhatsAppPanel({ open, onOpenChange }: { open: boolean; onOpenCha
       <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <MessageCircle className="h-5 w-5 text-green-600" /> WhatsApp & agent chat
+            <MessageCircle className="h-5 w-5 text-green-600" /> Customer chat
           </DialogTitle>
           <DialogDescription>
-            Connect the WhatsApp Business account and let agents answer clients in real time.
+            Team threads across WhatsApp, SMS, email and Telegram. The business link above tracks demo vs real delivery.
           </DialogDescription>
         </DialogHeader>
 
@@ -104,8 +109,8 @@ export function WhatsAppPanel({ open, onOpenChange }: { open: boolean; onOpenCha
                 <RefreshCw className="h-3.5 w-3.5" /> Sync
               </Button>
             )}
-            <Button size="sm" variant={whatsapp.connected ? 'secondary' : 'default'} onClick={connect}>
-              <PhoneCall className="h-3.5 w-3.5" /> {whatsapp.connected ? 'Disconnect' : 'Connect account'}
+            <Button size="sm" variant={whatsapp.connected ? 'secondary' : 'default'} onClick={connect} title={whatsapp.connected ? undefined : 'Enables a clearly-labelled demo number; link the real API under Integrations'}>
+              <PhoneCall className="h-3.5 w-3.5" /> {whatsapp.connected ? 'Disconnect' : 'Try demo number'}
             </Button>
           </div>
         </div>
@@ -117,16 +122,15 @@ export function WhatsAppPanel({ open, onOpenChange }: { open: boolean; onOpenCha
           </Button>
           {adding && (
             <div className="flex items-center gap-2">
-              <select
+              <SearchSelect
+                options={leads.filter((l) => l.stage !== 'lost').map((l) => ({ value: l.id, label: l.name, detail: l.company }))}
                 value={newLeadId}
-                onChange={(e) => setNewLeadId(e.target.value)}
-                className="h-9 rounded-md border bg-background px-2 text-sm outline-none"
-              >
-                <option value="">Select a lead—</option>
-                {leads.filter((l) => l.stage !== 'lost').map((l) => (
-                  <option key={l.id} value={l.id}>{l.name} — {l.company}</option>
-                ))}
-              </select>
+                onChange={(v) => setNewLeadId(v)}
+                placeholder="Select a lead…"
+                searchPlaceholder="Search leads"
+                clearable={false}
+                className="w-52"
+              />
               <Button size="sm" onClick={startThread} disabled={!newLeadId}>Open</Button>
             </div>
           )}
