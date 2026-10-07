@@ -299,3 +299,13 @@ html[data-theme='forest'] {
 .borga-glow {
   box-shadow: 0 0 40px 4px color-mix(in oklab, var(--ring) 45%, transparent);
 }
+
+/* Landing page only: the page is sized in rem, and the root font-size scales with the viewport so the layout stays proportional.
+   The class is added to <html> while the landing page is mounted (see components/landing/landing-ui.tsx), never for the dashboard. */
+html.landing-grid { scroll-behavior: smooth; }
+@media (max-width: 1920px) { html.landing-grid { font-size: 0.833333vw; } }
+@media (max-width: 1440px) { html.landing-grid { font-size: 1.111111vw; } }
+@media (max-width: 1024px) { html.landing-grid { font-size: 1.5625vw; } }
+@media (max-width: 640px) { html.landing-grid { font-size: 4.444444vw; } }
+@media (prefers-reduced-motion: reduce) { html.landing-grid { scroll-behavior: auto; } }
+@keyframes landingSwap { from { opacity: 0; transform: translateY(var(--from, 14px)); } to { opacity: 1; transform: none; } }

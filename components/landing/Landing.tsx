@@ -1,181 +1,419 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { ArrowRight, ArrowUpRight, Bot, Building2, CircleDot, Globe, Mic, PhoneCall, ShieldCheck, Star, Users, Wallet, Menu as MenuIcon, Megaphone, FolderKanban, Gauge, BarChart4, TrendingUp } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { LiquidReveal } from './LiquidReveal';
+import { NavMenu, PageLoader, StartDialog, type NavItem } from './LandingOverlays';
 import {
-  ArrowRight, Sparkles, Boxes, TrendingUp, Users, Bot, ShieldCheck,
-  BarChart4, Megaphone, Wallet, Building2, Gauge, FolderKanban, Mic, PhoneCall,
-} from 'lucide-react';
+  EASE_SNAP, Eyebrow, LineReveal, LogoMark, PillButton, ReadyContext, Reveal, StartContext, WordReveal,
+  goTo, useAdaptiveGrid, useClock, useScrollProgress,
+} from './landing-ui';
 
-const FEATURES = [
-  { icon: TrendingUp, title: 'Unified sales & pipeline', desc: 'Kanban deals, account intelligence and AI-written proposals that close.' },
-  { icon: Megaphone, title: 'Marketing & growth', desc: 'Multi-channel scheduling, paid-campaign ROAS and generative content.' },
-  { icon: Wallet, title: 'Finance & reporting', desc: 'Double-entry ledger, banking reconciliation and one-click financials.' },
-  { icon: Gauge, title: 'Budgeting & forecasting', desc: 'Financial-statement-style budgets with run-rate forecasts and annual budget-vs-actuals reporting.' },
-  { icon: FolderKanban, title: 'Project management', desc: 'Boards, milestones and team assignments with per-project budgets tracked against actual spend.' },
-  { icon: Users, title: 'People & HR', desc: 'Directory, time-off, teams and org planning in one place.' },
-  { icon: Bot, title: 'Agent fleet', desc: 'Specialist AI agents across every department, brain-linked and ready.' },
-  { icon: Mic, title: 'Always-listening voice assistant', desc: 'Hands-free control with wake-word activation — say "Borga" and speak your command.' },
-  { icon: PhoneCall, title: 'AI-voiced outbound calling', desc: 'Agents place real calls over Twilio with natural ElevenLabs voices, logged and tracked automatically.' },
-  { icon: BarChart4, title: 'Live valuation', desc: 'A dynamic, industry-aware valuation model that grows with your data.' },
-  { icon: ShieldCheck, title: 'Secure by default', desc: 'Account authentication, per-company isolation and E2E encrypted chat.' },
-  { icon: Building2, title: 'Multi-company workspaces', desc: 'Run every entity you own as its own scoped, isolated tenant.' },
+const SHELL = 'mx-auto w-full max-w-[88rem]';
+const ACCENT = 'text-[var(--chart-1)]';
+
+const NAV: NavItem[] = [
+  { label: 'Home', id: 'home' },
+  { label: 'Product', id: 'works' },
+  { label: 'Capabilities', id: 'services' },
+  { label: 'Why Borga', id: 'stats' },
+  { label: 'Developers', href: '/developers' },
+  { label: 'Sign in', href: '/login' },
 ];
+
+const CARD_ITEMS = [
+  { caption: 'Sales & pipeline', title: 'Deals that follow themselves up.' },
+  { caption: 'Finance', title: 'Books that reconcile on their own.' },
+  { caption: 'Voice', title: 'Say “Borga” and get it done.' },
+];
+
+const CONNECTS = ['Composio', 'ElevenLabs', 'Twilio', 'Deepgram', 'MailDog', 'Salt Edge', 'Supermemory', 'Fish Audio'];
+
+const MODULES = [
+  { name: 'Sales & Pipeline', cat: 'Sales', n: '01', desc: 'Kanban deals, account intelligence and AI-written proposals, with leads followed up automatically.', tags: ['Pipeline', 'CRM', 'Proposals'] },
+  { name: 'Finance & Reporting', cat: 'Finance', n: '02', desc: 'A double-entry ledger, bank reconciliation, budgeting and one-click financial statements.', tags: ['Ledger', 'Banking', 'Budgets'] },
+  { name: 'Agent Fleet', cat: 'AI', n: '03', desc: 'Specialist agents for every department, each with its own role and playbook, delegated to by priority.', tags: ['Agents', 'Delegation', 'Memory'] },
+  { name: 'Voice & Calling', cat: 'Voice', n: '04', desc: 'A wake-word voice assistant, and agents that place real calls with natural voices.', tags: ['ElevenLabs', 'Twilio', 'Fish Audio'] },
+];
+
+const CAPABILITIES = [
+  { title: 'Marketing & growth', desc: 'Multi-channel scheduling, paid-campaign ROAS and generative content.', icon: Megaphone },
+  { title: 'People & HR', desc: 'Directory, time-off, teams and org planning in one place.', icon: Users },
+  { title: 'Projects & budgets', desc: 'Boards, milestones and per-project budgets tracked against real spend.', icon: FolderKanban },
+  { title: 'Secure by default', desc: 'Account authentication, per-company isolation and encrypted chat.', icon: ShieldCheck },
+];
+
+const MORE = ['Live valuation', 'Support desk & SLAs', 'Multi-company workspaces', 'Developer API & webhooks', 'Knowledge base', 'Email & SMTP'];
 
 const STATS = [
-  { label: 'Departments automated', value: 12 },
-  { label: 'AI agents on fleet', value: 16 },
-  { label: 'Modules included', value: 11 },
+  { value: 12, suffix: '', label: 'Departments automated' },
+  { value: 16, suffix: '', label: 'AI agents on the fleet' },
+  { value: 11, suffix: '', label: 'Modules included' },
+  { value: 2, suffix: '', label: 'Voice engines to choose from' },
 ];
 
-function useCountUp(target: number, ms = 1200) {
-  const [n, setN] = useState(0);
-  useEffect(() => {
-    let raf = 0;
-    const start = performance.now();
-    const tick = (t: number) => {
-      const p = Math.min(1, (t - start) / ms);
-      setN(Math.round(target * (1 - Math.pow(1 - p, 3))));
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target, ms]);
-  return n;
+// ── header ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+function Header({ onMenu }: { onMenu: () => void }) {
+  const ready = useContext(ReadyContext);
+  const clock = useClock();
+  const start = useContext(StartContext);
+  const pick = (it: NavItem) => { if (it.id) goTo(it.id); };
+  return (
+    <header
+      className="absolute inset-x-0 top-0 z-50"
+      style={{ opacity: ready ? 1 : 0, transform: ready ? 'none' : 'translateY(-14px)', transition: 'opacity 700ms cubic-bezier(.22,1,.36,1) 150ms, transform 700ms cubic-bezier(.22,1,.36,1) 150ms' }}
+    >
+      <div className={cn(SHELL, 'flex items-center justify-between gap-6 px-5 py-5 sm:px-8 sm:py-6')}>
+        <button onClick={() => goTo('home')} className="flex items-center gap-2 text-lg font-semibold tracking-tight transition-transform duration-300 hover:scale-[1.04]" style={{ transitionTimingFunction: EASE_SNAP }}>
+          <LogoMark className={cn('text-xl', ACCENT)} /> Borga
+        </button>
+        <nav className="hidden lg:block" aria-label="Primary">
+          <ul className="flex gap-8 text-sm font-medium">
+            {NAV.slice(0, 4).map((it, i) => (
+              <li key={it.label}>
+                <button onClick={() => pick(it)} aria-current={i === 0 ? 'page' : undefined} className="opacity-80 transition duration-300 hover:-translate-y-0.5 hover:opacity-100" style={{ transitionTimingFunction: EASE_SNAP }}>{it.label}</button>
+              </li>
+            ))}
+            <li><Link href="/developers" className="opacity-80 transition duration-300 hover:-translate-y-0.5 hover:opacity-100 inline-block">Developers</Link></li>
+            <li><Link href="/login" className="opacity-80 transition duration-300 hover:-translate-y-0.5 hover:opacity-100 inline-block">Sign in</Link></li>
+          </ul>
+        </nav>
+        <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-3 rounded-[0.875rem] border border-border/80 bg-background/40 px-3 py-2 text-xs text-foreground/70 backdrop-blur-sm md:flex">
+            <span className="text-foreground/45">Local time</span>
+            <span className="min-w-14 font-medium tabular-nums text-foreground">{clock?.time ?? '9:41am'}</span>
+            <span className="text-foreground/30">•</span>
+            <span className="font-medium">{clock?.date ?? '12 March, 2025'}</span>
+          </div>
+          <button onClick={start} className="hidden rounded-full bg-foreground px-4 py-2 text-xs font-semibold text-background transition hover:opacity-90 sm:block">Get started</button>
+          <button onClick={onMenu} className="rounded-[0.875rem] border border-border/80 bg-background/40 backdrop-blur-sm transition hover:bg-background/70" aria-label="Open menu">
+            <span className="flex items-center gap-2 px-4 py-2 text-xs font-medium uppercase tracking-wider transition-transform duration-300 hover:scale-105" style={{ transitionTimingFunction: EASE_SNAP }}>
+              <MenuIcon className="size-3.5" /> <span className="hidden sm:inline">Menu</span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </header>
+  );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
-  const n = useCountUp(value);
+// ── hero ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+function HeroCard() {
+  const [i, setI] = useState(0);
+  const [dir, setDir] = useState(1);
+  const go = (step: number) => { setDir(step); setI((v) => (v + step + CARD_ITEMS.length) % CARD_ITEMS.length); };
+  const item = CARD_ITEMS[i];
   return (
-    <div className="text-center">
-      <div className="text-4xl font-extrabold tracking-tight text-foreground sm:text-5xl">{n}</div>
-      <div className="mt-1 text-xs uppercase tracking-widest text-muted-foreground">{label}</div>
+    <div className="w-full max-w-sm rounded-[1.25rem] bg-background/70 p-2 shadow-sm ring-1 ring-border/70 backdrop-blur-xl lg:w-[19rem]">
+      <div role="button" tabIndex={0} onClick={() => go(1)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(1); } }} className="flex cursor-pointer gap-2 rounded-[0.875rem]" aria-label="Next highlight">
+        <div className="grid aspect-square w-24 place-items-center rounded-[0.875rem] bg-foreground text-3xl text-background"><LogoMark className={ACCENT} /></div>
+        <div className="flex flex-1 flex-col justify-between rounded-[0.875rem] bg-muted/70 p-3">
+          <div className="relative min-h-[3.25rem] overflow-hidden">
+            <div key={i} className="absolute inset-0 motion-safe:animate-[landingSwap_.45s_cubic-bezier(.22,1,.36,1)_both]" style={{ ['--from' as string]: `${dir * 14}px` }}>
+              <p className="text-[0.65rem] font-medium uppercase tracking-wider text-foreground/45">{item.caption}</p>
+              <p className="max-w-32 text-sm font-medium leading-[1.35]">{item.title}</p>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1">{CARD_ITEMS.map((_, n) => <span key={n} className={cn('h-1 rounded-full transition-all duration-300', n === i ? 'w-4 bg-foreground/70' : 'w-1.5 bg-foreground/20')} />)}</div>
+            <div className="flex gap-1">
+              <button onClick={(e) => { e.stopPropagation(); go(-1); }} aria-label="Previous" className="grid size-7 place-items-center rounded-full bg-background text-foreground/70 ring-1 ring-border transition hover:text-foreground"><ArrowRight className="size-3.5 rotate-180" /></button>
+              <button onClick={(e) => { e.stopPropagation(); go(1); }} aria-label="Next" className="grid size-7 place-items-center rounded-full bg-background text-foreground/70 ring-1 ring-border transition hover:text-foreground"><ArrowRight className="size-3.5" /></button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-export function Landing() {
+function Hero() {
+  const start = useContext(StartContext);
   return (
-    <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
-      <style>{`
-        @keyframes borgaFloat { 0%,100% { transform: translateY(0) translateX(0); } 50% { transform: translateY(-26px) translateX(12px); } }
-        @keyframes borgaFloatSlow { 0%,100% { transform: translateY(0); } 50% { transform: translateY(34px); } }
-        @keyframes borgaSpin { to { transform: rotate(360deg); } }
-        @keyframes borgaRise { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes borgaGradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-        .lf-float { animation: borgaFloat 9s ease-in-out infinite; }
-        .lf-float-slow { animation: borgaFloatSlow 12s ease-in-out infinite; }
-        .lf-spin { animation: borgaSpin 28s linear infinite; }
-        .lf-rise { animation: borgaRise 0.8s cubic-bezier(.2,.7,.2,1) both; }
-        .lf-rise-2 { animation: borgaRise 0.8s cubic-bezier(.2,.7,.2,1) 0.12s both; }
-        .lf-rise-3 { animation: borgaRise 0.8s cubic-bezier(.2,.7,.2,1) 0.24s both; }
-        .lf-gradient { background-image: linear-gradient(120deg,#6366f1,#0ea5e9,#059669,#f59e0b,#ec4899); background-size: 300% 300%; animation: borgaGradient 14s ease infinite; }
-      `}</style>
+    <section id="home" className="relative isolate overflow-hidden rounded-b-[2rem] bg-muted">
+      <LiquidReveal className="absolute inset-0 z-0" />
+      <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-background/35 via-transparent to-background/35" />
+      <Reveal gated y={20} delay={300} duration={1100} className="pointer-events-none absolute inset-x-0 bottom-28 z-[1] select-none text-center text-[13rem] font-bold leading-none text-background/40">
+        BORGA
+      </Reveal>
 
-      {/* Animated background orbs — kept at the edges and low opacity so they
-          never wash over the hero content. */}
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="lf-gradient absolute -left-40 -top-40 h-96 w-96 rounded-full opacity-10 blur-3xl lf-float" />
-        <div className="lf-gradient absolute right-[-14rem] top-24 h-[26rem] w-[26rem] rounded-full opacity-[0.06] blur-3xl lf-float-slow" />
-        <div className="absolute bottom-[-14rem] left-1/4 h-80 w-80 rounded-full bg-primary/20 opacity-10 blur-3xl lf-float" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.05),transparent_60%)]" />
+      <div className={cn(SHELL, 'relative z-20 flex flex-col gap-8 px-5 pb-20 pt-28 sm:px-8 lg:grid lg:min-h-[100lvh] lg:grid-cols-12 lg:gap-10 lg:pb-28 lg:pt-36')}>
+        <div className="flex flex-col gap-7 lg:col-span-7">
+          <Reveal gated y={10} delay={200}><span className="inline-flex items-center gap-2 text-sm font-medium text-foreground/70"><span className="size-1.5 rounded-full bg-foreground/50" /> The AI Company OS</span></Reveal>
+          <LineReveal as="h1" gated delay={250} stagger={120} lines={['Run your whole', 'company on one', 'agent-powered OS']} className="max-w-[18ch] text-4xl font-semibold leading-[0.98] tracking-tight sm:text-5xl md:text-6xl" />
+          <Reveal gated delay={650} y={10}>
+            <div className="flex items-center gap-3">
+              <span className={cn('flex gap-0.5', ACCENT)}>{[0, 1, 2, 3, 4].map((n) => <Star key={n} className="size-4 fill-current" />)}</span>
+              <span className="text-sm font-medium text-foreground/70">12 departments, 16 specialist agents</span>
+            </div>
+          </Reveal>
+          <Reveal gated delay={750} y={10}>
+            <div className="flex flex-wrap gap-3">
+              <PillButton arrow="right" onClick={start}>Create your workspace</PillButton>
+              <PillButton variant="outline" onClick={() => goTo('works')}>See the product</PillButton>
+            </div>
+          </Reveal>
+        </div>
+
+        <div className="flex flex-col items-start gap-8 lg:col-span-5 lg:items-end">
+          <Reveal gated delay={400} y={16} scale={0.96} className="w-full max-w-sm lg:w-auto"><HeroCard /></Reveal>
+          <Reveal gated delay={550} y={14} className="w-full max-w-sm lg:w-[19rem]">
+            <p className="mb-3 text-left text-xs font-medium text-foreground/45 lg:text-right">Connects to</p>
+            <ul className="grid grid-cols-2 gap-x-4 gap-y-3">
+              {CONNECTS.map((c) => (
+                <li key={c} className="flex items-center gap-1.5 text-xs text-foreground/70 opacity-70 transition duration-300 hover:-translate-y-0.5 hover:opacity-100">
+                  <CircleDot className="size-3.5 shrink-0 text-foreground/40" /> {c}
+                </li>
+              ))}
+            </ul>
+          </Reveal>
+        </div>
       </div>
 
-      {/* Nav */}
-      <header className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
-        <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg">
-            <Boxes className="h-5 w-5" />
-          </span>
-          <span className="text-lg font-bold tracking-tight">Borga</span>
+      <Reveal gated delay={900} y={0}>
+        <div className={cn(SHELL, 'relative z-20 flex items-center justify-between gap-3 border-t border-foreground/10 px-5 py-5 text-xs font-medium uppercase tracking-tight text-foreground/60 sm:px-8')}>
+          <span>One workspace per company</span>
+          <span className="hidden sm:block">Isolated, encrypted, yours</span>
+          <span className="inline-flex gap-2">Scroll to explore <span>↓</span></span>
         </div>
-        <nav className="hidden items-center gap-8 text-sm text-muted-foreground md:flex">
-          <a href="#features" className="transition-colors hover:text-foreground">Product</a>
-          <a href="#stats" className="transition-colors hover:text-foreground">Why Borga</a>
-          <Link href="/developers" className="transition-colors hover:text-foreground">Developers</Link>
-          <Link href="/login" className="transition-colors hover:text-foreground">Sign in</Link>
-        </nav>
-        <Link href="/signup" className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow transition hover:opacity-90">
-          Get started
-        </Link>
-      </header>
+      </Reveal>
+    </section>
+  );
+}
 
-      {/* Hero */}
-      <section className="relative z-10 mx-auto max-w-7xl px-6 pb-16 pt-12 sm:pt-20">
-        <div className="lf-rise inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-4 py-1.5 text-xs font-medium text-muted-foreground backdrop-blur">
-          <Sparkles className="h-3.5 w-3.5 text-primary" /> The AI Company OS — now with accounts & onboarding
-        </div>
-        <h1 className="lf-rise-2 mt-6 max-w-4xl text-5xl font-extrabold leading-[1.05] tracking-tight sm:text-7xl">
-          Run your whole company on one{' '}
-          <span className="lf-gradient bg-clip-text text-transparent">agent-powered</span> operating system.
-        </h1>
-        <p className="lf-rise-2 mt-6 max-w-2xl text-lg text-muted-foreground">
-          Borga unifies sales, marketing, finance, HR, communications and a live company valuation —
-          scoped per workspace, grounded by a knowledge base your agents actually use.
-        </p>
-        <div className="lf-rise-3 mt-9 flex flex-wrap items-center gap-4">
-          <Link href="/signup" className="group inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-lg transition hover:opacity-90">
-            Create your workspace
-            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-          </Link>
-          <Link href="/login" className="inline-flex items-center gap-2 rounded-full border border-border px-6 py-3 text-sm font-semibold transition hover:bg-card">
-            I already have an account
-          </Link>
-        </div>
+// ── about / band ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-        {/* floating chip row */}
-        <div className="lf-rise-3 mt-12 flex flex-wrap gap-3 text-sm">
-          {['AI agents', 'Voice control', 'Outbound calling', 'Budgeting', 'Valuation model', 'E2E chat', 'Multi-company'].map((c) => (
-            <span key={c} className="rounded-full border border-border bg-card/50 px-3 py-1.5 text-muted-foreground backdrop-blur">
-              {c}
-            </span>
+function About() {
+  return (
+    <section id="about" className="bg-background">
+      <div className={cn(SHELL, 'grid items-center gap-12 px-5 py-20 sm:px-8 lg:grid-cols-2 lg:py-28')}>
+        <div className="relative min-h-56 lg:min-h-80">
+          <Globe className="absolute -left-4 top-1/2 size-48 -translate-y-1/2 text-foreground/10 sm:size-64 lg:-left-6 lg:size-80" strokeWidth={1.2} aria-hidden />
+          <div className="relative"><Eyebrow>The platform</Eyebrow></div>
+          <Reveal y={12} className="absolute bottom-0 left-0 flex items-center gap-3 text-sm text-foreground/70">
+            <Globe className="size-6 text-foreground" />
+            <span className="max-w-56">Every company you own, as its own isolated workspace.</span>
+          </Reveal>
+        </div>
+        <div className="flex flex-col gap-10">
+          <WordReveal
+            className="text-2xl font-medium leading-[1.35] tracking-tight sm:text-3xl"
+            parts={[
+              { text: 'Borga unifies sales, marketing, finance, HR and communications, ' },
+              { text: 'run by agents, scoped per workspace, and grounded by a knowledge base they actually use.', className: 'text-muted-foreground' },
+            ]}
+          />
+          <Reveal y={12} delay={200}>
+            <div className="flex flex-wrap items-end justify-between gap-6 border-t border-border pt-6">
+              <div>
+                <p className="mb-2 text-sm text-foreground/45">Build on it</p>
+                <div className="flex gap-2">
+                  {[Bot, Building2, Wallet].map((Ic, n) => (
+                    <span key={n} className={cn('grid size-9 place-items-center rounded-full text-sm', n === 0 ? 'bg-foreground text-background' : 'bg-muted text-foreground/70')}>
+                      <Ic className="size-4 transition-transform duration-300 hover:scale-[1.18]" />
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <PillButton variant="outline" arrow="right" href="/developers">Developers</PillButton>
+            </div>
+          </Reveal>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CreateBand() {
+  const tiles: Array<{ node: ReactNode; cls: string }> = [
+    { node: 'Ask', cls: 'bg-muted text-foreground' },
+    { node: 'Delegate', cls: 'bg-gradient-to-br from-[var(--chart-1)] to-[var(--chart-1)]/70 text-background' },
+    { node: <ArrowRight className="size-9 sm:size-12" />, cls: 'bg-foreground text-background' },
+    { node: 'Done', cls: 'bg-muted/60 text-foreground/35' },
+  ];
+  return (
+    <section className="bg-background">
+      <ul className={cn(SHELL, 'flex flex-col gap-3 px-5 py-10 sm:flex-row sm:gap-4 sm:px-8')}>
+        {tiles.map((t, i) => (
+          <Reveal as="li" key={i} y={28} delay={i * 120} className="flex-1">
+            <div className={cn('grid h-24 place-items-center rounded-full text-3xl font-medium transition-transform duration-300 hover:scale-[1.03] sm:h-40 sm:text-4xl', t.cls)} style={{ transitionTimingFunction: EASE_SNAP }}>{t.node}</div>
+          </Reveal>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ── product / capabilities ───────────────────────────────────────────────────────────────────────────────────────────
+
+function Modules() {
+  return (
+    <section id="works" className="bg-background">
+      <div className={cn(SHELL, 'px-5 pb-20 pt-10 sm:px-8 lg:pb-28')}>
+        <Reveal className="flex justify-center"><Eyebrow bordered>Product</Eyebrow></Reveal>
+        <LineReveal delay={120} lines={['One OS, every module']} className="mx-auto mt-5 w-fit text-center text-4xl font-semibold tracking-tight sm:text-5xl" />
+        <ul className="mt-12 grid gap-6 md:grid-cols-2">
+          {MODULES.map((m, i) => (
+            <Reveal as="li" key={m.name} y={48} delay={i * 90}>
+              <Link href="/signup" className="group block">
+                <article className="relative min-h-[22rem] overflow-hidden rounded-[2rem] bg-foreground p-6 text-background ring-1 ring-background/5 transition-transform duration-300 group-hover:-translate-y-2 group-hover:scale-[1.012] sm:min-h-[26rem] sm:p-8" style={{ transitionTimingFunction: EASE_SNAP }}>
+                  <div className="flex justify-between text-xs uppercase tracking-tight text-background/45">
+                    <span>{m.cat} — Module {m.n}</span>
+                    <span className="grid size-11 place-items-center rounded-full bg-background/10 text-background ring-1 ring-background/15 transition-transform duration-300 group-hover:rotate-45 group-hover:scale-[1.08]"><ArrowUpRight className="size-4" /></span>
+                  </div>
+                  <div className="pointer-events-none absolute inset-0 grid place-items-center">
+                    <span className="relative text-7xl text-background/90"><LogoMark /></span>
+                  </div>
+                  <div className="absolute inset-x-6 bottom-6 sm:inset-x-8 sm:bottom-8">
+                    <h3 className="text-2xl font-medium tracking-tight sm:text-3xl">{m.name}</h3>
+                    <p className="mt-2 max-w-md text-sm text-background/55">{m.desc}</p>
+                    <div className="mt-5 flex flex-wrap gap-2">
+                      {m.tags.map((t) => <span key={t} className="inline-flex rounded-full border border-background/25 px-4 py-2 text-sm text-background">{t}</span>)}
+                    </div>
+                  </div>
+                </article>
+              </Link>
+            </Reveal>
           ))}
-        </div>
-      </section>
+        </ul>
+      </div>
+    </section>
+  );
+}
 
-      {/* Stats */}
-      <section id="stats" className="mx-auto max-w-5xl px-6 py-10">
-        <div className="grid grid-cols-3 gap-6 rounded-3xl border border-border bg-card/40 p-8 backdrop-blur">
-          {STATS.map((s) => <Stat key={s.label} {...s} />)}
-        </div>
-      </section>
+function Capabilities() {
+  return (
+    <section id="services" className="bg-background">
+      <div className={cn(SHELL, 'px-5 py-20 sm:px-8 lg:py-28')}>
+        <Reveal><Eyebrow>Capabilities</Eyebrow></Reveal>
+        <LineReveal delay={120} lines={['Everything a company runs on']} className="mb-12 mt-5 max-w-[16ch] text-4xl font-semibold tracking-tight sm:mb-14 sm:text-5xl" />
+        <ul>
+          {CAPABILITIES.map((c, i) => (
+            <Reveal as="li" key={c.title} y={24} delay={i * 80} className={cn(i > 0 && 'border-t border-border')}>
+              <Link href="/signup" className="group/row flex items-center gap-4 rounded-[1.25rem] bg-transparent px-6 py-6 transition-all duration-300 hover:bg-muted hover:pl-8 hover:pr-5 sm:gap-6 sm:py-8" style={{ transitionTimingFunction: EASE_SNAP }}>
+                <span className="w-7 text-sm font-medium text-foreground/40 sm:w-10">{String(i + 1).padStart(2, '0')}</span>
+                <h3 className="flex-1 text-2xl font-medium tracking-tight sm:text-3xl md:text-4xl">{c.title}</h3>
+                <p className="hidden max-w-xs text-sm text-foreground/55 lg:block">{c.desc}</p>
+                <span className="grid size-10 place-items-center rounded-full bg-foreground text-background transition-transform duration-300 group-hover/row:translate-x-[5px] sm:size-12"><ArrowUpRight className="size-4" /></span>
+              </Link>
+            </Reveal>
+          ))}
+        </ul>
+        <Reveal y={16} delay={150} className="mt-10 flex flex-wrap gap-2">
+          {MORE.map((m) => <span key={m} className="rounded-full border border-border px-4 py-2 text-sm text-foreground/70">{m}</span>)}
+        </Reveal>
+      </div>
+    </section>
+  );
+}
 
-      {/* Features */}
-      <section id="features" className="mx-auto max-w-7xl px-6 py-14">
-        <div className="mb-10 text-center">
-          <h2 className="text-3xl font-extrabold tracking-tight sm:text-4xl">One OS. Every operational area.</h2>
-          <p className="mt-3 text-muted-foreground">Expanded KPIs and workflows across all twelve functional departments.</p>
+function Stat({ value, suffix, label, delay }: { value: number; suffix: string; label: string; delay: number }) {
+  const { ref, p } = useScrollProgress<HTMLDivElement>();
+  return (
+    <Reveal as="li" y={20} delay={delay}>
+      <div ref={ref}>
+        <div className="text-5xl font-semibold tracking-tight sm:text-6xl md:text-7xl">{Math.round(p * value)}{suffix}</div>
+        <div className="mt-3 text-sm text-background/55">{label}</div>
+      </div>
+    </Reveal>
+  );
+}
+
+function Stats() {
+  return (
+    <section id="stats" className="bg-background">
+      <div className={cn(SHELL, 'px-5 pb-20 sm:px-8 lg:pb-28')}>
+        <Reveal y={40} scale={0.99} duration={900} className="rounded-[2rem] bg-foreground px-6 py-12 text-background sm:py-16 md:px-16">
+          <Eyebrow tone="light">By the numbers</Eyebrow>
+          <LineReveal delay={120} lines={['One platform, every department.']} className="mt-4 max-w-[20ch] text-3xl font-medium tracking-tight md:text-4xl" />
+          <ul className="mt-14 grid grid-cols-2 gap-x-8 gap-y-12 lg:grid-cols-4">
+            {STATS.map((s, i) => <Stat key={s.label} {...s} delay={i * 90} />)}
+          </ul>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+// ── footer ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+function Footer() {
+  const start = useContext(StartContext);
+  const cols: Array<{ title: string; links: Array<{ label: string; href?: string; id?: string }> }> = [
+    { title: 'Product', links: [{ label: 'Modules', id: 'works' }, { label: 'Capabilities', id: 'services' }, { label: 'Why Borga', id: 'stats' }] },
+    { title: 'Build', links: [{ label: 'Developers', href: '/developers' }, { label: 'API & webhooks', href: '/developers' }] },
+    { title: 'Account', links: [{ label: 'Create a workspace', href: '/signup' }, { label: 'Sign in', href: '/login' }, { label: 'Reset password', href: '/forgot' }] },
+  ];
+  const linkCls = 'inline-block text-sm transition duration-300 opacity-65 hover:translate-x-1 hover:opacity-100';
+  return (
+    <footer className="relative overflow-hidden rounded-t-[2rem] bg-foreground text-background">
+      <div className={cn(SHELL, 'relative z-10 px-5 pb-10 pt-20 sm:px-8 lg:pt-24')}>
+        <div className="flex flex-col gap-8 border-b border-background/10 pb-16 lg:flex-row lg:items-end lg:justify-between">
+          <LineReveal stagger={100} lines={['Ready to run your', 'company on Borga?']} className="max-w-[16ch] text-4xl font-semibold tracking-tight sm:text-5xl md:text-6xl" />
+          <PillButton variant="light" arrow="up-right" onClick={start}>Start your workspace</PillButton>
         </div>
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {FEATURES.map((f, i) => (
-            <div key={f.title} className="lf-rise group rounded-2xl border border-border bg-card/50 p-5 transition hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl" style={{ animationDelay: `${i * 60}ms` }}>
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <f.icon className="h-5 w-5" />
-              </span>
-              <h3 className="mt-4 font-semibold">{f.title}</h3>
-              <p className="mt-1.5 text-sm text-muted-foreground">{f.desc}</p>
+        <div className="grid gap-12 py-16 md:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <div className="mb-4 flex items-center gap-2 text-lg font-semibold"><LogoMark className="text-xl" /> Borga</div>
+            <p className="max-w-xs text-sm text-background/55">An AI company OS: sales, finance, people and communications, run by agents you can talk to.</p>
+          </div>
+          {cols.map((c) => (
+            <div key={c.title}>
+              <p className="mb-4 text-xs uppercase tracking-tight text-background/40">{c.title}</p>
+              <ul className="flex flex-col gap-3">
+                {c.links.map((l) => (
+                  <li key={l.label}>
+                    {l.href ? <Link href={l.href} className={linkCls}>{l.label}</Link> : <button onClick={() => goTo(l.id as string)} className={linkCls}>{l.label}</button>}
+                  </li>
+                ))}
+              </ul>
             </div>
           ))}
         </div>
-      </section>
-
-      {/* CTA */}
-      <section className="mx-auto max-w-7xl px-6 pb-24">
-        <div className="lf-gradient relative overflow-hidden rounded-3xl p-10 text-center text-white shadow-2xl sm:p-16">
-          <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/20 lf-spin" />
-          <h2 className="relative text-3xl font-extrabold tracking-tight sm:text-4xl">Start your company OS today.</h2>
-          <p className="relative mt-3 text-white/80">Free to start. Your data stays isolated to your account.</p>
-          <Link href="/signup" className="relative mt-7 inline-flex items-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-semibold text-primary shadow transition hover:opacity-90">
-            Get started <ArrowRight className="h-4 w-4" />
-          </Link>
+        <div className="flex flex-col items-center justify-between gap-4 border-t border-background/10 pt-8 text-xs text-background/45 sm:flex-row">
+          <span>© {new Date().getFullYear()} Borga. All rights reserved.</span>
+          <span className="inline-flex items-center gap-1.5"><Mic className="size-3.5" /> <PhoneCall className="size-3.5" /> <BarChart4 className="size-3.5" /> <Gauge className="size-3.5" /> <TrendingUp className="size-3.5" /></span>
         </div>
-      </section>
+      </div>
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 -bottom-6 z-0 select-none text-center text-[13rem] font-bold leading-none text-background/5">BORGA</div>
+    </footer>
+  );
+}
 
-      <footer className="border-t border-border py-8 text-center text-xs text-muted-foreground">
-        Borga — AI Company OS. Built for operators who want their whole business in one place.
-        <span className="mx-2">·</span>
-        <Link href="/developers" className="transition-colors hover:text-foreground">API & Developers</Link>
-      </footer>
-    </main>
+// ── page ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export function Landing() {
+  useAdaptiveGrid();
+  const [ready, setReady] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const [start, setStart] = useState(false);
+  const closeMenu = useCallback(() => setMenu(false), []);
+  const closeStart = useCallback(() => setStart(false), []);
+  const openStart = useCallback(() => setStart(true), []);
+  useEffect(() => { window.scrollTo(0, 0); }, []);
+
+  return (
+    <ReadyContext.Provider value={ready}>
+      <StartContext.Provider value={openStart}>
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[60] focus:rounded-[0.875rem] focus:bg-foreground focus:px-4 focus:py-2 focus:text-sm focus:text-background">Skip to content</a>
+        {!ready && <PageLoader onDone={() => setReady(true)} />}
+        <Header onMenu={() => setMenu(true)} />
+        <main id="main" className="min-h-screen overflow-x-hidden bg-background text-foreground">
+          <Hero />
+          <About />
+          <CreateBand />
+          <Modules />
+          <Capabilities />
+          <Stats />
+        </main>
+        <Footer />
+        <NavMenu open={menu} items={[...NAV, { label: 'Start your workspace', start: true }]} onClose={closeMenu} onStart={openStart} />
+        <StartDialog open={start} onClose={closeStart} />
+      </StartContext.Provider>
+    </ReadyContext.Provider>
   );
 }
