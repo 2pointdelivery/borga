@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { paymentRequired } from '@/lib/borga/billing-server';
-import { elevenLabsKey } from '@/lib/borga/provider-keys';
+import { elevenLabsKey, fishCredentials } from '@/lib/borga/provider-keys';
 import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
@@ -16,8 +16,10 @@ export async function POST(req: NextRequest) {
   let text = '';
   let voiceId = DEFAULT_VOICE_ID;
   let ws: string | null = null;
+  let engine = '';
   try {
-    const body = (await req.json()) as { text?: string; voiceId?: string; ws?: string };
+    const body = (await req.json()) as { text?: string; voiceId?: string; ws?: string; engine?: string };
+    engine = body.engine === 'fish' || body.engine === 'elevenlabs' ? body.engine : '';
     text = (body.text ?? '').trim();
     voiceId = (body.voiceId ?? '').trim() || DEFAULT_VOICE_ID;
     ws = typeof body.ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(body.ws) ? body.ws : null;
@@ -38,9 +40,30 @@ export async function POST(req: NextRequest) {
     const unpaid = await paymentRequired(userId, ws);
     if (unpaid) return NextResponse.json({ error: unpaid.error }, { status: 402 });
   }
-  const apiKey = await elevenLabsKey(userId, ws);
+  // Which engine speaks: the one asked for, else ElevenLabs when the company has it, else Fish Audio.
+  const fish = engine === 'elevenlabs' ? null : await fishCredentials(userId, ws);
+  const apiKey = engine === 'fish' ? '' : await elevenLabsKey(userId, ws);
+  if (fish && (engine === 'fish' || !apiKey)) {
+    try {
+      const upstream = await fetch('https://api.fish.audio/v1/tts', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fish.apiKey}`, 'Content-Type': 'application/json', model: 's1' },
+        body: JSON.stringify({ text, format: 'mp3', ...(fish.voiceId ? { reference_id: fish.voiceId } : {}) }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!upstream.ok) {
+        const errText = await upstream.text().catch(() => '');
+        console.error('Fish Audio TTS error', upstream.status, errText.slice(0, 200));
+        return NextResponse.json({ error: `Fish Audio API error: ${upstream.status}.` }, { status: 502 });
+      }
+      const audio = await upstream.arrayBuffer();
+      return new NextResponse(audio, { status: 200, headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': String(audio.byteLength), 'Cache-Control': 'private, max-age=3600' } });
+    } catch {
+      return NextResponse.json({ error: 'Fish Audio service unreachable.' }, { status: 503 });
+    }
+  }
   if (!apiKey) {
-    return NextResponse.json({ error: 'ELEVENLABS not configured' }, { status: 501 });
+    return NextResponse.json({ error: 'No voice service is set up (ElevenLabs or Fish Audio, under Integrations → Connections).' }, { status: 501 });
   }
 
   try {

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
-import { elevenLabsKey } from '@/lib/borga/provider-keys';
+import { elevenLabsKey, fishCredentials } from '@/lib/borga/provider-keys';
 import { getConnection } from '@/lib/borga/connections-server';
 import { parseVoices, type VoiceInfo } from '@/lib/borga/voice-ids';
 
@@ -26,25 +26,26 @@ export async function GET(req: NextRequest) {
   const off = await featureGate('voice', userId, ws);
   if (off) return off;
 
+  const fish = !!(await fishCredentials(userId, ws));
   const key = await elevenLabsKey(userId, ws);
-  if (!key) return NextResponse.json({ ok: true, configured: false, source: null, voices: [] });
+  if (!key) return NextResponse.json({ ok: true, fish, configured: false, source: null, voices: [] });
   const source = (await getConnection(userId, ws, 'elevenlabs'))?.apiKey ? 'company' : 'shared';
 
   const ck = createHash('sha256').update(key).digest('hex');
   const hit = cache.get(ck);
   if (hit && Date.now() - hit.at < TTL_MS && new URL(req.url).searchParams.get('refresh') !== '1') {
-    return NextResponse.json({ ok: true, configured: true, source, voices: hit.voices });
+    return NextResponse.json({ ok: true, fish, configured: true, source, voices: hit.voices });
   }
   try {
     const res = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': key }, signal: AbortSignal.timeout(10_000) });
     if (res.status === 401 || res.status === 403) {
-      return NextResponse.json({ ok: true, configured: false, keyInvalid: true, source, voices: [], error: 'ElevenLabs rejected the API key. Check it was copied in full.' });
+      return NextResponse.json({ ok: true, fish, configured: false, keyInvalid: true, source, voices: [], error: 'ElevenLabs rejected the API key. Check it was copied in full.' });
     }
-    if (!res.ok) return NextResponse.json({ ok: true, configured: true, source, voices: hit?.voices ?? [], error: `ElevenLabs answered ${res.status}. Try again shortly.` });
+    if (!res.ok) return NextResponse.json({ ok: true, fish, configured: true, source, voices: hit?.voices ?? [], error: `ElevenLabs answered ${res.status}. Try again shortly.` });
     const voices = parseVoices(await res.json());
     cache.set(ck, { at: Date.now(), voices });
-    return NextResponse.json({ ok: true, configured: true, source, voices });
+    return NextResponse.json({ ok: true, fish, configured: true, source, voices });
   } catch {
-    return NextResponse.json({ ok: true, configured: true, source, voices: hit?.voices ?? [], error: 'Could not reach ElevenLabs. Try again shortly.' });
+    return NextResponse.json({ ok: true, fish, configured: true, source, voices: hit?.voices ?? [], error: 'Could not reach ElevenLabs. Try again shortly.' });
   }
 }

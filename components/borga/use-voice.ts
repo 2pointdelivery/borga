@@ -217,7 +217,7 @@ export function useVoice() {
           const res = await fetch('/api/borga/voice/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-            body: JSON.stringify({ text, voiceId: elevenVoiceId(elevenlabs.voice), ws: activeWorkspaceId }),
+            body: JSON.stringify({ text, voiceId: elevenVoiceId(elevenlabs.voice), engine: elevenlabs.engine, ws: activeWorkspaceId }),
           });
           if (res.ok && res.headers.get('content-type')?.startsWith('audio/')) {
             const blob = await res.blob();

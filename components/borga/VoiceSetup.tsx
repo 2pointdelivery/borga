@@ -44,6 +44,9 @@ export function VoiceSetup({ onChosen, showListening = true, inlineKey = true }:
   useEffect(() => () => { audioRef.current?.pause(); }, []);
 
   const configured = setup.configured;
+  const fishOn = setup.fish;
+  const speaksWell = configured || fishOn; // a real voice service, not the browser's
+  const engine = elevenlabs.engine === 'fish' && fishOn ? 'fish' : configured ? 'elevenlabs' : fishOn ? 'fish' : 'browser';
   const liveVoices = setup.voices;
   // before the account's list loads (or without a key) show the premade names so the picker is never empty, marked as such
   const options = liveVoices.length
@@ -66,16 +69,16 @@ export function VoiceSetup({ onChosen, showListening = true, inlineKey = true }:
     stop();
     setNote(null);
     setPlaying(true);
-    if (!configured) { browserSample(); return; }
+    if (!speaksWell) { browserSample(); return; }
     try {
       const res = await fetch('/api/borga/voice/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ text: SAMPLE, voiceId: resolveVoiceRef(elevenlabs.voice), ws }),
+        body: JSON.stringify({ text: SAMPLE, voiceId: resolveVoiceRef(elevenlabs.voice), engine: engine === 'browser' ? undefined : engine, ws }),
       });
       if (!res.ok || !res.headers.get('content-type')?.startsWith('audio/')) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
-        setNote(`ElevenLabs could not speak the sample (${j.error ?? res.status}). The browser voice is used instead.`);
+        setNote(`The voice service could not speak the sample (${j.error ?? res.status}). The browser voice is used instead.`);
         browserSample();
         return;
       }
@@ -125,6 +128,17 @@ export function VoiceSetup({ onChosen, showListening = true, inlineKey = true }:
         )}
       </div>
 
+      {configured && fishOn && (
+        <div className="rounded-lg border px-3 py-2.5">
+          <Label className="text-xs text-muted-foreground">Voice service</Label>
+          <select value={engine} onChange={(e) => { setElevenlabs({ engine: e.target.value as 'elevenlabs' | 'fish' }); chosen(); }} className={SELECT} aria-label="Voice service">
+            <option value="elevenlabs">ElevenLabs (also used for phone calls)</option>
+            <option value="fish">Fish Audio</option>
+          </select>
+        </div>
+      )}
+      {!configured && fishOn && <p className="text-xs text-muted-foreground">Fish Audio is set up and speaks for the assistant. Its voice is the Voice ID saved in Connections.</p>}
+
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <Label className="text-xs text-muted-foreground">Agent voice</Label>
@@ -164,10 +178,10 @@ export function VoiceSetup({ onChosen, showListening = true, inlineKey = true }:
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="outline" onClick={() => (playing ? stop() : void hear())} disabled={!configured && !canSpeak}>
+        <Button variant="outline" onClick={() => (playing ? stop() : void hear())} disabled={!speaksWell && !canSpeak}>
           {playing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />} {playing ? 'Stop' : 'Hear a sample'}
         </Button>
-        <span className="text-xs text-muted-foreground">{configured ? 'Plays the chosen ElevenLabs voice.' : 'Plays the browser voice.'}</span>
+        <span className="text-xs text-muted-foreground">{engine === 'fish' ? 'Plays the Fish Audio voice set in Connections.' : engine === 'elevenlabs' ? 'Plays the chosen ElevenLabs voice.' : 'Plays the browser voice.'}</span>
       </div>
       {note && <p className="text-xs text-amber-600">{note}</p>}
       {!canSpeak && !configured && <p className="text-xs text-amber-600">This browser cannot speak. Voice works best in Chrome, Edge or Safari.</p>}

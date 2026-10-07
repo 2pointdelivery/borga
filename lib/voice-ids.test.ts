@@ -42,3 +42,16 @@ test('a saved voice counts as present when the account has it, by id or by its o
   assert.equal(voiceInList('JBFqnCBsd6RMkjVDRZzb', list), true);
   assert.equal(voiceInList('rachel', list), false);
 });
+
+import { PROVIDERS } from './borga/providers';
+import { runProviderTest } from './borga/provider-tests';
+
+test('Fish Audio has a place for the key and the voice id, and its check reports the real answer', async () => {
+  const def = PROVIDERS.find((p) => p.id === 'fish');
+  assert.deepEqual(def?.fields.map((f) => f.key), ['apiKey', 'voiceId']);
+  const reply = (status: number) => (async () => new Response('{}', { status })) as unknown as typeof fetch;
+  assert.match((await runProviderTest('fish', { apiKey: 'k' }, reply(401))).message, /rejected/);
+  assert.equal((await runProviderTest('fish', { apiKey: 'k' }, reply(200))).ok, true);
+  const missingVoice = (async (url: string) => new Response('{}', { status: String(url).includes('/model/') ? 404 : 200 })) as unknown as typeof fetch;
+  assert.match((await runProviderTest('fish', { apiKey: 'k', voiceId: 'abcdef123456' }, missingVoice)).message, /no voice/);
+});

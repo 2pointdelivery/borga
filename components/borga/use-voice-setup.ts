@@ -9,6 +9,7 @@ export const VOICE_CHANGED = 'borga:voice-setup-changed';
 interface VoicesAnswer {
   ok?: boolean;
   configured?: boolean;
+  fish?: boolean;
   keyInvalid?: boolean;
   source?: 'company' | 'shared' | null;
   voices?: VoiceInfo[];
@@ -24,8 +25,8 @@ export function useVoiceSetup(opts: { sync?: boolean } = {}) {
   const loaded = useBorga((s) => s.loadedWorkspaceId);
   const connected = useBorga((s) => s.elevenlabs.connected);
   const setElevenlabs = useBorga((s) => s.setElevenlabs);
-  const [state, setState] = useState<{ loading: boolean; configured: boolean; keyInvalid: boolean; source: 'company' | 'shared' | null; voices: VoiceInfo[]; error?: string }>({
-    loading: true, configured: false, keyInvalid: false, source: null, voices: [],
+  const [state, setState] = useState<{ loading: boolean; configured: boolean; fish: boolean; keyInvalid: boolean; source: 'company' | 'shared' | null; voices: VoiceInfo[]; error?: string }>({
+    loading: true, configured: false, fish: false, keyInvalid: false, source: null, voices: [],
   });
 
   const refresh = useCallback(async (force = false) => {
@@ -35,7 +36,7 @@ export function useVoiceSetup(opts: { sync?: boolean } = {}) {
       const r = await fetch(`/api/borga/voices?ws=${encodeURIComponent(ws)}${force ? '&refresh=1' : ''}`, { cache: 'no-store' });
       const j = (await r.json()) as VoicesAnswer;
       if (!j.ok) { setState((s) => ({ ...s, loading: false, error: j.error })); return; }
-      setState({ loading: false, configured: !!j.configured, keyInvalid: !!j.keyInvalid, source: j.source ?? null, voices: j.voices ?? [], error: j.error });
+      setState({ loading: false, configured: !!j.configured, fish: !!j.fish, keyInvalid: !!j.keyInvalid, source: j.source ?? null, voices: j.voices ?? [], error: j.error });
     } catch {
       setState((s) => ({ ...s, loading: false, error: 'Could not check ElevenLabs.' }));
     }
@@ -52,8 +53,10 @@ export function useVoiceSetup(opts: { sync?: boolean } = {}) {
   const syncFlag = opts.sync !== false;
   useEffect(() => {
     if (!syncFlag || state.loading) return;
-    if (state.configured !== connected) setElevenlabs({ connected: state.configured, lastSync: state.configured ? 'Key verified' : '…' });
-  }, [syncFlag, state.loading, state.configured, connected, setElevenlabs]);
+    // "connected" means a spoken-voice service is ready: ElevenLabs or Fish Audio
+    const ready = state.configured || state.fish;
+    if (ready !== connected) setElevenlabs({ connected: ready, lastSync: ready ? 'Key verified' : '…' });
+  }, [syncFlag, state.loading, state.configured, state.fish, connected, setElevenlabs]);
 
   return { ...state, refresh };
 }

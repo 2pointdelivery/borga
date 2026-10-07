@@ -1210,10 +1210,6 @@ export const LLM_PROVIDERS: LlmProvider[] = [
   },
 ];
 
-export const VOICE_PROVIDERS: { id: string; label: string; kind: string; accent: string }[] = [
-  { id: 'voice-elevenlabs', label: 'ElevenLabs', kind: 'Text-to-speech — 100+ voices', accent: '#000000' },
-  { id: 'voice-fish', label: 'Fish Audio', kind: 'Text-to-speech — Fish Bowl models', accent: '#22C55E' },
-];
 
 export type EmailAppStatus = 'connected' | 'connecting' | 'off';
 export interface EmailApp {
@@ -1231,7 +1227,8 @@ export const EMAIL_APPS: EmailApp[] = [
 ];
 
 /** Connection cards that belonged to the retired demo and local-model providers. Older companies still have them saved. */
-export const RETIRED_CONNECTION_IDS: string[] = ['cn-demo', 'cn-ollama'];
+/** (cn-elevenlabs and cn-fish were voice cards with no key behind them: voice credentials live in Integrations → Connections.) */
+export const RETIRED_CONNECTION_IDS: string[] = ['cn-demo', 'cn-ollama', 'cn-elevenlabs', 'cn-fish'];
 
 /**
  * Saved connection cards without the retired ones ("Demo (no key)" was always shown as connected, though it was never a real
@@ -1258,8 +1255,6 @@ export const INITIAL_CONNECTIONS: AppConnection[] = [
   { id: 'cn-openai', type: 'llm', provider: 'openai', label: 'OpenAI', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },
   { id: 'cn-openrouter', type: 'llm', provider: 'openrouter', label: 'OpenRouter', status: 'off', account: '', scopes: 'chat completions', lastSync: '…' },
   { id: 'cn-custom', type: 'llm', provider: 'custom', label: 'Custom endpoint', status: 'off', account: '', scopes: 'chat completions — OpenAI-compatible', lastSync: '…' },
-  { id: 'cn-elevenlabs', type: 'voice', provider: 'elevenlabs', label: 'ElevenLabs', status: 'off', account: '', scopes: 'text-to-speech — outbound calls', lastSync: '…' },
-  { id: 'cn-fish', type: 'voice', provider: 'fish', label: 'Fish Audio', status: 'off', account: '', scopes: 'text-to-speech', lastSync: '…' },
   { id: 'cn-whatsapp', type: 'tool', provider: 'whatsapp', label: 'WhatsApp Business', status: 'off', account: '', scopes: 'send, receive, templates', lastSync: '…' },
 ];
 
@@ -1831,6 +1826,8 @@ export interface ElevenLabsConfig {
   lastSync: string;
   /** A voice per agent (agent id -> ElevenLabs voice id). Agents without one use `voice`. */
   agentVoices?: Record<string, string>;
+  /** Which service speaks when the company has both ElevenLabs and Fish Audio. Unset: ElevenLabs. */
+  engine?: 'elevenlabs' | 'fish';
 }
 
 export const ELEVENLABS_VOICES: { id: string; label: string; tag: string }[] = [

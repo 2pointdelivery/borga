@@ -157,6 +157,17 @@ async function testDeepgram(v: Record<string, string>, f: Fetch): Promise<TestRe
   return { ok: true, message: 'Connected to Deepgram.' };
 }
 
+async function testFish(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, 'https://api.fish.audio/wallet/self/api-credit', { headers: { Authorization: `Bearer ${v.apiKey}` } });
+  if (r.status === 401 || r.status === 403) return { ok: false, message: 'Fish Audio rejected the API key.' };
+  if (r.status >= 400) return { ok: false, message: `Fish Audio answered ${r.status}.` };
+  if (v.voiceId) {
+    const m = await getJson(f, `https://api.fish.audio/model/${encodeURIComponent(v.voiceId)}`, { headers: { Authorization: `Bearer ${v.apiKey}` } });
+    if (m.status === 404) return { ok: false, message: 'The key works, but Fish Audio has no voice with that ID.' };
+  }
+  return { ok: true, message: v.voiceId ? 'Connected to Fish Audio and the voice was found.' : 'Connected to Fish Audio (default voice).' };
+}
+
 export async function runProviderTest(id: ProviderId, values: Record<string, string>, f: Fetch = fetch): Promise<TestResult> {
   try {
     switch (id) {
@@ -169,6 +180,7 @@ export async function runProviderTest(id: ProviderId, values: Record<string, str
       case 'smtp': return await testSmtp(values);
       case 'elevenlabs': return await testElevenLabs(values, f);
       case 'deepgram': return await testDeepgram(values, f);
+      case 'fish': return await testFish(values, f);
       case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
       case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
     }

@@ -24,7 +24,6 @@ import {
   RefreshCw,
   ExternalLink,
   Lock,
-  Phone,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -33,7 +32,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useBorga } from '@/lib/borga/store';
 import { useComposioReady } from '../use-composio-ready';
-import { LLM_PROVIDERS, VOICE_PROVIDERS, EMAIL_APPS, COMPOSIO_TOOLKITS, type AppConnection, type EmailApp, type Toolkit } from '@/lib/borga/data';
+import { LLM_PROVIDERS, EMAIL_APPS, COMPOSIO_TOOLKITS, type AppConnection, type EmailApp, type Toolkit } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { ModelCatalogEditor } from './ModelCatalogEditor';
@@ -99,10 +98,6 @@ const LLM_KEY_MAP: Record<string, { envVar: string; label: string; kind: 'key' |
     envVar: 'LLM_BASE_URL', label: 'Base URL', kind: 'url', hint: 'e.g. http://localhost:8000/v1',
     extra: { envVar: 'LLM_API_KEY', label: 'API key', kind: 'key', hint: 'Bearer token for your endpoint' },
   },
-};
-
-const VOICE_KEY_MAP: Record<string, { envVar: string; label: string; hint: string }> = {
-  'voice-elevenlabs': { envVar: 'ELEVENLABS_API_KEY', label: 'API key', hint: 'elevenlabs.io/app/api-key' },
 };
 
 /** The model a card shows before the user picks one: the first free model, else the first model. */
@@ -876,19 +871,8 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     }
   };
 
-  const handleVoiceKeySaved = (providerId: string) => {
-    fetchKeys();
-    window.dispatchEvent(new Event('borga:voice-setup-changed'));
-    const p = VOICE_PROVIDERS.find((p) => p.id === providerId);
-    if (p) {
-      const { id: connId } = statusOf('voice', p.id.replace('voice-', ''), p.label);
-      connectApp(connId, { status: 'connected', account: '(API key saved)', lastSync: 'Just now', scopes: 'text-to-speech' });
-      log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: `${p.label} API key saved and connection activated.` });
-    }
-  };
-
   const SECTION_HEADER: Record<ToolsSection, { title: string; sub: string }> = {
-    'ai-providers': { title: 'AI & voice providers', sub: 'Paste API keys for LLMs and text-to-speech — encrypted and stored server-side' },
+    'ai-providers': { title: 'AI providers', sub: 'Paste API keys for language models — encrypted and stored server-side. Voice keys live under Connections' },
     email: { title: 'Email & connected apps', sub: 'OAuth email accounts and every active connection with its scopes' },
     composio: { title: 'Composio.dev', sub: 'Configure the API, browse the live catalog and install toolkits' },
     apps: { title: 'Tools & Integrations', sub: 'API keys, composio.dev toolkits, LLM providers and connected apps' },
@@ -1069,101 +1053,17 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       </section>
       )}
 
-      {/* ── Voice agents ──────────────────────────────────────────────────── */}
+      {/* ── Platform default keys (administrator) ──────────────────────────── */}
       {operator && (section === 'ai-providers' || section === 'apps') && (
       <section>
-        <div className="flex items-center gap-2">
-          <AudioLines className="h-4 w-4 text-primary" />
-          <SectionTitle title="Voice agents — shared keys" sub="Administrator: keys every company falls back to. Each company sets its own under Connections." />
-        </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {VOICE_PROVIDERS.map((p) => {
-            // the shared key is the administrator's to change: everyone else sets up their company's own ElevenLabs key here
-            const { id: connId, conn } = statusOf('voice', p.id.replace('voice-', ''), p.label);
-            const connected = conn?.status === 'connected';
-            const keyConfig = VOICE_KEY_MAP[p.id];
-            const keyStatus = keyConfig ? keys[keyConfig.envVar] : undefined;
-            const expanded = expandedProviders.has(p.id);
-
-            return (
-              <Card key={p.id} className="p-4">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-white" style={{ background: p.accent }}>
-                    <AudioLines className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold">{p.label}</p>
-                      {keyStatus?.configured && (
-                        <Badge className="shrink-0 bg-emerald-500/10 text-emerald-600 text-[10px]"><Check className="mr-0.5 h-2.5 w-2.5" /> ready</Badge>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground">{p.kind}</p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={connected ? 'outline' : 'default'}
-                    className="shrink-0 gap-1"
-                    disabled={!connected && !keyStatus?.configured}
-                    title={!connected && !keyStatus?.configured ? 'Add an API key below first' : undefined}
-                    onClick={() => {
-                      if (connected && conn) disconnect(conn);
-                      else if (keyStatus?.configured) connectApp(connId, { status: 'connected', account: '(API key)', lastSync: 'Just now', scopes: 'text-to-speech' });
-                    }}
-                  >
-                    {connected ? <><Unplug className="h-3.5 w-3.5" /> Off</> : <><ShieldCheck className="h-3.5 w-3.5" /> On</>}
-                  </Button>
-                </div>
-
-                {keyConfig && (
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={() => toggleExpand(p.id)}
-                      className="flex w-full items-center justify-between text-xs font-medium text-muted-foreground hover:text-foreground"
-                    >
-                      <span>{keyStatus?.configured ? 'Key configured — update' : 'Add API key'}</span>
-                      {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                    </button>
-                    {expanded && (
-                      <div className="border-t mt-2 pt-2">
-                        <InlineKeyInput
-                          envVar={keyConfig.envVar}
-                          label={keyConfig.label}
-                          hint={keyConfig.hint}
-                          kind="key"
-                          status={keyStatus}
-                          onRefresh={() => handleVoiceKeySaved(p.id)}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </Card>
-            );
-          })}
-        </div>
-      </section>
-      )}
-
-      {/* ── Twilio — real outbound calling ─────────────────────────────────── */}
-      {operator && (section === 'ai-providers' || section === 'apps') && (
-      <section>
-        <div className="flex items-center gap-2 mb-3">
-          <Phone className="h-4 w-4 text-primary" />
-          <SectionTitle
-            title="Outbound calling (Twilio) — shared keys"
-            sub="Dial real phone numbers with the agent's ElevenLabs voice — without this, calls play locally instead"
-          />
-        </div>
-        <Card className="p-4">
-          <p className="text-xs text-muted-foreground">
-            When configured, agent calls (Company → Agents, or the voice assistant&apos;s Place a call) dial a real number via Twilio
-            and play the ElevenLabs-generated speech with <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">&lt;Play&gt;</code> instead
-            of Twilio&apos;s own voice. Requires a publicly reachable deployment — Twilio can&apos;t fetch call audio from localhost.
+        <details className="rounded-lg border p-4">
+          <summary className="cursor-pointer text-sm font-semibold">Platform default keys for voice and calling (administrator)</summary>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Each company sets its own ElevenLabs, Deepgram, Fish Audio and Twilio credentials under Integrations → Connections. These shared keys are only
+            a fallback for operators (or for every company when SHARED_PROVIDER_KEYS=allow). Phone calls need a publicly reachable deployment.
           </p>
-          <div className="space-y-1">
-            {TWILIO_KEYS.map((k) => (
+          <div className="mt-2 space-y-1">
+            {[{ envVar: 'ELEVENLABS_API_KEY', label: 'ElevenLabs API key', hint: 'elevenlabs.io/app/api-key', kind: 'key' as const }, { envVar: 'DEEPGRAM_API_KEY', label: 'Deepgram API key', hint: 'console.deepgram.com', kind: 'key' as const }, ...TWILIO_KEYS].map((k) => (
               <InlineKeyInput
                 key={k.envVar}
                 envVar={k.envVar}
@@ -1171,11 +1071,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                 hint={k.hint}
                 kind={k.kind}
                 status={keys[k.envVar]}
-                onRefresh={fetchKeys}
+                onRefresh={() => { fetchKeys(); window.dispatchEvent(new Event('borga:voice-setup-changed')); }}
               />
             ))}
           </div>
-        </Card>
+        </details>
       </section>
       )}
 

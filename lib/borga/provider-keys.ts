@@ -19,7 +19,7 @@ export async function sharedKeysAllowed(userId: string | null): Promise<boolean>
   return !!user && isOperator(user.email, process.env);
 }
 
-async function companyValues(userId: string | null, ws: string | null, id: 'twilio' | 'meta' | 'elevenlabs' | 'deepgram') {
+async function companyValues(userId: string | null, ws: string | null, id: 'twilio' | 'meta' | 'elevenlabs' | 'deepgram' | 'fish') {
   return userId && ws ? await getConnection(userId, ws, id) : null;
 }
 
@@ -27,6 +27,12 @@ export async function elevenLabsKey(userId: string | null, ws: string | null): P
   const own = (await companyValues(userId, ws, 'elevenlabs'))?.apiKey;
   if (own) return own;
   return (await sharedKeysAllowed(userId)) ? getApiKey('ELEVENLABS_API_KEY') : '';
+}
+
+/** The company's own Fish Audio key and voice (there is no shared fallback: it is always the company's credit). */
+export async function fishCredentials(userId: string | null, ws: string | null): Promise<{ apiKey: string; voiceId: string } | null> {
+  const own = await companyValues(userId, ws, 'fish');
+  return own?.apiKey ? { apiKey: own.apiKey, voiceId: own.voiceId ?? '' } : null;
 }
 
 export async function deepgramKey(userId: string | null, ws: string | null): Promise<string> {

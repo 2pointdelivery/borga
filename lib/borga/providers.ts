@@ -5,7 +5,7 @@
 
 import { MAILDOG_HOST, MAILDOG_URL } from './maildog';
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram';
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram' | 'fish';
 
 export interface FieldDef {
   key: string;
@@ -224,6 +224,18 @@ export const PROVIDERS: ProviderDef[] = [
     fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
     steps: ['Open console.deepgram.com and create an API key.', 'Paste it here and press Test connection.'],
     docsUrl: 'https://developers.deepgram.com/docs',
+    testable: true,
+  },
+  {
+    id: 'fish',
+    label: 'Fish Audio (voices)',
+    description: "An alternative spoken voice for the dashboard assistant and agent replies. Phone calls still use ElevenLabs. Bring your own key: usage is billed to your Fish Audio account.",
+    fields: [
+      { key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' },
+      { key: 'voiceId', label: 'Voice ID (reference model)', secret: false, required: false, hint: 'The model id from the voice page on fish.audio (the long hex code in its address). Leave empty to use the default voice.', placeholder: '802e3bc2b27e49c2995d23ef70e6ac89', pattern: '^[A-Za-z0-9]{8,64}$' },
+    ],
+    steps: ['Open fish.audio, go to your API keys and create a key.', 'Open a voice you like on fish.audio and copy the id from its address (or from your own cloned voice).', 'Paste both here and press Test connection.'],
+    docsUrl: 'https://docs.fish.audio/api-reference/introduction',
     testable: true,
   },
   {
