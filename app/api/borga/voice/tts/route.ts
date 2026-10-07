@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       if (!upstream.ok) {
         const errText = await upstream.text().catch(() => '');
         console.error('Fish Audio TTS error', upstream.status, errText.slice(0, 200));
-        return NextResponse.json({ error: `Fish Audio API error: ${upstream.status}.` }, { status: 502 });
+        return NextResponse.json({ error: upstream.status === 402 ? 'Fish Audio says the account has no credit left. Top it up on fish.audio.' : upstream.status === 401 ? 'Fish Audio rejected the API key.' : `Fish Audio API error: ${upstream.status}.` }, { status: 502 });
       }
       const audio = await upstream.arrayBuffer();
       return new NextResponse(audio, { status: 200, headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': String(audio.byteLength), 'Cache-Control': 'private, max-age=3600' } });

@@ -144,14 +144,19 @@ async function testSaltEdge(v: Record<string, string>, f: Fetch): Promise<TestRe
 }
 
 async function testElevenLabs(v: Record<string, string>, f: Fetch): Promise<TestResult> {
-  const r = await getJson(f, 'https://api.elevenlabs.io/v1/user', { headers: { 'xi-api-key': v.apiKey } });
-  if (r.status === 401 || r.status === 403) return { ok: false, message: 'ElevenLabs rejected the API key.' };
-  if (r.status >= 400) {
-    const d = (r.json as { detail?: unknown }).detail;
-    const why = typeof d === 'string' ? d : d && typeof d === 'object' ? String((d as { message?: unknown }).message ?? '') : '';
-    return { ok: false, message: `ElevenLabs answered ${r.status}${why ? `: ${why.slice(0, 200)}` : ''}.` };
-  }
-  return { ok: true, message: 'Connected to ElevenLabs.' };
+  const headers = { 'xi-api-key': v.apiKey };
+  const detail = (j: Record<string, unknown>) => {
+    const d = j.detail;
+    return typeof d === 'string' ? d : d && typeof d === 'object' ? String((d as { message?: unknown }).message ?? '') : '';
+  };
+  const user = await getJson(f, 'https://api.elevenlabs.io/v1/user', { headers });
+  if (user.status < 400) return { ok: true, message: 'Connected to ElevenLabs.' };
+  // A restricted key can lack the permission to read the account yet still speak and list voices (the things Borga needs): ask for those.
+  const voices = await getJson(f, 'https://api.elevenlabs.io/v1/voices', { headers });
+  if (voices.status < 400) return { ok: true, message: 'Connected to ElevenLabs.', details: ['This key cannot read account details (a restricted key), which Borga does not need.'] };
+  const why = detail(voices.json) || detail(user.json);
+  if (voices.status === 401 || voices.status === 403) return { ok: false, message: `ElevenLabs rejected the API key${why ? `: ${why.slice(0, 200)}` : '.'}` };
+  return { ok: false, message: `ElevenLabs answered ${voices.status}${why ? `: ${why.slice(0, 200)}` : ''}.` };
 }
 
 async function testDeepgram(v: Record<string, string>, f: Fetch): Promise<TestResult> {

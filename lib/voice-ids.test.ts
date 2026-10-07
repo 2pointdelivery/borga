@@ -55,3 +55,13 @@ test('Fish Audio has a place for the key and the voice id, and its check reports
   const missingVoice = (async (url: string) => new Response('{}', { status: String(url).includes('/model/') ? 404 : 200 })) as unknown as typeof fetch;
   assert.match((await runProviderTest('fish', { apiKey: 'k', voiceId: 'abcdef123456' }, missingVoice)).message, /no voice/);
 });
+
+test('an ElevenLabs key that cannot read the account but can list voices passes the check', async () => {
+  const f = (async (url: string) => new Response('{}', { status: String(url).endsWith('/user') ? 401 : 200 })) as unknown as typeof fetch;
+  const r = await runProviderTest('elevenlabs', { apiKey: 'sk_x' }, f);
+  assert.equal(r.ok, true);
+  const rejected = (async () => new Response(JSON.stringify({ detail: { message: 'Invalid API key' } }), { status: 401 })) as unknown as typeof fetch;
+  const bad = await runProviderTest('elevenlabs', { apiKey: 'sk_x' }, rejected);
+  assert.equal(bad.ok, false);
+  assert.match(bad.message, /Invalid API key/);
+});
