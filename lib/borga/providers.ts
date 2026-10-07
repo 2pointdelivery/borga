@@ -229,7 +229,7 @@ export const PROVIDERS: ProviderDef[] = [
   {
     id: 'fish',
     label: 'Fish Audio (voices)',
-    description: "An alternative spoken voice for the dashboard assistant and agent replies. Phone calls still use ElevenLabs. Bring your own key: usage is billed to your Fish Audio account.",
+    description: 'An alternative spoken voice for the dashboard assistant and agent replies. Phone calls still use ElevenLabs. Bring your own key: usage is billed to your Fish Audio account.',
     fields: [
       { key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' },
       { key: 'voiceId', label: 'Voice ID (reference model)', secret: false, required: false, hint: 'The model id from the voice page on fish.audio (the long hex code in its address). Leave empty to use the default voice.', placeholder: '802e3bc2b27e49c2995d23ef70e6ac89', pattern: '^[A-Za-z0-9]{8,64}$' },
