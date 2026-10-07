@@ -36,6 +36,7 @@ import {
 } from '@/lib/borga/data';
 import { invoiceHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
+import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
 import { toast } from '@/lib/toast-bus';
 import { findInvoiceDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
@@ -96,7 +97,7 @@ function emptyForm(number: string, defaultTaxProfileId?: string): InvoiceForm {
 export function InvoiceTab() {
   const {
     invoices, addInvoice, updateInvoice, deleteInvoice, voidInvoice, payInvoice, runDunningSweep,
-    customers, composio, log, activeWorkspace,
+    customers, composio, log, activeWorkspace, activeWorkspaceId,
     taxProfiles, defaultTaxProfileId,
     settings, addApproval,
   } = useBorga();
@@ -252,7 +253,7 @@ export function InvoiceTab() {
     setEmailState('idle');
   };
 
-  /** Send via the company's linked Gmail (composio.dev OAuth); falls back to mailto. */
+  /** Send via the company's Gmail, else its own mail server; falls back to mailto. */
   const sendEmail = async () => {
     const inv = emailTarget;
     if (!inv || !emailForm.to.trim()) return;
@@ -274,30 +275,18 @@ export function InvoiceTab() {
     }
     setEmailState('sending');
     try {
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'execute',
-          appName: 'GMAIL_SEND_EMAIL',
-          entityId: 'workspace-inbox',
-          apiKey: composio.apiKey,
-          params: {
-            recipient_email: emailForm.to.trim(),
-            subject: emailForm.subject,
-            body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
-          },
-        }),
+      const r = await sendCompanyEmail({
+        ws: activeWorkspaceId, to: emailForm.to, subject: emailForm.subject, composioKey: composio.apiKey,
+        body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
       });
-      const d = (await res.json()) as { ok?: boolean; error?: string };
-      if (d.ok) {
+      if (r.ok) {
         setEmailState('sent');
         updateInvoice(inv.id, { sentAt: new Date().toISOString(), status: inv.status === 'draft' ? 'sent' : inv.status });
-        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Invoice ${inv.number} emailed to ${emailForm.to} via Gmail (composio.dev).` });
+        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Invoice ${inv.number} emailed to ${emailForm.to} via ${r.via ?? 'Gmail'}.` });
         setTimeout(() => setEmailTarget(null), 1400);
         return;
       }
-      throw new Error(d.error ?? 'send failed');
+      throw new Error(r.note ?? 'send failed');
     } catch {
       // Fallback: open the user's mail client with the message pre-filled.
       const ws = activeWorkspace();
@@ -718,7 +707,7 @@ export function InvoiceTab() {
               <Textarea rows={6} value={emailForm.body} onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })} />
             </Field>
             <p className="text-[11px] text-muted-foreground">
-              Sent through the company&apos;s linked Gmail (composio.dev OAuth). If Gmail isn&apos;t linked, the message opens in your mail client instead.
+              Sent through the company&apos;s Gmail, or its own mail server (SMTP) when Gmail isn&apos;t linked. If neither is set up, the message opens in your mail client instead.
             </p>
             {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Sent — invoice marked as sent.</p>}
             {emailState === 'fallback' && <p className="text-xs font-medium text-amber-600">Opened in your mail client (Gmail not linked for this workspace).</p>}

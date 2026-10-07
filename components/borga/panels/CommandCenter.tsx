@@ -42,6 +42,7 @@ import { DateInput } from '../form-widgets';
 import { SearchSelect } from '../SearchSelect';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
+import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
 
 const GOAL_STATUS_STYLE: Record<string, string> = {
   'on-track': 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30',
@@ -304,18 +305,7 @@ export function CommandCenter() {
     }
     if (a.pendingSend) {
       try {
-        const res = await fetch('/api/borga/composio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-          body: JSON.stringify({
-            action: 'execute',
-            appName: 'GMAIL_SEND_EMAIL',
-            entityId: 'workspace-inbox',
-            apiKey: composio.apiKey,
-            params: { recipient_email: a.pendingSend.to, subject: a.pendingSend.subject, body: a.pendingSend.body },
-          }),
-        });
-        const d = (await res.json()) as { ok?: boolean };
+        const d = await sendCompanyEmail({ ws: activeWorkspaceId, to: a.pendingSend.to, subject: a.pendingSend.subject, body: a.pendingSend.body, composioKey: composio.apiKey });
         log({
           agentId: 'a-sales', agentName: 'Atlas', actor: 'agent', kind: 'sync',
           message: d.ok ? `Approved send delivered to ${a.pendingSend.to}: ${a.title}.` : `Approved send to ${a.pendingSend.to} failed to deliver — resend manually from the record.`,

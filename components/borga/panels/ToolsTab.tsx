@@ -2,7 +2,6 @@
 
 import { ConnectedApps } from './ConnectedApps';
 import { useConnectionActions } from '../use-connection-actions';
-import { MailDogCard } from '../MailDogCard';
 import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   Plus,
@@ -40,6 +39,10 @@ import { ConfirmDialog } from '../ConfirmDialog';
 import { ModelCatalogEditor } from './ModelCatalogEditor';
 import { FreeLlmPanel } from './FreeLlmPanel';
 import { ModelPicker, tierSections } from './ModelPicker';
+import { COMPOSIO_ENTITY, connectionIdForToolkit } from '@/lib/borga/connected-apps';
+import { dedupeServers, findServerByUrl } from '@/lib/borga/mcp-dedupe';
+import { useConnectedApps } from '../use-connected-apps';
+import { ConnectionPanel } from './ConnectionsTab';
 import { presetFor } from '@/lib/borga/model-catalog';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast-bus';
@@ -307,6 +310,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   // across the app even when no per-workspace key was saved in the UI.
   const { ready: composioReady } = useComposioReady();
   const hasComposioKey = !!composio.apiKey || composioReady;
+  const { apps: liveApps, refresh: refreshLiveApps } = useConnectedApps();
 
   // Live Composio catalog — user-triggered refresh (not auto-fetched to avoid startup 502s)
   const [liveToolkits, setLiveToolkits] = useState<Toolkit[] | null>(null);
@@ -357,7 +361,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       const res = await fetch('/api/borga/composio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ action: 'connect', appName: composioAppName, entityId: 'default', apiKey: composio.apiKey }),
+        body: JSON.stringify({ action: 'connect', appName: composioAppName, entityId: COMPOSIO_ENTITY, apiKey: composio.apiKey }),
       });
       const d = await res.json() as { ok: boolean; method?: string; connection?: { redirectUrl?: string; redirect_url?: string } };
       const redirectUrl = d.connection?.redirectUrl ?? d.connection?.redirect_url;
@@ -394,6 +398,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
               setOauthConnecting(null);
               // Single mirror-sync so Inbox/Social cards reflect the link too.
               syncToolkitConnection(composioAppName, true, (found as { id?: string }).id);
+              void refreshLiveApps();
               if (connId) connectApp(connId, { status: 'connected', account: 'OAuth authorized', lastSync: 'Just now', scopes: 'OAuth authorized' });
               log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: `${label} connected via OAuth.` });
             }
@@ -454,11 +459,14 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       return next;
     });
 
+  // Shared (deployment-wide) keys can only be changed by the administrator; everyone else sets up their own under Connections.
+  const [operator, setOperator] = useState(false);
   const fetchKeys = useCallback(async () => {
     setKeysLoading(true);
     try {
       const res = await fetch('/api/borga/config');
-      const d = (await res.json()) as { keys: KeyStatus[] };
+      const d = (await res.json()) as { keys: KeyStatus[]; operator?: boolean };
+      setOperator(!!d.operator);
       const map: Record<string, KeyStatus> = {};
       for (const k of d.keys) map[k.envVar] = k;
       setKeys(map);
@@ -519,6 +527,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
 
   const addServer = async () => {
     if (!mcpName.trim() || !mcpUrl.trim() || mcpAdding) return;
+    const already = findServerByUrl(mcpServers, mcpUrl);
+    if (already) {
+      setMcpAddError(`That server is already added as "${already.name}". Use Test or Reconnect on it instead.`);
+      return;
+    }
     setMcpAdding(true);
     setMcpAddError('');
     try {
@@ -598,7 +611,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
         setSocialMcpMsg(`Server created but unreachable: ${test.error ?? 'unknown error'}.`);
         return;
       }
-      const existing = mcpServers.find((s) => s.provider === 'composio' && s.name === 'Composio Social');
+      const existing = mcpServers.find((s) => s.provider === 'composio' && s.name === 'Composio Social') ?? findServerByUrl(mcpServers, d.url);
       if (existing) {
         updateMcpServer(existing.id, { url: d.url, status: 'connected', tools: test.tools, toolCount: test.tools?.length, lastSync: new Date().toISOString(), lastError: undefined });
       } else {
@@ -1065,6 +1078,8 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {VOICE_PROVIDERS.map((p) => {
+            // the shared key is the administrator's to change: everyone else sets up their company's own ElevenLabs key here
+            if (!operator && p.id === 'voice-elevenlabs') return <ConnectionPanel key={p.id} providerId="elevenlabs" onChange={() => window.dispatchEvent(new Event('borga:voice-setup-changed'))} />;
             const { id: connId, conn } = statusOf('voice', p.id.replace('voice-', ''), p.label);
             const connected = conn?.status === 'connected';
             const keyConfig = VOICE_KEY_MAP[p.id];
@@ -1165,50 +1180,6 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       </section>
       )}
 
-      {/* ── SMTP / Email delivery ─────────────────────────────────────────── */}
-      {(section === 'ai-providers' || section === 'apps') && (
-      <section>
-        <div className="flex items-center gap-2 mb-3">
-          <Radio className="h-4 w-4 text-primary" />
-          <SectionTitle title="SMTP / email delivery" sub="Send real emails (password resets, notifications) via MailDog or your own SMTP server" />
-        </div>
-        <div className="mb-3"><MailDogCard /></div>
-        <Card className="p-4">
-          <div className="space-y-1">
-            {SMTP_KEYS.map((k) => (
-              <InlineKeyInput
-                key={k.envVar}
-                envVar={k.envVar}
-                label={k.label}
-                hint={k.hint}
-                kind={k.kind}
-                status={keys[k.envVar]}
-                onRefresh={fetchKeys}
-              />
-            ))}
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-4">
-            <Input
-              type="email"
-              value={smtpTestTo}
-              onChange={(e) => setSmtpTestTo(e.target.value)}
-              placeholder="test@example.com"
-              className="h-8 w-56 font-mono text-xs"
-            />
-            <Button
-              size="sm"
-              className="h-8 gap-1.5"
-              disabled={!smtpTestTo.trim() || smtpSending}
-              onClick={sendTestEmail}
-            >
-              {smtpSending ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
-              Send test email
-            </Button>
-          </div>
-        </Card>
-      </section>
-      )}
-
       {/* ── Wigolo — local-first web search / fetch / crawl / research ────── */}
       {(section === 'ai-providers' || section === 'apps') && (
       <section>
@@ -1268,6 +1239,13 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             sub="Connect any Model Context Protocol server — self-hosted or third-party — so agents can call its tools"
           />
         </div>
+
+        {dedupeServers(mcpServers).removed.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700">
+            <span>{dedupeServers(mcpServers).removed.length} of these servers repeat another one&apos;s address, so agents see their tools twice.</span>
+            <Button size="sm" variant="outline" className="h-7" onClick={() => { const { removed } = dedupeServers(mcpServers); removed.forEach((r) => deleteMcpServer(r.id)); toast({ title: `Removed ${removed.length} duplicate server${removed.length === 1 ? '' : 's'}`, description: 'The connected copy of each was kept.', variant: 'success' }); }}>Remove duplicates</Button>
+          </div>
+        )}
 
         {mcpServers.length > 0 && (
           <div className="mb-4 space-y-3">
@@ -1409,8 +1387,11 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           {EMAIL_APPS.map((app) => {
-            const status = oauthStatuses[app.id] ?? 'off';
             const isConnecting = oauthConnecting === app.id;
+            // the live state at Composio, the same one every other screen reads: connected once is connected everywhere, also after a reload
+            const live = liveApps[app.composioAppName]?.connected ?? false;
+            const status = isConnecting ? 'connecting' : live ? 'connected' : 'off';
+            const card = connections.find((c) => c.id === connectionIdForToolkit(app.composioAppName));
             return (
               <Card key={app.id} className="flex flex-col gap-3 p-4">
                 <div className="flex items-center gap-2">
@@ -1441,6 +1422,16 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                     <><ExternalLink className="h-3.5 w-3.5" /> Connect via OAuth</>
                   )}
                 </Button>
+                {status === 'connected' && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="gap-1.5 text-muted-foreground"
+                    onClick={() => void disconnect(card ?? { id: connectionIdForToolkit(app.composioAppName), type: 'tool', provider: app.composioAppName, label: app.label, status: 'connected', account: '', scopes: '', lastSync: '' }).then(() => refreshLiveApps())}
+                  >
+                    <Unplug className="h-3.5 w-3.5" /> Disconnect
+                  </Button>
+                )}
               </Card>
             );
           })}
@@ -1450,10 +1441,60 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             Add your Composio API key below (or set COMPOSIO_API_KEY on the server) to enable OAuth email connections.
           </p>
         )}
-        <div className="mt-3"><MailDogCard /></div>
       </section>
       )}
 
+      {/* ── Sending server (SMTP) ───────────────────────────────────────────── */}
+      {(section === 'email' || section === 'apps') && (
+      <section>
+        <div className="flex items-center gap-2 mb-3">
+          <Radio className="h-4 w-4 text-primary" />
+          <SectionTitle title="Sending server (SMTP)" sub="Mail sent from your company's own address: ticket replies, notifications, and messages when Gmail isn't connected" />
+        </div>
+        <ConnectionPanel providerId="smtp" onChange={fetchKeys} />
+        <Card className="mt-3 p-4">
+          <p className="text-xs font-medium">Send a test email</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Uses your company&apos;s mail server above, or the platform&apos;s default when you have none.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Input
+              type="email"
+              value={smtpTestTo}
+              onChange={(e) => setSmtpTestTo(e.target.value)}
+              placeholder="test@example.com"
+              className="h-8 w-56 font-mono text-xs"
+            />
+            <Button
+              size="sm"
+              className="h-8 gap-1.5"
+              disabled={!smtpTestTo.trim() || smtpSending}
+              onClick={sendTestEmail}
+            >
+              {smtpSending ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <AudioLines className="h-3.5 w-3.5" />}
+              Send test email
+            </Button>
+          </div>
+        </Card>
+        {operator && (
+          <details className="mt-3 rounded-lg border p-3">
+            <summary className="cursor-pointer text-xs font-medium">Platform default for every company (administrator)</summary>
+            <p className="mt-2 text-[11px] text-muted-foreground">Used for sign-in and account mail, and by any company that has not set up its own server. A company&apos;s own server above always wins for its mail.</p>
+            <div className="mt-2 space-y-1">
+              {SMTP_KEYS.map((k) => (
+                <InlineKeyInput
+                  key={k.envVar}
+                  envVar={k.envVar}
+                  label={k.label}
+                  hint={k.hint}
+                  kind={k.kind}
+                  status={keys[k.envVar]}
+                  onRefresh={fetchKeys}
+                />
+              ))}
+            </div>
+          </details>
+        )}
+      </section>
+      )}
       {/* ── Composio.dev API configuration ───────────────────────────────── */}
       {(section === 'composio' || section === 'apps') && (
       <Card className="p-5">

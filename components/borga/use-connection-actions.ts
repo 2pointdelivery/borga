@@ -3,7 +3,7 @@
 import { useCallback, useRef } from 'react';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
-import { normalizeAccount, type ComposioAccountRef } from '@/lib/borga/connected-apps';
+import { COMPOSIO_ENTITY, normalizeAccount, type ComposioAccountRef } from '@/lib/borga/connected-apps';
 import type { AppConnection } from '@/lib/borga/data';
 
 const HEADERS = { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' };
@@ -63,7 +63,7 @@ export function useConnectionActions() {
   const reconnect = useCallback(async (conn: AppConnection) => {
     if (polling.current) clearInterval(polling.current);
     connectApp(conn.id, { status: 'connecting', lastSync: 'Waiting for sign-in…' });
-    const r = await call({ action: 'connect', appName: appKey(conn.provider), entityId: 'default' });
+    const r = await call({ action: 'connect', appName: appKey(conn.provider), entityId: COMPOSIO_ENTITY });
     const conn2 = r.connection as { redirectUrl?: string; redirect_url?: string } | undefined;
     const url = conn2?.redirectUrl ?? conn2?.redirect_url;
     if (!r.ok || !url) {

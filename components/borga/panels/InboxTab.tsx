@@ -35,6 +35,11 @@ import {
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { useComposioReady } from '../use-composio-ready';
+import { useConnectedApps } from '../use-connected-apps';
+import { useConnectionActions } from '../use-connection-actions';
+import { connectionIdForToolkit } from '@/lib/borga/connected-apps';
+import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
+import type { AppConnection } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
 import { SearchSelect } from '../SearchSelect';
 import { ConfirmDialog } from '../ConfirmDialog';
@@ -59,8 +64,8 @@ type ChannelStatus = Record<CommsChannel, 'connected' | 'connecting' | 'off' | '
 
 export function InboxTab() {
   const {
-    messages, sendMessage, deleteMessage, leads, log,
-    composio, messagingChannels, setChannelConnected, activeWorkspace, syncToolkitConnection,
+    messages, sendMessage, deleteMessage, leads,
+    composio, messagingChannels, connections, activeWorkspaceId, activeWorkspace,
   } = useBorga();
 
   const [channelFilter, setChannelFilter] = useState<'all' | CommsChannel>('all');
@@ -73,28 +78,34 @@ export function InboxTab() {
   const [confirmDeleteMessage, setConfirmDeleteMessage] = useState<CommsMessage | null>(null);
 
   const retryMessage = (m: CommsMessage) => {
-    setRetrySeed({ key: Date.now(), to: m.recipients[0] ?? m.to, subject: m.subject, body: m.body, channel: m.channel });
+    setRetrySeed((prev) => ({ key: (prev?.key ?? 0) + 1, to: m.recipients[0] ?? m.to, subject: m.subject, body: m.body, channel: m.channel }));
     setComposeOpen(true);
   };
-  const [status, setStatus] = useState<ChannelStatus>({
-    email: messagingChannels.find((c) => c.channel === 'email')?.connected ? 'connected' : 'off',
-    sms: messagingChannels.find((c) => c.channel === 'sms')?.connected ? 'connected' : 'off',
-    whatsapp: messagingChannels.find((c) => c.channel === 'whatsapp')?.connected ? 'connected' : 'off',
-    telegram: messagingChannels.find((c) => c.channel === 'telegram')?.connected ? 'connected' : 'off',
-  });
-
-  // Keep channel badges in sync with the hydrated workspace config without
-  // clobbering an in-flight OAuth handshake.
+  // The same live connection state every other screen reads: Gmail connected under Integrations is Gmail here, with nothing to connect twice.
+  const { apps } = useConnectedApps();
+  const { reconnect, disconnect } = useConnectionActions();
+  const [smtp, setSmtp] = useState<{ on: boolean; from: string | null }>({ on: false, from: null });
   useEffect(() => {
-    setStatus((prev) => {
-      const next = { ...prev };
-      for (const cfg of messagingChannels) {
-        if (prev[cfg.channel] === 'connecting') continue;
-        next[cfg.channel] = cfg.connected ? 'connected' : 'off';
-      }
-      return next;
-    });
-  }, [messagingChannels]);
+    if (!activeWorkspaceId) return;
+    let off = false;
+    void fetch(`/api/borga/mail?ws=${encodeURIComponent(activeWorkspaceId)}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j: { ok?: boolean; smtp?: boolean; from?: string | null }) => { if (!off && j.ok) setSmtp({ on: !!j.smtp, from: j.from ?? null }); })
+      .catch(() => {});
+    return () => { off = true; };
+  }, [activeWorkspaceId]);
+
+  const cardFor = (ch: CommsChannel): AppConnection => {
+    const app = CHANNEL_COMPOSIO_APP[ch];
+    return connections.find((c) => c.id === connectionIdForToolkit(app))
+      ?? { id: connectionIdForToolkit(app), type: 'tool', provider: app, label: COMMS_CHANNEL_LABEL[ch], status: 'off', account: '', scopes: '', lastSync: '…' };
+  };
+  const status = Object.fromEntries((Object.keys(COMMS_CHANNEL_LABEL) as CommsChannel[]).map((ch) => {
+    const card = cardFor(ch);
+    const live = apps[CHANNEL_COMPOSIO_APP[ch]]?.connected ?? messagingChannels.find((c) => c.channel === ch)?.connected ?? false;
+    const st: ChannelStatus[CommsChannel] = card.status === 'connecting' ? 'connecting' : live ? 'connected' : card.status === 'error' ? 'error' : 'off';
+    return [ch, st];
+  })) as ChannelStatus;
 
   const filtered = useMemo(
     () =>
@@ -114,77 +125,8 @@ export function InboxTab() {
     return c;
   }, [messages]);
 
-  /** Connect a channel's account via composio.dev hosted OAuth + poll for completion. */
-  const connectChannel = async (channel: CommsChannel) => {
-    const app = CHANNEL_COMPOSIO_APP[channel];
-    setStatus((s) => ({ ...s, [channel]: 'connecting' }));
-    try {
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ action: 'connect', appName: app, entityId: 'workspace-inbox', apiKey: composio.apiKey }),
-      });
-      const d = (await res.json()) as { ok?: boolean; connection?: { redirectUrl?: string; redirect_url?: string } };
-      const redirectUrl = d.connection?.redirectUrl ?? d.connection?.redirect_url;
-      if (!d.ok || !redirectUrl) throw new Error('no redirect');
-      window.open(redirectUrl, '_blank', 'noopener,noreferrer,width=640,height=720');
-
-      // Poll connected accounts until the toolkit shows ACTIVE (max ~60s).
-      let polls = 0;
-      const timer = setInterval(async () => {
-        polls++;
-        if (polls > 30) {
-          clearInterval(timer);
-          setStatus((s) => ({ ...s, [channel]: 'error' }));
-          return;
-        }
-        try {
-            const pr = await fetch('/api/borga/composio', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-              body: JSON.stringify({ action: 'accounts', apiKey: composio.apiKey }),
-            });
-            const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { id?: string; appName?: string; status?: string }[] };
-            if (!pd.ok) {
-              clearInterval(timer);
-              setStatus((s) => ({ ...s, [channel]: 'error' }));
-              return;
-            }
-            const found = pd.accounts?.find(
-            (a) => a.appName?.toLowerCase() === app.toLowerCase() && a.status === 'ACTIVE',
-          );
-          if (found) {
-            clearInterval(timer);
-            setStatus((s) => ({ ...s, [channel]: 'connected' }));
-            setChannelConnected(channel, { connected: true, account: 'OAuth authorized' });
-            // Single mirror-sync: connection card + composio record light up too.
-            syncToolkitConnection(app, true, found.id);
-            log({
-              agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync',
-              message: `${COMMS_CHANNEL_LABEL[channel]} inbox linked via composio.dev OAuth.`,
-            });
-          }
-        } catch { /* keep polling */ }
-      }, 2000);
-    } catch {
-      // No Composio key configured, or no auth config for this toolkit yet — never
-      // fake a connection; tell the user what's actually missing.
-      setStatus((s) => ({ ...s, [channel]: 'error' }));
-      setChannelConnected(channel, { connected: false, account: '' });
-      log({
-        agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system',
-        message: hasComposioKey
-          ? `Could not link ${COMMS_CHANNEL_LABEL[channel]} — no Composio auth config found for this toolkit yet. Create one at composio.dev/dashboard → Auth Configs.`
-          : `Could not link ${COMMS_CHANNEL_LABEL[channel]} — add a Composio API key in Integrations first.`,
-      });
-    }
-  };
-
-  const disconnectChannel = (channel: CommsChannel) => {
-    setStatus((s) => ({ ...s, [channel]: 'off' }));
-    setChannelConnected(channel, { connected: false, account: '' });
-    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `${COMMS_CHANNEL_LABEL[channel]} disconnected.` });
-  };
+  const connectChannel = (channel: CommsChannel) => void reconnect(cardFor(channel));
+  const disconnectChannel = (channel: CommsChannel) => void disconnect(cardFor(channel));
 
   return (
     <div className="borga-fade-up space-y-5">
@@ -212,7 +154,7 @@ export function InboxTab() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{COMMS_CHANNEL_LABEL[ch]}</p>
-                  <p className="truncate text-[10px] text-muted-foreground">{cfg?.account || cfg?.providerLabel}</p>
+                  <p className="truncate text-[10px] text-muted-foreground">{ch === 'email' && st !== 'connected' && smtp.on ? `Sends from ${smtp.from ?? 'your mail server'}` : cfg?.account || cfg?.providerLabel}</p>
                 </div>
                 {st === 'connected' && <CircleCheck className="h-4 w-4 shrink-0 text-emerald-500" />}
               </div>
@@ -376,20 +318,8 @@ function ComposeCard({
    * wired in this app yet, so those are reported as failed rather than faked. */
   const deliver = async (): Promise<{ ok: boolean; note?: string }> => {
     if (channel === 'email') {
-      try {
-        const res = await fetch('/api/borga/composio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-          body: JSON.stringify({
-            action: 'execute', appName: 'GMAIL_SEND_EMAIL', entityId: 'workspace-inbox', apiKey: composio.apiKey,
-            params: { recipient_email: to.trim(), subject: subject.trim(), body: body.trim() },
-          }),
-        });
-        const d = (await res.json()) as { ok?: boolean; error?: string };
-        return d.ok ? { ok: true } : { ok: false, note: d.error ?? 'Gmail send failed — check the Gmail connection in Integrations.' };
-      } catch {
-        return { ok: false, note: 'Network error reaching the send service.' };
-      }
+      const r = await sendCompanyEmail({ ws: activeWorkspaceId, to, subject, body, composioKey: composio.apiKey });
+      return r.ok ? { ok: true } : { ok: false, note: r.note ?? 'The email could not be sent.' };
     }
     if (channel === 'whatsapp') {
       try {

@@ -446,6 +446,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, action: 'disconnect', connectionId });
     }
 
+    /**
+     * The ACTIVE account for a toolkit under this entity. With `anyEntity`, one the signed-in user connected under another entity
+     * counts too (the list is already limited to their scope): used for general actions like sending mail, where an app connected once
+     * must be found whichever screen asked. Social posting stays per entity so one company's page never receives another's post.
+     */
+    const activeAccountFor = async (toolkit: string, userId: string, anyEntity = !scope) => {
+      const upstream = await listAccounts();
+      if (!upstream.ok) return null;
+      const active = upstream.accounts.filter((a) => String(a.appName ?? '').toLowerCase() === toolkit.toLowerCase() && String(a.status ?? '').toUpperCase() === 'ACTIVE');
+      return active.find((a) => String(a.entityId ?? '') === userId) ?? (anyEntity ? active[0] : undefined) ?? null;
+    };
+
     const executeTool = async (toolSlug: string, args: Record<string, unknown>, userId: string, connectedAccountId?: string) => {
       const payload: Record<string, unknown> = { user_id: userId, arguments: args };
       if (connectedAccountId) payload.connected_account_id = connectedAccountId;
@@ -468,7 +480,14 @@ export async function POST(req: NextRequest) {
 
       const chosenAccount = body.connectedAccountId?.trim() || undefined;
       if (chosenAccount && !(await ownsAccount(chosenAccount))) return notYours();
-      const upstream = await executeTool(actionId, toolParams, entityId, chosenAccount);
+      let upstream = await executeTool(actionId, toolParams, entityId, chosenAccount);
+      if (!upstream.ok && !chosenAccount && upstream.status >= 400 && upstream.status <= 422) {
+        // Nothing connected under this entity: use the app the user already connected anywhere else, instead of asking for it again.
+        const other = await activeAccountFor(actionId.split('_')[0], entityId, true);
+        if (other?.id && String(other.entityId ?? '') !== entityId) {
+          upstream = await executeTool(actionId, toolParams, String(other.entityId), String(other.id));
+        }
+      }
       if (!upstream.ok) {
         console.error('Composio execute error', upstream.status, upstream.text.slice(0, 200));
         if (upstream.status === 404) {
@@ -482,19 +501,6 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({ ok: true, action: 'execute', result: data?.data ?? data });
     }
-
-    const activeAccountFor = async (toolkit: string, userId: string) => {
-      const upstream = await listAccounts();
-      if (!upstream.ok) return null;
-      return upstream.accounts.find(
-        (a) => String(a.appName ?? '').toLowerCase() === toolkit.toLowerCase()
-          && String(a.entityId ?? '') === userId
-          && String(a.status ?? '').toUpperCase() === 'ACTIVE',
-      ) ?? (scope ? null : upstream.accounts.find(
-        (a) => String(a.appName ?? '').toLowerCase() === toolkit.toLowerCase()
-          && String(a.status ?? '').toUpperCase() === 'ACTIVE',
-      )) ?? null;
-    };
 
     if (action === 'socialStatus') {
       // One call for the Social tab: ACTIVE account per social toolkit for this user.

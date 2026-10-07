@@ -81,3 +81,10 @@ const TOOLKIT_TO_COMMS_CHANNEL: Record<string, 'email' | 'sms' | 'whatsapp' | 't
 export function commsChannelForToolkit(toolkit: string): 'email' | 'sms' | 'whatsapp' | 'telegram' | null {
   return TOOLKIT_TO_COMMS_CHANNEL[toolkit.toLowerCase()] ?? null;
 }
+
+/**
+ * The one Composio entity every screen connects and acts under. Gmail connected on the Integrations page is the same Gmail the Inbox,
+ * invoices and agents send with. (Screens used to pick their own - "workspace-inbox", "workspace-comms", the company id - so one app
+ * could be connected several times and each copy was invisible to the others.)
+ */
+export const COMPOSIO_ENTITY = 'default';

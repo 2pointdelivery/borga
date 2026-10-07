@@ -30,6 +30,7 @@ import {
   type Vendor, type Bill, type BillLine, type PaymentTerms, type PaymentMethod,
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
+import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
 import { toast } from '@/lib/toast-bus';
 import { findBillDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
@@ -78,7 +79,7 @@ export function VendorsTab() {
   const {
     vendors, addVendor, updateVendor, deleteVendor,
     bills, addBill, updateBill, setBillStatus, deleteBill, voidBill, payBill,
-    composio, log, activeWorkspace,
+    composio, log, activeWorkspace, activeWorkspaceId,
     taxProfiles, defaultTaxProfileId,
     settings, addApproval,
   } = useBorga();
@@ -315,30 +316,18 @@ export function VendorsTab() {
     }
     setEmailState('sending');
     try {
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'execute',
-          appName: 'GMAIL_SEND_EMAIL',
-          entityId: 'workspace-inbox',
-          apiKey: composio.apiKey,
-          params: {
-            recipient_email: emailForm.to.trim(),
-            subject: emailForm.subject,
-            body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
-          },
-        }),
+      const r = await sendCompanyEmail({
+        ws: activeWorkspaceId, to: emailForm.to, subject: emailForm.subject, composioKey: composio.apiKey,
+        body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
       });
-      const d = (await res.json()) as { ok?: boolean; error?: string };
-      if (d.ok) {
+      if (r.ok) {
         setEmailState('sent');
         updateBill(b.id, { status: b.status === 'unpaid' ? 'scheduled' : b.status });
-        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Bill ${b.number} remittance emailed to ${emailForm.to} via Gmail (composio.dev).` });
+        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Bill ${b.number} remittance emailed to ${emailForm.to} via ${r.via ?? 'Gmail'}.` });
         setTimeout(() => setEmailTarget(null), 1400);
         return;
       }
-      throw new Error(d.error ?? 'send failed');
+      throw new Error(r.note ?? 'send failed');
     } catch {
       const ws = activeWorkspace();
       window.location.href = `mailto:${encodeURIComponent(emailForm.to)}?subject=${encodeURIComponent(emailForm.subject)}&body=${encodeURIComponent(emailForm.body)}`;
@@ -863,7 +852,7 @@ export function VendorsTab() {
               <Textarea rows={6} value={emailForm.body} onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })} />
             </Field>
             <p className="text-[11px] text-muted-foreground">
-              Sent through the company&apos;s linked Gmail (composio.dev OAuth). If Gmail isn&apos;t linked, the message opens in your mail client instead.
+              Sent through the company&apos;s Gmail, or its own mail server (SMTP) when Gmail isn&apos;t linked. If neither is set up, the message opens in your mail client instead.
             </p>
             {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Remittance emailed — bill marked scheduled. The payment itself still needs to be made.</p>}
             {emailState === 'fallback' && <p className="text-xs font-medium text-amber-600">Opened in your mail client (Gmail not linked for this workspace).</p>}

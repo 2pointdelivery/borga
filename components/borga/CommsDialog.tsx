@@ -11,6 +11,7 @@ import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { COMMS_CHANNEL_COLOR, COMMS_CHANNEL_LABEL, type CommsChannel, type Lead } from '@/lib/borga/data';
 import { cn } from '@/lib/utils';
+import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
 
 const CHANNEL_ICON: Record<CommsChannel, typeof Mail> = { email: Mail, sms: MessageSquare, whatsapp: MessageCircle, telegram: Send };
 
@@ -65,20 +66,8 @@ export function CommsDialog({
   /** One real delivery attempt — the same paths the Inbox composer uses. */
   const deliver = async (to: string): Promise<{ ok: boolean; note?: string }> => {
     if (channel === 'email') {
-      try {
-        const res = await fetch('/api/borga/composio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-          body: JSON.stringify({
-            action: 'execute', appName: 'GMAIL_SEND_EMAIL', entityId: 'workspace-comms', apiKey: composio.apiKey,
-            params: { recipient_email: to, subject: subject.trim(), body: body.trim() },
-          }),
-        });
-        const d = (await res.json()) as { ok?: boolean; error?: string };
-        return d.ok ? { ok: true } : { ok: false, note: d.error ?? 'Gmail send failed — check the Gmail connection in Integrations.' };
-      } catch {
-        return { ok: false, note: 'Network error reaching the send service.' };
-      }
+      const r = await sendCompanyEmail({ ws: activeWorkspaceId, to, subject, body, composioKey: composio.apiKey });
+      return r.ok ? { ok: true } : { ok: false, note: r.note ?? 'The email could not be sent.' };
     }
     if (channel === 'whatsapp') {
       try {
