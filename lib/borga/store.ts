@@ -805,6 +805,8 @@ interface BorgaStore {
   addKpi: (groupId: string, kpi: KpiEntry) => void;
   updateKpi: (groupId: string, kpiId: string, patch: Partial<KpiEntry>) => void;
   deleteKpi: (groupId: string, kpiId: string) => void;
+  /** Replace the whole KPI set (used when live values from the company's records are written in). */
+  setKpiGroups: (groups: KpiGroup[]) => void;
 
   llm: LlmSelection;
   setLlm: (patch: Partial<LlmSelection>) => void;
@@ -2989,6 +2991,11 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         g.id === groupId ? { ...g, kpis: g.kpis.filter((k) => k.label !== kpiId) } : g,
       ),
     }));
+    persist('kpis', get().kpiGroups);
+  },
+
+  setKpiGroups: (groups) => {
+    set({ kpiGroups: groups });
     persist('kpis', get().kpiGroups);
   },
 

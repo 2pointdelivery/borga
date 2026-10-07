@@ -295,7 +295,7 @@ export function OrchestrationTab() {
 
       </Card>
 
-      <EngineCrmCard onConnectionChange={probeEngine} />
+      <EngineCrmCard />
 
       {/* Webhooks & API configuration */}
       <Card className="p-5">

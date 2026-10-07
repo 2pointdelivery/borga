@@ -8,12 +8,12 @@ import { Switch } from '@/components/ui/switch';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { useCrmPull } from '../use-crm-pull';
-import { ConnectionPanel } from './ConnectionsTab';
+import { ConnectionSummary } from './ConnectionSummary';
 
 const fmt = (s?: { added: number; updated: number; unchanged: number }) => (s ? s.added + ' new, ' + s.updated + ' updated, ' + s.unchanged + ' unchanged' : 'not pulled');
 
 /** The company's API portal: connection settings plus a pull of customers and deals from its CRM. */
-export function EngineCrmCard({ onConnectionChange }: { onConnectionChange?: () => void }) {
+export function EngineCrmCard() {
   const { settings, setSettings, customers, leads } = useBorga();
   const pull = useCrmPull();
   const [busy, setBusy] = useState(false);
@@ -38,7 +38,7 @@ export function EngineCrmCard({ onConnectionChange }: { onConnectionChange?: () 
 
   return (
     <div className="space-y-4">
-      <ConnectionPanel providerId="company_engine" onChange={onConnectionChange} />
+      <ConnectionSummary providerId="company_engine" />
       <Card className="space-y-3 p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-semibold"><Database className="h-4 w-4 text-primary" /> CRM data</div>

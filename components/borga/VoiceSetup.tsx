@@ -9,6 +9,7 @@ import { useBorga } from '@/lib/borga/store';
 import { describeVoice, resolveVoiceRef, voiceInList } from '@/lib/borga/voice-ids';
 import { ELEVENLABS_VOICES } from '@/lib/borga/data';
 import { ConnectionPanel } from '@/components/borga/panels/ConnectionsTab';
+import { ConnectionSummary } from '@/components/borga/panels/ConnectionSummary';
 import { useVoiceSetup, VOICE_CHANGED } from '@/components/borga/use-voice-setup';
 
 interface Link { providerId: string; label: string; model: string; primary: boolean; activated: boolean }
@@ -20,7 +21,7 @@ const SELECT = 'mt-1 h-9 w-full rounded-lg border border-input bg-background px-
  * Everything that decides how the assistant sounds and thinks, in one place (onboarding and Settings share it):
  * the ElevenLabs key, the voice (from the voices the account really has), a real sample, and the model that answers spoken requests.
  */
-export function VoiceSetup({ onChosen, showListening = true }: { onChosen?: () => void; showListening?: boolean }) {
+export function VoiceSetup({ onChosen, showListening = true, inlineKey = true }: { onChosen?: () => void; showListening?: boolean; inlineKey?: boolean }) {
   const { settings, setSettings, elevenlabs, setElevenlabs, activeWorkspaceId: ws, loadedWorkspaceId: loaded } = useBorga();
   const setup = useVoiceSetup();
   const [chain, setChain] = useState<Link[]>([]);
@@ -115,10 +116,11 @@ export function VoiceSetup({ onChosen, showListening = true }: { onChosen?: () =
           {setup.keyInvalid ? 'ElevenLabs rejected the saved key. Paste it again below.' : 'Add your ElevenLabs API key for a natural agent voice. Without one, agents speak with your browser\'s voice.'}
         </p>
         {setup.error && !setup.keyInvalid && <p className="mt-1 flex items-center gap-1 text-xs text-amber-600"><AlertTriangle className="h-3.5 w-3.5" /> {setup.error}</p>}
-        {configured && (
+        {inlineKey && configured && (
           <button type="button" onClick={() => setEditKey((v) => !v)} className="mt-1 text-xs text-primary underline-offset-2 hover:underline">{editKey ? 'Hide key' : 'Change key'}</button>
         )}
-        {(!configured || editKey) && (
+        {!inlineKey && <div className="mt-2"><ConnectionSummary providerId="elevenlabs" /></div>}
+        {inlineKey && (!configured || editKey) && (
           <div className="mt-2"><ConnectionPanel providerId="elevenlabs" onChange={() => { window.dispatchEvent(new Event(VOICE_CHANGED)); chosen(); }} /></div>
         )}
       </div>

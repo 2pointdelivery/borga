@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { TrendingUp, TrendingDown, Plus, Target, Pencil, Radio } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -19,10 +19,11 @@ import {
   CartesianGrid,
   Cell,
 } from 'recharts';
-import { KPI_UNITS, deriveKpiOverrides, kpiAttainment, kpiMeasured, type KpiEntry, type KpiDirection } from '@/lib/borga/data';
+import { KPI_UNITS, kpiAttainment, kpiMeasured, type KpiEntry, type KpiDirection } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { KpiEditDialog } from './KpiEditDialog';
+import { LIVE_KPI_SOURCES } from '@/lib/borga/kpi-live';
 import { cn } from '@/lib/utils';
 
 /** A KPI is only scored once it has been measured and can be judged against a target. */
@@ -37,23 +38,13 @@ function fmt(value: number, unit: string) {
 }
 
 export function KpisTab() {
-  const { kpiGroups, addKpi, log, finance, leads, employees, knowledge, activeWorkspace } = useBorga();
+  const { kpiGroups, addKpi, log } = useBorga();
   const [open, setOpen] = useState(false);
   const [editKpi, setEditKpi] = useState<{ groupId: string; kpi: KpiEntry } | null>(null);
   const [form, setForm] = useState({ group: kpiGroups[0]?.id ?? '', label: '', value: '', target: '', unit: '%', delta: '', direction: 'higher' as KpiDirection });
 
-  const ws = activeWorkspace();
-  const overrides = useMemo(
-    () => deriveKpiOverrides({ finance, leads, employees, knowledge, ws }),
-    [finance, leads, employees, knowledge, ws],
-  );
-  const displayGroups = kpiGroups.map((g) => ({
-    ...g,
-    kpis: g.kpis.map((k) => {
-      const ov = overrides[g.id]?.[k.label];
-      return ov ? { ...k, value: ov.value, unit: ov.unit ?? k.unit, live: true } : { ...k, live: false };
-    }),
-  }));
+  // the live values are written into the saved set by useLiveKpis (see DashboardShell), so this page and every other reader agree
+  const displayGroups = kpiGroups;
 
   const total = displayGroups.reduce((s, g) => s + g.kpis.length, 0);
   const liveCount = displayGroups.reduce((s, g) => s + g.kpis.filter((k) => k.live).length, 0);
@@ -173,14 +164,14 @@ export function KpisTab() {
                         </div>
                       </div>
                       <p className="mt-1 text-lg font-semibold">
-                        {measured ? fmt(k.value, k.unit) : <span className="text-muted-foreground">Not set</span>}
+                        {measured ? fmt(k.value, k.unit) : <span className="text-sm font-normal text-muted-foreground">{LIVE_KPI_SOURCES[d.id]?.[k.label] ? 'Waiting for data' : 'Enter a value'}</span>}
                         {measured && att != null && k.target > 0 && <span className="text-xs font-normal text-muted-foreground"> / {fmt(k.target, k.unit)}</span>}
                       </p>
                       <div className="mt-2 flex items-center gap-1">
                         {k.live ? (
                           <span className="text-[10px] font-medium text-emerald-600">live</span>
                         ) : !measured ? (
-                          <span className="text-[10px] text-muted-foreground">Use the pencil to enter a value</span>
+                          <span className="text-[10px] text-muted-foreground">{LIVE_KPI_SOURCES[d.id]?.[k.label] ? `Goes live once there are ${LIVE_KPI_SOURCES[d.id][k.label]}` : 'Entered by hand: use the pencil'}</span>
                         ) : k.delta >= 0 ? (
                           <TrendingUp className="h-3 w-3 text-emerald-500" />
                         ) : (

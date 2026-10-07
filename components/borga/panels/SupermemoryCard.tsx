@@ -1,11 +1,11 @@
 'use client';
 
+import { ConnectionSummary } from './ConnectionSummary';
 import { useCallback, useEffect, useState } from 'react';
-import { Brain, Loader2, RefreshCw, Trash2, Eye, KeyRound, CheckCircle2, XCircle } from 'lucide-react';
+import { Brain, Loader2, RefreshCw, Trash2, Eye } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Input } from '@/components/ui/input';
 import { useFeatures } from '@/lib/borga/features-client';
 import { Badge } from '@/components/ui/badge';
 import { useBorga } from '@/lib/borga/store';
@@ -36,11 +36,8 @@ export function SupermemoryCard() {
   const [s, setS] = useState<State | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [facts, setFacts] = useState<string[] | null>(null);
-  const [keyDraft, setKeyDraft] = useState('');
   const [confirmPurge, setConfirmPurge] = useState(false);
-  const [confirmRemoveKey, setConfirmRemoveKey] = useState(false);
   const toggleFeature = useFeatures((f) => f.toggle);
-  const connUrl = `/api/borga/connections?ws=${encodeURIComponent(ws)}`;
   const url = `/api/borga/supermemory?ws=${encodeURIComponent(ws)}`;
 
   const load = useCallback(async () => {
@@ -142,71 +139,14 @@ export function SupermemoryCard() {
         />
       </label>
 
-      <div className="space-y-2 rounded-lg border px-3 py-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="flex items-center gap-1.5 text-sm font-medium"><KeyRound className="h-3.5 w-3.5 text-primary" /> API key
-            {s.connection?.configured && <Badge variant="secondary" className="font-mono text-[10px]">{s.connection.display}</Badge>}
-            {!s.connection?.configured && s.keySource === 'deployment' && <Badge variant="outline" className="text-[10px]">using the deployment key</Badge>}
-          </p>
-          <a href="https://console.supermemory.ai/keys" target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Get a key</a>
-        </div>
-        <div className="flex gap-2">
-          <Input type="password" autoComplete="off" value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} placeholder={s.connection?.configured ? 'Paste a new key to replace it' : 'sm_…'} className="h-8 font-mono text-xs" />
-          <Button
-            size="sm"
-            disabled={!keyDraft.trim() || busy !== null}
-            onClick={async () => {
-              setBusy('key');
-              const res = await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'save', provider: 'supermemory', values: { apiKey: keyDraft.trim() } }) });
-              const j = (await res.json()) as { ok: boolean; error?: string };
-              setBusy(null);
-              if (!j.ok) return toast({ title: 'Key not saved', description: j.error, variant: 'error' });
-              setKeyDraft('');
-              toast({ title: 'Key saved (encrypted)', variant: 'success' });
-              void load();
-            }}
-          >
-            Save key
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!s.connection?.configured || busy !== null}
-            onClick={async () => {
-              setBusy('test');
-              await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'test', provider: 'supermemory' }) });
-              setBusy(null);
-              void load();
-            }}
-          >
-            {busy === 'test' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Test'}
-          </Button>
-          {s.connection?.configured && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-rose-600"
-              disabled={busy !== null}
-              onClick={() => setConfirmRemoveKey(true)}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
-        {s.connection?.lastTest && (
-          <p className={'flex items-center gap-1.5 text-xs ' + (s.connection.lastTest.ok ? 'text-emerald-600' : 'text-rose-600')}>
-            {s.connection.lastTest.ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />} {s.connection.lastTest.message}
-          </p>
-        )}
-        <p className="text-[11px] text-muted-foreground">Stored encrypted for this company only. Operators can instead set <code>SUPERMEMORY_API_KEY</code> on the server for all companies.</p>
-      </div>
+      <ConnectionSummary providerId="supermemory" hint={s.keySource === 'deployment' ? 'Using the deployment key. Add your own in Connections to use it instead.' : undefined} />
 
       {!s.featureOn && (
         <p className="text-xs text-muted-foreground">
           Off by default because it sends data to Supermemory, a third party. {s.featureLocked ? 'The deployment has it disabled (BORGA_FEATURES_OFF).' : 'Add a key, then switch it on above.'}
         </p>
       )}
-      {s.featureOn && s.keySource === 'none' && <p className="text-xs text-amber-600">Switched on, but there is no API key yet. Paste one above (or set SUPERMEMORY_API_KEY on the server).</p>}
+      {s.featureOn && s.keySource === 'none' && <p className="text-xs text-amber-600">Switched on, but there is no API key yet. Add one in Connections (or set SUPERMEMORY_API_KEY on the server).</p>}
       {live && <p className="text-xs text-muted-foreground">Key source: {s.keySource === 'workspace' ? 'this company’s own key' : 'the deployment key'}. Data is isolated to this company.</p>}
 
       <div className="divide-y rounded-lg border">
@@ -250,19 +190,6 @@ export function SupermemoryCard() {
         description="All vectors stored for this company are removed. Your Borga data is not affected, and it can be sent again by syncing."
         confirmLabel="Delete from Supermemory"
         onConfirm={doPurge}
-      />
-
-      <ConfirmDialog
-        open={confirmRemoveKey}
-        onOpenChange={setConfirmRemoveKey}
-        title="Remove the saved Supermemory key?"
-        description="This company falls back to the deployment key, if one is set — otherwise memory features switch off."
-        confirmLabel="Remove key"
-        onConfirm={async () => {
-          setConfirmRemoveKey(false);
-          await fetch(connUrl, { method: 'POST', headers: HEADERS, body: JSON.stringify({ action: 'delete', provider: 'supermemory' }) });
-          void load();
-        }}
       />
     </Card>
   );

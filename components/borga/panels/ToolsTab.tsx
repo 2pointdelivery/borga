@@ -42,7 +42,7 @@ import { ModelPicker, tierSections } from './ModelPicker';
 import { COMPOSIO_ENTITY, connectionIdForToolkit } from '@/lib/borga/connected-apps';
 import { dedupeServers, findServerByUrl } from '@/lib/borga/mcp-dedupe';
 import { useConnectedApps } from '../use-connected-apps';
-import { ConnectionPanel } from './ConnectionsTab';
+import { ConnectionSummary } from './ConnectionSummary';
 import { presetFor } from '@/lib/borga/model-catalog';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast-bus';
@@ -1070,16 +1070,15 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       )}
 
       {/* ── Voice agents ──────────────────────────────────────────────────── */}
-      {(section === 'ai-providers' || section === 'apps') && (
+      {operator && (section === 'ai-providers' || section === 'apps') && (
       <section>
         <div className="flex items-center gap-2">
           <AudioLines className="h-4 w-4 text-primary" />
-          <SectionTitle title="Voice agents" sub="Paste API keys to enable real TTS and outbound calls" />
+          <SectionTitle title="Voice agents — shared keys" sub="Administrator: keys every company falls back to. Each company sets its own under Connections." />
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {VOICE_PROVIDERS.map((p) => {
             // the shared key is the administrator's to change: everyone else sets up their company's own ElevenLabs key here
-            if (!operator && p.id === 'voice-elevenlabs') return <ConnectionPanel key={p.id} providerId="elevenlabs" onChange={() => window.dispatchEvent(new Event('borga:voice-setup-changed'))} />;
             const { id: connId, conn } = statusOf('voice', p.id.replace('voice-', ''), p.label);
             const connected = conn?.status === 'connected';
             const keyConfig = VOICE_KEY_MAP[p.id];
@@ -1148,12 +1147,12 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       )}
 
       {/* ── Twilio — real outbound calling ─────────────────────────────────── */}
-      {(section === 'ai-providers' || section === 'apps') && (
+      {operator && (section === 'ai-providers' || section === 'apps') && (
       <section>
         <div className="flex items-center gap-2 mb-3">
           <Phone className="h-4 w-4 text-primary" />
           <SectionTitle
-            title="Outbound calling (Twilio)"
+            title="Outbound calling (Twilio) — shared keys"
             sub="Dial real phone numbers with the agent's ElevenLabs voice — without this, calls play locally instead"
           />
         </div>
@@ -1451,7 +1450,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           <Radio className="h-4 w-4 text-primary" />
           <SectionTitle title="Sending server (SMTP)" sub="Mail sent from your company's own address: ticket replies, notifications, and messages when Gmail isn't connected" />
         </div>
-        <ConnectionPanel providerId="smtp" onChange={fetchKeys} />
+        <ConnectionSummary providerId="smtp" hint="Your company's mail server is entered and tested in Integrations → Connections." />
         <Card className="mt-3 p-4">
           <p className="text-xs font-medium">Send a test email</p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">Uses your company&apos;s mail server above, or the platform&apos;s default when you have none.</p>

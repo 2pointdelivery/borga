@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/lib/toast-bus';
 import { useBorga } from '@/lib/borga/store';
-import { ConnectionPanel } from './ConnectionsTab';
+import { ConnectionSummary } from './ConnectionSummary';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 interface BankConnection {
@@ -40,7 +40,6 @@ export function BankFeedCard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [days, setDays] = useState('90');
   const [busy, setBusy] = useState<string | null>(null);
-  const [showKeys, setShowKeys] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState<BankConnection | null>(null);
 
   const load = useCallback(async () => {
@@ -146,12 +145,7 @@ export function BankFeedCard() {
         </ul>
       )}
 
-      <div>
-        <button className="text-[11px] text-primary underline-offset-2 hover:underline" onClick={() => setShowKeys((v) => !v)}>
-          {showKeys ? 'Hide Salt Edge credentials' : status?.source === 'platform' ? 'Use your own Salt Edge credentials instead' : 'Salt Edge credentials'}
-        </button>
-        {showKeys && <div className="mt-2"><ConnectionPanel providerId="saltedge" onChange={() => void load()} /></div>}
-      </div>
+      <ConnectionSummary providerId="saltedge" hint={status?.source === 'platform' ? "Using the platform's Salt Edge account. Add your own in Connections to use it instead." : undefined} />
 
       <ConfirmDialog
         open={!!confirmDisconnect}
