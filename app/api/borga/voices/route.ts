@@ -8,6 +8,17 @@ import { parseVoices, type VoiceInfo } from '@/lib/borga/voice-ids';
 
 export const runtime = 'nodejs';
 
+/** ElevenLabs' own explanation of a refusal (its JSON "detail"), short enough to show. */
+async function elevenError(res: Response): Promise<string> {
+  const t = await res.text().catch(() => '');
+  try {
+    const d = (JSON.parse(t) as { detail?: unknown }).detail;
+    if (typeof d === 'string') return d.slice(0, 200);
+    if (d && typeof d === 'object') return String((d as { message?: unknown }).message ?? (d as { status?: unknown }).status ?? '').slice(0, 200);
+  } catch { /* not JSON */ }
+  return t.slice(0, 120);
+}
+
 const cache = new Map<string, { at: number; voices: VoiceInfo[] }>();
 const TTL_MS = 10 * 60_000;
 
@@ -41,7 +52,11 @@ export async function GET(req: NextRequest) {
     if (res.status === 401 || res.status === 403) {
       return NextResponse.json({ ok: true, fish, configured: false, keyInvalid: true, source, voices: [], error: 'ElevenLabs rejected the API key. Check it was copied in full.' });
     }
-    if (!res.ok) return NextResponse.json({ ok: true, fish, configured: true, source, voices: hit?.voices ?? [], error: `ElevenLabs answered ${res.status}. Try again shortly.` });
+    if (!res.ok) {
+      const why = await elevenError(res);
+      console.error('ElevenLabs voices error', res.status, why);
+      return NextResponse.json({ ok: true, fish, configured: true, source, voices: hit?.voices ?? [], error: `ElevenLabs answered ${res.status}${why ? `: ${why}` : ''}` });
+    }
     const voices = parseVoices(await res.json());
     cache.set(ck, { at: Date.now(), voices });
     return NextResponse.json({ ok: true, fish, configured: true, source, voices });

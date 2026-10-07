@@ -213,7 +213,7 @@ export const PROVIDERS: ProviderDef[] = [
     label: 'ElevenLabs (voices)',
     description: "Gives this company's agents a spoken voice, in the dashboard and on phone calls. Bring your own key: the usage is billed to your ElevenLabs account.",
     fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
-    steps: ['Open elevenlabs.io/app/api-key and create an API key.', 'Paste it here and press Test connection.'],
+    steps: ['Open elevenlabs.io/app/api-key and create an API key.', 'Copy the secret key (it starts with sk_ and is shown once when created). The key ID shown in the list is not the key.', 'Paste it here and press Test connection.'],
     docsUrl: 'https://elevenlabs.io/docs/api-reference',
     testable: true,
   },

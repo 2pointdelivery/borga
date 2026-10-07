@@ -146,7 +146,11 @@ async function testSaltEdge(v: Record<string, string>, f: Fetch): Promise<TestRe
 async function testElevenLabs(v: Record<string, string>, f: Fetch): Promise<TestResult> {
   const r = await getJson(f, 'https://api.elevenlabs.io/v1/user', { headers: { 'xi-api-key': v.apiKey } });
   if (r.status === 401 || r.status === 403) return { ok: false, message: 'ElevenLabs rejected the API key.' };
-  if (r.status >= 400) return { ok: false, message: `ElevenLabs answered ${r.status}.` };
+  if (r.status >= 400) {
+    const d = (r.json as { detail?: unknown }).detail;
+    const why = typeof d === 'string' ? d : d && typeof d === 'object' ? String((d as { message?: unknown }).message ?? '') : '';
+    return { ok: false, message: `ElevenLabs answered ${r.status}${why ? `: ${why.slice(0, 200)}` : ''}.` };
+  }
   return { ok: true, message: 'Connected to ElevenLabs.' };
 }
 
