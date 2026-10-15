@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { BookOpen, Plus, Trash2, Database, Search, CheckCircle2, Sparkles, Pencil, Eye, Save, X, Brain, BrainCircuit, Filter, Zap } from 'lucide-react';
+import { BookOpen, Plus, Trash2, Database, Search, CheckCircle2, Sparkles, Pencil, Eye, Save, X, Brain, BrainCircuit, Zap } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

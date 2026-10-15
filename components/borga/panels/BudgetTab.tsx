@@ -6,7 +6,6 @@ import { Plus, Trash2, Copy, Download, Printer, TrendingUp, Wand2, CalendarRange
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
@@ -41,7 +40,12 @@ import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 const MONTH_LABEL = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const BUDGET_ROW_TYPES: AccountType[] = ['revenue', 'expense'];
+/** P&L first, then capex/balance-sheet movement planning (assets = e.g. equipment buys, liabilities = debt service). */
+const BUDGET_ROW_TYPES: AccountType[] = ['revenue', 'cost', 'expense', 'asset', 'liability'];
+const TYPE_NOTE: Partial<Record<AccountType, string>> = {
+  asset: 'Planned movements — e.g. equipment purchases (capex), expected stock levels.',
+  liability: 'Planned movements — e.g. loan repayments taken as principal reductions.',
+};
 
 export function BudgetTab() {
   const { budgets, addBudget, updateBudget, deleteBudget, setBudgetLine, setBudgetLineGrowth, applyBudgetForecast, coa, journals, activeWorkspace, log } = useBorga();
@@ -92,6 +96,24 @@ export function BudgetTab() {
 
   const annualBudgeted = months.reduce((s, m) => s + (colTotals.budgeted[m] ?? 0), 0);
   const annualForecast = months.reduce((s, m) => s + (colTotals.forecast[m] ?? 0), 0);
+  // P&L-only totals: revenue, cost and expense. Balance-sheet movements
+  // (asset/liability rows) are planned separately and never mixed into the
+  // operating total, which would double-count capex as "spend".
+  const PL_TYPES: AccountType[] = ['revenue', 'cost', 'expense'];
+  const plRows = useMemo(() => rows.filter((r) => PL_TYPES.includes(r.account.type)), [rows]);
+  const plColTotals = useMemo(() => {
+    const budgeted: Record<string, number> = {};
+    const actual: Record<string, number> = {};
+    const forecast: Record<string, number> = {};
+    months.forEach((m) => {
+      budgeted[m] = plRows.reduce((s, r) => s + (r.monthly[m] ?? 0), 0);
+      actual[m] = plRows.reduce((s, r) => s + (r.actuals[m] ?? 0), 0);
+      forecast[m] = plRows.reduce((s, r) => s + (r.forecast[m] ?? 0), 0);
+    });
+    return { budgeted, actual, forecast };
+     
+  }, [plRows, months]);
+  const plAnnualBudgeted = months.reduce((s, m) => s + (plColTotals.budgeted[m] ?? 0), 0);
 
   const createBudget = () => {
     if (!form.name.trim()) return;
@@ -327,6 +349,7 @@ export function BudgetTab() {
                     <tr>
                       <td colSpan={15} className="bg-muted/20 px-3 py-1.5">
                         <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold capitalize ring-1', ACCOUNT_TYPE_STYLE[type])}>{type}</span>
+                        {TYPE_NOTE[type] && <span className="ml-2 text-[10px] text-muted-foreground">{TYPE_NOTE[type]}</span>}
                       </td>
                     </tr>
                     {typeRows.map((r) => {
@@ -382,12 +405,12 @@ export function BudgetTab() {
                 );
               })}
               <tr className="bg-muted/40 font-semibold">
-                <td className="px-3 py-2">Total</td>
+                <td className="px-3 py-2" title="Revenue + cost + expense rows only — balance-sheet movements are planned, not earned/spent.">P&L total</td>
                 <td className="px-2 py-2" />
                 {months.map((m) => (
-                  <td key={m} className="px-2 py-2 text-right font-mono text-xs">{money(colTotals.budgeted[m] ?? 0)}</td>
+                  <td key={m} className="px-2 py-2 text-right font-mono text-xs">{money(plColTotals.budgeted[m] ?? 0)}</td>
                 ))}
-                <td className="px-3 py-2 text-right font-mono text-xs">{money(annualBudgeted)}</td>
+                <td className="px-2 py-2 text-right font-mono text-xs">{money(plAnnualBudgeted)}</td>
               </tr>
               {showForecast && (
                 <tr className="bg-amber-500/5 text-amber-700">

@@ -1,28 +1,21 @@
 'use client';
 
-import { useState } from 'react';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { InboxTab } from '../panels/InboxTab';
-import { SecureChatTab } from '../panels/SecureChatTab';
-import { CallsTab } from '../panels/CallsTab';
+import { InboxWorkspace } from '../InboxWorkspace';
 import { useFeature } from '@/lib/borga/features-client';
 
+/**
+ * The Inbox page — every communication in one three-pane inbox: email, SMS,
+ * WhatsApp and call history are channels on one timeline, grouped one thread
+ * per contact. (The old separate Secure-chat and Calls screens were removed
+ * with the unified-inbox rework; the secureChat/calls flags keep their data.)
+ */
 export function CommunicationsPage({ initialTab }: { initialTab?: string }) {
+  void initialTab;
   const inbox = useFeature('inbox');
-  const calls = useFeature('calls');
   const secure = useFeature('secureChat');
-  const first = inbox ? 'inbox' : secure ? 'securechat' : 'calls';
-  const [tab, setTab] = useState(initialTab && (initialTab === 'inbox' ? inbox : initialTab === 'securechat' ? secure : initialTab === 'calls' ? calls : false) ? initialTab : first);
-  return (
-    <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
-      <TabsList>
-        {inbox && <TabsTrigger value="inbox">Unified Inbox</TabsTrigger>}
-        {secure && <TabsTrigger value="securechat">Encrypted Chat</TabsTrigger>}
-        {calls && <TabsTrigger value="calls">Calls</TabsTrigger>}
-      </TabsList>
-      {inbox && <TabsContent value="inbox"><InboxTab /></TabsContent>}
-      {secure && <TabsContent value="securechat"><SecureChatTab /></TabsContent>}
-      {calls && <TabsContent value="calls"><CallsTab /></TabsContent>}
-    </Tabs>
-  );
+  const calls = useFeature('calls');
+  if (!inbox && !secure && !calls) {
+    return <p className="p-10 text-center text-sm text-muted-foreground">All inbox features are switched off — enable them under Settings → Features.</p>;
+  }
+  return <InboxWorkspace mode="full" />;
 }

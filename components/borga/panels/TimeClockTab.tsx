@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Clock,
   LogIn,
-  LogOut,
   Download,
   Play,
   Square,

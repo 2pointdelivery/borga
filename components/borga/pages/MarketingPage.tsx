@@ -10,6 +10,9 @@ export function MarketingPage({ initialTab }: { initialTab?: string }) {
   const social = useFeature('social');
   const ads = useFeature('advertising');
   const [tab, setTab] = useState(initialTab ?? (social ? 'social' : 'advertising'));
+  if (!social && !ads) {
+    return <p className="p-10 text-center text-sm text-muted-foreground">All marketing features are switched off — enable them under Settings → Features.</p>;
+  }
   return (
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>

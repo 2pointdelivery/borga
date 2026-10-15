@@ -35,6 +35,7 @@ import {
   type AdCampaign,
   type AdPlatform,
 } from '@/lib/borga/data';
+import { parseAdCsv, dedupeAdRows } from '@/lib/borga/ads-import';
 import { computeCashRunway } from '@/lib/borga/insights';
 import { fmtMoney } from '@/lib/borga/currencies';
 import { useBorga } from '@/lib/borga/store';
@@ -109,13 +110,46 @@ export function AdvertisingTab() {
     }))
     .filter((r) => r.spend > 0 || r.conversions > 0);
 
+  // ── CSV import (any platform's export) ──────────────────────────────────────
+  const [csvOpen, setCsvOpen] = useState(false);
+  const [csvText, setCsvText] = useState('');
+  const [csvMsg, setCsvMsg] = useState<string | null>(null);
+  const csvPreview = useMemo(() => (csvText.trim() ? parseAdCsv(csvText) : null), [csvText]);
+  const csvPlan = useMemo(
+    () => (csvPreview ? dedupeAdRows(csvPreview.rows, ads.map((a) => ({ name: a.name, platform: a.platform }))) : null),
+    [csvPreview, ads],
+  );
+  const importCsv = () => {
+    if (!csvPlan) return;
+    for (const r of csvPlan.toAdd) {
+      addCampaign({
+        id: `ad-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: r.name,
+        platform: r.platform as AdPlatform,
+        budget: r.budget, spent: r.spent,
+        impressions: r.impressions, clicks: r.clicks, conversions: r.conversions,
+        roas: r.spent > 0 ? Math.round((r.revenue / r.spent) * 100) / 100 : 0,
+        status: 'active', startDate: r.startDate || undefined, endDate: r.endDate || undefined,
+      });
+    }
+    log({ agentId: 'a-paidmedia', agentName: 'Paige', actor: 'user', kind: 'sync', message: `Imported ${csvPlan.toAdd.length} campaign(s) from CSV${csvPlan.duplicates.length ? `, skipped ${csvPlan.duplicates.length} duplicate(s)` : ''}.` });
+    setCsvMsg(`Imported ${csvPlan.toAdd.length}. ${csvPlan.duplicates.length ? `Skipped ${csvPlan.duplicates.length} already here.` : ''}`);
+    setCsvText('');
+    setTimeout(() => { setCsvMsg(null); setCsvOpen(false); }, 1200);
+  };
+
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="Advertising" sub="Paid campaigns across search and social — spend, conversions and ROAS" />
-        <Button onClick={() => setAdOpen(true)}>
-          <Plus className="h-4 w-4" /> New campaign
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => { setCsvText(''); setCsvMsg(null); setCsvOpen(true); }}>
+            Import CSV
+          </Button>
+          <Button onClick={() => setAdOpen(true)}>
+            <Plus className="h-4 w-4" /> New campaign
+          </Button>
+        </div>
       </div>
 
       {/* Cash-runway pacing guard */}
@@ -328,6 +362,42 @@ export function AdvertisingTab() {
         confirmLabel="Launch anyway"
         onConfirm={() => { setConfirmThinRunway(false); saveCampaign(true); }}
       />
+
+      {/* CSV import — any platform's export; duplicates by (name, platform) are skipped */}
+      <Dialog open={csvOpen} onOpenChange={setCsvOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Import campaigns from CSV</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p className="text-muted-foreground">
+              Paste your ad platform&apos;s export (or type rows). Headers are matched tolerantly —
+              <code className="mx-1 rounded bg-muted px-1 text-xs">name/campaign, platform/channel, budget, spend/cost, impressions, clicks, conversions, revenue, start, end</code>
+              all work. Existing campaigns (same name + platform) are skipped, never overwritten.
+            </p>
+            <Textarea
+              rows={7}
+              className="font-mono text-xs"
+              placeholder={'Campaign Name,Channel,Budget,Spend,Impressions,Clicks,Conversions,Revenue,Start,End\n"Spring Sale",LinkedIn,1000,812.50,12000,340,12,2400,2026-03-01,2026-03-31'}
+              value={csvText}
+              onChange={(e) => setCsvText(e.target.value)}
+            />
+            {csvPreview && (
+              <p className="text-xs text-muted-foreground">
+                Found {csvPreview.rows.length} row(s){csvPlan && csvPlan.duplicates.length ? `, ${csvPlan.duplicates.length} already here` : ''}.
+                {csvPreview.skipped.length ? ` Skipped: ${csvPreview.skipped[0]}${csvPreview.skipped.length > 1 ? ` (+${csvPreview.skipped.length - 1} more)` : ''}` : ''}
+              </p>
+            )}
+            {csvMsg && <p className="text-xs text-emerald-600">{csvMsg}</p>}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCsvOpen(false)}>Cancel</Button>
+            <Button disabled={!csvPlan || csvPlan.toAdd.length === 0} onClick={importCsv}>
+              Import {csvPlan?.toAdd.length ?? 0} campaign{csvPlan?.toAdd.length === 1 ? '' : 's'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

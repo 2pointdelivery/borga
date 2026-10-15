@@ -7,7 +7,7 @@ import { loadSettings } from './heartbeat-settings';
 import { addNotice } from './notices';
 import { LLM_PROVIDERS, RETIRED_LLM_PROVIDERS } from './data';
 import {
-  AllModelsFailed, ProviderHealth, planOrder, runWithFallback,
+  ProviderHealth, planOrder, runWithFallback,
   type Candidate, type FallbackResult,
 } from './llm-fallback-core';
 

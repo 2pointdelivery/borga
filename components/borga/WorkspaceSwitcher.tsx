@@ -21,7 +21,7 @@ export function WorkspaceSwitcher() {
   const [createOpen, setCreateOpen] = useState(false);
 
   const goWorkspaces = () =>
-    window.dispatchEvent(new CustomEvent('borga:nav', { detail: 'workspaces' }));
+    window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: 'company', tab: 'workspaces' } }));
 
   return (
     <>

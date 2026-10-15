@@ -723,13 +723,6 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     return { id, conn: connections.find((c) => c.id === id) };
   };
 
-  const beginConnect = (t: OauthTarget) => {
-    setOauth(t);
-    setAccount('');
-    setAgree(false);
-    setConnecting(false);
-  };
-
   const authorizeToolApp = async () => {
     if (!oauth) return;
     setConnecting(true);

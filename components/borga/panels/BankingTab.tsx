@@ -3,6 +3,7 @@
 import { fmtMoney } from '@/lib/borga/currencies';
 import { useFeature } from '@/lib/borga/features-client';
 import { BankFeedCard } from './BankFeedCard';
+import { FxCard } from './FxCard';
 import { PdfStatementDialog } from './PdfStatementDialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -19,6 +20,7 @@ import {
   RefreshCw,
   Pencil,
   Hand,
+  BookOpen,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,6 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -39,10 +42,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  fmtNum, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, normalizeReconciliationPattern,
+  PAYMENT_METHODS, PAYMENT_METHOD_LABEL, normalizeReconciliationPattern,
   type BankAccount, type BankTxn, type BankSource, type PaymentMethod, type ReconciliationRule,
 } from '@/lib/borga/data';
 import { BANK_ACCOUNT_KINDS, BANK_ACCOUNT_KIND_LABEL } from '@/lib/borga/data';
+import { rankCandidates, AUTO_MATCH_SCORE, type ReconCandidate } from '@/lib/borga/reconcile';
 import { useBorga } from '@/lib/borga/store';
 import { useComposioReady } from '../use-composio-ready';
 import { SectionTitle } from '../bits';
@@ -52,27 +56,28 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 /**
- * Reconciliation engine — deterministic two-pass matcher:
- *  1. exact amount match (± date proximity bonus)
- *  2. same-amount candidates within the ledger regardless of description
- * Candidates come from the transaction ledger (revenue = inflow, expense =
- * outflow) plus posted journal entries (cash account lines).
+ * Reconciliation engine — deterministic three-signal matcher (lib/borga/reconcile.ts):
+ * amount (exact → 1% → 5% band), date window (same week → 7 → 14 days) and
+ * payee tokens. Suggestions at or above AUTO_MATCH_SCORE apply by themselves;
+ * the 55–84 band is shown to the human. Candidates come from the transaction
+ * ledger (revenue = inflow, expense = outflow) plus posted journal entries
+ * (cash account lines); confirmed rule memory outranks everything.
  */
 function buildCandidates(
-  finance: { label: string; amount: number; kind: string }[],
-  journals: { id: string; memo: string; status: string; lines: { accountId: string; debit: number; credit: number }[] }[],
+  finance: { label: string; amount: number; kind: string; dateIso?: string }[],
+  journals: { id: string; memo: string; status: string; dateIso?: string; lines: { accountId: string; debit: number; credit: number }[] }[],
   cashAccountIds: Set<string>,
-): { ref: string; amount: number; matchedTo?: string[] }[] {
-  const out: { ref: string; amount: number; matchedTo?: string[] }[] = [];
+): ReconCandidate[] {
+  const out: ReconCandidate[] = [];
   for (const f of finance) {
     const signed = f.kind === 'expense' ? -f.amount : f.amount;
-    out.push({ ref: `Ledger — ${f.label}`, amount: signed });
+    out.push({ ref: `Ledger — ${f.label}`, label: f.label, amount: signed, dateIso: f.dateIso });
   }
   for (const j of journals.filter((j) => j.status === 'posted')) {
     for (const line of j.lines) {
       if (!cashAccountIds.has(line.accountId)) continue;
       const signed = line.debit > 0 ? line.debit : -line.credit;
-      out.push({ ref: `Journal — ${j.memo}`, amount: signed });
+      out.push({ ref: `Journal — ${j.memo}`, label: j.memo, amount: signed, dateIso: j.dateIso });
       break; // only the cash-side line per entry
     }
   }
@@ -83,28 +88,30 @@ interface MatchSuggestion {
   ref: string;
   accountId?: string;
   fromRule?: boolean;
+  /** 0–100 from the scored matcher (absent for rule matches). */
+  score?: number;
+  reasons?: string[];
 }
 
 /**
- * Rule memory takes priority over amount coincidence: a description pattern
- * the user has confirmed before is a stronger signal than two transactions
- * happening to share an amount. Falls back to the existing amount matcher.
+ * Rule memory first: a description pattern the user confirmed before is a
+ * stronger signal than any scoring. Then the scored matcher ranks the
+ * candidates; suggestions below the 55 bar are not shown at all.
  */
-function suggestMatch(txn: BankTxn, candidates: ReturnType<typeof buildCandidates>, rules: ReconciliationRule[]): MatchSuggestion | null {
+function suggestMatch(txn: BankTxn, candidates: ReconCandidate[], rules: ReconciliationRule[]): MatchSuggestion | null {
   const pattern = normalizeReconciliationPattern(txn.description);
   if (pattern) {
     const rule = rules.find((r) => r.pattern && (pattern.includes(r.pattern) || r.pattern.includes(pattern)));
     if (rule) return { ref: `Rule match — "${rule.pattern}"`, accountId: rule.accountId, fromRule: true };
   }
-  // Pass 1: exact amount
-  const exact = candidates.find((c) => Math.abs(c.amount - txn.amount) < 0.005 && !txn.matchedRef);
-  if (exact) return { ref: exact.ref };
-  // Pass 2: closest amount within 5% for larger txns
-  const near = candidates
-    .filter((c) => c.amount !== 0 && Math.abs(c.amount - txn.amount) / Math.abs(txn.amount) < 0.05)
-    .sort((a, b) => Math.abs(a.amount - txn.amount) - Math.abs(b.amount - txn.amount))[0];
-  if (near) return { ref: `${near.ref} (≈ ${fmtNum(Math.abs(near.amount))})` };
-  return null;
+  const ranked = rankCandidates(txn, candidates);
+  const best = ranked[0];
+  if (!best) return null;
+  return {
+    ref: `${best.candidate.ref} — ${best.score}% match`,
+    score: best.score,
+    reasons: best.reasons,
+  };
 }
 
 /** Normalise a suggestion into the "Ledger — X — ≈ 12,345" display form (no stray parens). */
@@ -115,7 +122,7 @@ function matchedRefFor(ref: string): string {
 export function BankingTab() {
   const {
     bankAccounts, addBankAccount, updateBankAccount, deleteBankAccount, activeWorkspaceId,
-    bankTxns, addBankTxns, matchBankTxn, setBankTxnAccount, unmatchBankTxn, excludeBankTxn, deleteBankTxn, updateBankTxn, setSettings,
+    bankTxns, addBankTxns, matchBankTxn, bookBankLine, setBankTxnAccount, unmatchBankTxn, excludeBankTxn, deleteBankTxn, updateBankTxn, setSettings,
     reconciliationRules, recordReconciliationMatch, deleteReconciliationRule,
     finance, journals, coa, composio, log, activeWorkspace, settings, syncToolkitConnection,
   } = useBorga();
@@ -145,6 +152,8 @@ export function BankingTab() {
   const [editForm, setEditForm] = useState({ date: '', description: '', amount: '0', method: 'cash' as PaymentMethod });
   const [matchTarget, setMatchTarget] = useState<BankTxn | null>(null);
   const [manualAccountId, setManualAccountId] = useState('');
+  const [bookTarget, setBookTarget] = useState<BankTxn | null>(null);
+  const [bookAccountId, setBookAccountId] = useState('');
 
   const activeAccount = bankAccounts.find((b) => b.id === selectedAccountId) ?? bankAccounts[0] ?? null;
   const accountTxns = useMemo(
@@ -199,7 +208,8 @@ export function BankingTab() {
     let count = 0;
     for (const t of bankTxns.filter((x) => x.status === 'unmatched')) {
       const suggestion = suggestMatch(t, candidates, reconciliationRules);
-      if (suggestion) {
+      // Only near-certain matches apply without a human; the rest wait for review.
+      if (suggestion && (suggestion.fromRule || (suggestion.score ?? 0) >= AUTO_MATCH_SCORE)) {
         matchBankTxn(t.id, matchedRefFor(suggestion.ref), suggestion.accountId);
         if (suggestion.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
         count++;
@@ -207,17 +217,17 @@ export function BankingTab() {
     }
     setSettings({ lastAutoMatchAt: new Date().toISOString() });
     if (count > 0) {
-      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'agent', kind: 'sync', message: `End-of-day auto-reconciliation matched ${count} bank transaction(s).` });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'agent', kind: 'sync', message: `End-of-day auto-reconciliation matched ${count} bank transaction(s) (high-confidence only).` });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bankTxns, candidates]);
 
-  /** Auto-match every unmatched txn that has a deterministic suggestion. */
+  /** Auto-match every unmatched txn that has a high-confidence suggestion. */
   const autoMatchAll = () => {
     let count = 0;
     for (const t of accountTxns.filter((x) => x.status === 'unmatched')) {
       const suggestion = suggestMatch(t, candidates, reconciliationRules);
-      if (suggestion) {
+      if (suggestion && (suggestion.fromRule || (suggestion.score ?? 0) >= AUTO_MATCH_SCORE)) {
         matchBankTxn(t.id, matchedRefFor(suggestion.ref), suggestion.accountId);
         if (suggestion.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
         count++;
@@ -225,7 +235,7 @@ export function BankingTab() {
     }
     log({
       agentId: 'a-finance', agentName: 'Ledger', actor: 'agent', kind: 'task',
-      message: `Auto-reconciliation matched ${count} of ${accountTxns.filter((x) => x.status === 'unmatched').length + count} bank transactions.`,
+      message: `Auto-reconciliation matched ${count} high-confidence bank transaction(s); the rest stay for review.`,
     });
   };
 
@@ -413,6 +423,7 @@ export function BankingTab() {
       </div>
 
       {bankFeeds && <BankFeedCard />}
+      <FxCard />
       {pdfOpen && (
         <PdfStatementDialog
           ws={activeWorkspaceId} accounts={bankAccounts} activeId={activeAccount?.id} existing={bankTxns} currency={currency}
@@ -560,15 +571,18 @@ export function BankingTab() {
           <tbody>
              {visibleTxns.map((t) => {
                const suggestion = t.status === 'unmatched' ? suggestMatch(t, candidates, reconciliationRules) : null;
-               const linkedAccount = coa.find((a) => a.id === t.accountId);
                return (
                 <tr key={t.id} className={cn('border-b last:border-0 hover:bg-muted/20', t.status === 'excluded' && 'opacity-50')}>
                   <td className="whitespace-nowrap px-4 py-2.5 text-xs">{t.date}</td>
                   <td className="px-4 py-2.5">
                     <p className="font-medium">{t.description}</p>
                     {suggestion && (
-                      <p className={cn('text-[10px]', suggestion.fromRule ? 'text-emerald-600' : 'text-sky-600')}>
+                      <p
+                        className={cn('text-[10px]', suggestion.fromRule || (suggestion.score ?? 0) >= AUTO_MATCH_SCORE ? 'text-emerald-600' : 'text-sky-600')}
+                        title={(suggestion.reasons ?? []).join(', ')}
+                      >
                         {suggestion.fromRule ? 'learned: ' : 'suggested: '}{suggestion.ref}
+                        {!suggestion.fromRule && (suggestion.score ?? 0) < AUTO_MATCH_SCORE && ' — review me'}
                       </p>
                     )}
                   </td>
@@ -602,19 +616,29 @@ export function BankingTab() {
                   </td>
                    <td className="px-2 py-2.5">
                      <div className="flex justify-end gap-0.5">
-                       {t.status === 'unmatched' && (
-                         <button
-                           onClick={() => {
-                             const ref = suggestion?.ref ?? `Manual — ${t.description}`;
-                             matchBankTxn(t.id, ref, suggestion?.accountId);
-                             if (suggestion?.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
-                           }}
-                           className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground enabled:hover:bg-primary/10 enabled:hover:text-primary"
-                           title={suggestion ? `Accept suggestion: ${suggestion.ref}` : 'Mark as matched'}
-                         >
-                           <Check className="h-3 w-3" />
-                         </button>
-                       )}
+                        {t.status === 'unmatched' && (
+                          <button
+                            onClick={() => {
+                              const ref = suggestion?.ref ?? `Manual — ${t.description}`;
+                              matchBankTxn(t.id, ref, suggestion?.accountId);
+                              if (suggestion?.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
+                            }}
+                            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground enabled:hover:bg-primary/10 enabled:hover:text-primary disabled:opacity-30"
+                            disabled={!suggestion}
+                            title={suggestion ? `Accept suggestion: ${suggestion.ref} (${(suggestion.reasons ?? []).join(', ')})` : 'No confident suggestion — book it to the ledger or match by hand'}
+                          >
+                            <Check className="h-3 w-3" />
+                          </button>
+                        )}
+                        {t.status === 'unmatched' && (
+                          <button
+                            onClick={() => { setBookTarget(t); setBookAccountId(t.accountId ?? ''); }}
+                            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-600"
+                            title="Book this bank line straight into the ledger (creates the entry + journal)"
+                          >
+                            <BookOpen className="h-3 w-3" />
+                          </button>
+                        )}
                        {t.status === 'unmatched' && (
                          <button
                            onClick={() => { setManualAccountId(''); setMatchTarget(t); }}
@@ -823,8 +847,7 @@ export function BankingTab() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Match line #{matchTarget?.id.slice(-4)} manually</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
+          </DialogHeader>          <div className="space-y-3">
             <Field label="GL account" hint="Choosing an account here teaches the auto-reconciler this description next time.">
               <AccountSelect
                 value={manualAccountId || undefined}
@@ -857,6 +880,34 @@ export function BankingTab() {
               onClick={() => submitManualMatch(`Manual — ${matchTarget?.description ?? ''}`)}
             >
               Match without a ledger candidate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Book an unmatched line straight into the ledger */}
+      <Dialog open={!!bookTarget} onOpenChange={(o) => { if (!o) setBookTarget(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Book “{bookTarget?.description}” into the ledger</DialogTitle>
+            <DialogDescription>
+              {bookTarget && (bookTarget.amount > 0
+                ? 'Money in: creates a receipt entry and posts DR Cash / CR the income account you pick.'
+                : 'Money out: creates a payment entry and posts DR the expense account you pick / CR Cash.')}
+            </DialogDescription>
+          </DialogHeader>
+          <Field label={bookTarget && bookTarget.amount > 0 ? 'Income account' : 'Expense account'}>
+            <AccountSelect
+              value={bookAccountId || undefined}
+              onChange={(v) => setBookAccountId(v ?? '')}
+              types={bookTarget && bookTarget.amount > 0 ? ['revenue'] : ['expense', 'cost']}
+              placeholder="Pick the account…"
+            />
+          </Field>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBookTarget(null)}>Cancel</Button>
+            <Button disabled={!bookAccountId} onClick={() => { if (bookTarget) { bookBankLine(bookTarget.id, bookAccountId); setBookTarget(null); } }}>
+              Book {bookTarget ? money(Math.abs(bookTarget.amount)) : ''}
             </Button>
           </DialogFooter>
         </DialogContent>

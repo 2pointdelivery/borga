@@ -61,7 +61,6 @@ export interface HealthResult {
 const WEIGHTS: Record<HealthDimensionId, number> = { profitability: 25, collections: 20, sales: 15, delivery: 15, kpis: 15, support: 10, people: 10, marketing: 5 };
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 const pct = (n: number) => `${Math.round(n)}%`;
-const DAY = 86_400_000;
 
 /** A due date only when it is a real date; free text such as "This week" is not one. */
 function dueMs(due: string | undefined): number | null {
