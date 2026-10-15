@@ -97,6 +97,10 @@ export async function tickWorkspace(ws: string | null, userId: string | null): P
   }
   // Hand fresh work to the agents that own it (stale leads, overdue invoices, unowned tickets). Never blocks the beat.
   if (ws && userId) void import('./automations').then((m) => m.runAutomations(userId, ws)).catch((e) => console.error('[automation] scan failed', e));
+  // User-built flows: due schedules/crons plus scan-derived events (stale leads, overdue invoices). Never blocks the beat.
+  if (ws && userId) void import('./flows-server').then((m) => m.beatFlows(userId, ws)).catch((e) => console.error('[flows] beat failed', e));
+  // Recurring billing: draft invoices and unpaid bills for due occurrences (single ownership — the dashboard no longer generates them).
+  if (ws && userId) void import('./recurring-server').then((m) => m.runRecurringDocs(userId, ws)).catch((e) => console.error('[recurring] beat failed', e));
   const tasks = await loadTasks(ws, userId);
   const due = tasks.filter((t) => t.enabled && t.nextRun && new Date(t.nextRun) <= now);
   if (!due.length) return { triggered: [], held: [], skippedOverlap: [], checked: tasks.length };

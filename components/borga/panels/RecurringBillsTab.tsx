@@ -51,7 +51,7 @@ const emptyForm = (taxId?: string): Form => ({
 });
 
 export function RecurringBillsTab() {
-  const { recurringBills, addRecurringBill, updateRecurringBill, deleteRecurringBill, runRecurringBills, bills, vendors, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
+  const { recurringBills, addRecurringBill, updateRecurringBill, deleteRecurringBill, runRecurringServer, bills, vendors, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
   const money = (n: number) => fmtMoney(n, currency);
 
@@ -118,13 +118,15 @@ export function RecurringBillsTab() {
     }
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Recurring bill "${fields.name}" ${editingId ? 'updated' : 'created'}: ${cadence(fields)} from ${fields.startDateIso}.` });
     setOpen(false);
-    const r = runRecurringBills();
-    if (r.created) toast({ title: `${r.created} bill${r.created === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')} (unpaid)`, variant: 'success' });
+    void runRecurringServer().then((r) => {
+      if (r.bills.length) toast({ title: `${r.bills.length} bill${r.bills.length === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')} (unpaid)`, variant: 'success' });
+    });
   };
 
   const runNow = () => {
-    const r = runRecurringBills();
-    toast(r.created ? { title: `${r.created} bill${r.created === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')}. Nothing was paid; review them under Vendors & AP.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    void runRecurringServer().then((r) => {
+      toast(r.bills.length ? { title: `${r.bills.length} bill${r.bills.length === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')}. Nothing was paid; review them under Vendors & AP.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    });
   };
 
   const setLine = (id: string, patch: Partial<BillLine>) => setForm((f) => ({ ...f, lines: f.lines.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));

@@ -5,9 +5,11 @@
  *  - saves one entity at a time and keeps only the newest value while a save is in flight, so a user's own quick edits never
  *    conflict with each other;
  *  - sends the version it last saw; the server refuses a save whose version is stale (another tab, device or an agent saved first);
- *  - on a refusal, compares the server's copy with what it was about to save. Identical content (compared canonically, because
- *    MySQL reorders JSON keys) means both sides agree, so it adopts the new version quietly. Different content is a real
- *    conflict: nothing is overwritten, the entity is blocked, and onConflict tells the user, until the entity is reloaded.
+ * - on a refusal, compares the server's copy with what it was about to save. Identical content (compared canonically, because
+ *    MySQL reorders JSON keys) means both sides agree, so it adopts the new version quietly. Different content goes to the
+ *    merge hook: id-keyed lists merge record-by-record against the last synced value (only same-field collisions keep the
+ *    server and are reported); anything unmergeable is a real conflict: nothing is overwritten, the entity is blocked, and
+ *    onConflict tells the user, until the entity is reloaded.
  *  - append-only feeds (the activity timeline) may supply a merge hook: both sides' entries are unioned and retried, so a
  *    busy background agent never blocks the feed or raises a banner for trivia.
  */
@@ -25,14 +27,17 @@ export interface SaveQueueHooks<P> {
   /** The value inside a payload, for comparing with the server's copy. */
   valueOf(payload: P): unknown;
   /**
-   * Merge a refused local value with the server's newer copy. Return null when
-   * the entity cannot be merged (the refusal becomes a real conflict). Only
-   * used for append-only feeds where union-by-id loses nothing.
+   * Merge a refused local value with the server's newer copy, given the last
+   * synced value both sides started from. Return null when the entity cannot
+   * be merged (the refusal becomes a real conflict). The queue retries the
+   * merged value from the server's version (bounded: see drain).
    */
-  merge?(id: string, localValue: unknown, serverValue: unknown): unknown | null;
+  merge?(id: string, localValue: unknown, serverValue: unknown, baseValue: unknown): MergeOutcome | null;
   /** Rebuilds a payload around a merged value for the retry. */
   withValue?(payload: P, value: unknown): P;
   onConflict(id: string, payload: P): void;
+  /** A merge that overrode the tab's own edits on some fields (server won). */
+  onMerged?(id: string, conflicts: MergeConflict[]): void;
   onError(id: string): void;
 }
 
@@ -51,12 +56,16 @@ export class SaveQueue<P> {
   private blocked = new Set<string>();
   private latest = new Map<string, P>();
   private running = new Map<string, Promise<void>>();
+  /** Last synced (server-acknowledged) value per entity, canonicalised: the merge base. */
+  private bases = new Map<string, string>();
 
   constructor(private hooks: SaveQueueHooks<P>) {}
 
   /** Records the versions the server reported for one scope (for example one company). Replaces that scope and unblocks it. */
   setVersions(scope: string, versions: Record<string, number>): void {
     for (const id of [...this.versions.keys()]) if (id.startsWith(scope)) this.versions.delete(id);
+    // New sync point: bases from before the reload no longer describe what both sides share.
+    for (const id of [...this.bases.keys()]) if (id.startsWith(scope)) this.bases.delete(id);
     this.unblockScope(scope);
     for (const [entity, v] of Object.entries(versions)) this.versions.set(scope + entity, v);
   }
@@ -67,6 +76,27 @@ export class SaveQueue<P> {
 
   version(id: string): number {
     return this.versions.get(id) ?? 0;
+  }
+
+  /** Remember the last synced value (canonical JSON) of an entity: the 3-way merge base. */
+  setBase(id: string, value: unknown): void {
+    this.bases.set(id, canonicalJson(value));
+  }
+
+  /** The merge base as a value (parsed lazily, only when a refusal actually merges). */
+  private baseValue(id: string): unknown {
+    const raw = this.bases.get(id);
+    if (raw === undefined) return undefined;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Forget one scope's bases (workspace switch). Versions are handled by setVersions. */
+  clearBases(scope: string): void {
+    for (const id of [...this.bases.keys()]) if (id.startsWith(scope)) this.bases.delete(id);
   }
 
   /**
@@ -110,6 +140,7 @@ export class SaveQueue<P> {
       const r = await this.hooks.send(id, payload, this.version(id));
       if (r.status === 'ok') {
         this.versions.set(id, r.version);
+        this.bases.set(id, canonicalJson(this.hooks.valueOf(payload)));
         continue;
       }
       if (r.status === 'rejected') {
@@ -127,14 +158,16 @@ export class SaveQueue<P> {
         continue;
       }
       if (r.current && merges < 2) {
-        const merged = this.hooks.merge?.(id, this.hooks.valueOf(payload), r.current.value);
-        if (merged !== null && merged !== undefined) {
+        const merged = this.hooks.merge?.(id, this.hooks.valueOf(payload), r.current.value, this.baseValue(id));
+        if (merged) {
           merges++;
           this.versions.set(id, r.current.version);
+          this.bases.set(id, canonicalJson(merged.merged));
+          if (merged.conflicts.length) this.hooks.onMerged?.(id, merged.conflicts);
           // A newer edit may have landed while the merge was computed: never
           // clobber it — it saves fresh from the adopted version anyway.
           if (!this.latest.has(id)) {
-            this.latest.set(id, this.hooks.withValue ? this.hooks.withValue(payload, merged) : payload);
+            this.latest.set(id, this.hooks.withValue ? this.hooks.withValue(payload, merged.merged) : payload);
           }
           continue;
         }
@@ -165,4 +198,126 @@ export function unionAppendOnly(localValue: unknown, serverValue: unknown, cap: 
     (e): e is { id?: unknown } => !!e && (e.id == null || !seen.has(e.id)),
   );
   return [...(localValue as Array<{ id?: unknown }>), ...extra].slice(0, cap);
+}
+
+// ---------------------------------------------------------------------------
+// 3-way record merge for id-keyed lists (invoices, tasks, leads, ...).
+//
+// base = the last synced value both sides started from. Per record:
+//   - only one side changed it (or added it) -> that side wins, nothing lost
+//   - both sides changed different fields -> each keeps its fields, nothing lost
+//   - both sides changed the same field -> the server wins and the field is
+//     reported (the only case that still loses a local edit)
+//   - one side deleted it (absent) while the other left it untouched -> the
+//     delete wins; while the other changed it -> the change wins (a delete
+//     never silently discards someone else's edit)
+
+export interface MergeConflict {
+  /** Record id. */
+  id: string;
+  /** Human label (name/title/number/…) for the banner. */
+  label: string;
+  /** Fields where both sides edited and the server won. */
+  fields: string[];
+}
+
+export interface MergeOutcome {
+  merged: unknown[];
+  conflicts: MergeConflict[];
+}
+
+type Rec = Record<string, unknown>;
+
+function asRecList(v: unknown): Rec[] | null {
+  if (!Array.isArray(v)) return null;
+  for (const e of v) {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) return null;
+    if (typeof (e as Rec).id !== 'string') return null;
+  }
+  return v as Rec[];
+}
+
+function same(a: unknown, b: unknown): boolean {
+  return canonicalJson(a) === canonicalJson(b);
+}
+
+/** "INV-104", "Ama Serwaa", … — first human key present, else the id. */
+export function recordLabel(rec: Rec): string {
+  for (const k of ['name', 'title', 'subject', 'number', 'label']) {
+    const v = rec[k];
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 60);
+  }
+  return `#${String(rec.id).slice(0, 24)}`;
+}
+
+export function mergeRecords(baseValue: unknown, localValue: unknown, serverValue: unknown): MergeOutcome | null {
+  const base = asRecList(baseValue);
+  const local = asRecList(localValue);
+  const server = asRecList(serverValue);
+  if (!local || !server) return null;
+  const b = new Map((base ?? []).map((r) => [r.id as string, r]));
+  const l = new Map(local.map((r) => [r.id as string, r]));
+  const s = new Map(server.map((r) => [r.id as string, r]));
+  const merged: Rec[] = [];
+  const conflicts: MergeConflict[] = [];
+  const pushConflict = (id: string, rec: Rec, fields: string[]) => {
+    if (fields.length) conflicts.push({ id, label: recordLabel(rec), fields: [...new Set(fields)].slice(0, 8) });
+  };
+
+  // Server order first (keeps the saved arrangement), then local-only additions at the end.
+  for (const [, srec] of s) {
+    const lrec = l.get(srec.id as string);
+    const brec = b.get(srec.id as string);
+    if (!lrec) {
+      // Absent locally: deleted here (was in base) or never seen (not in base, local is older than base — impossible
+      // when base is the last sync, so treat missing-base as deleted-here). Either way the delete wins — unless the
+      // server changed it since base, in which case the edit wins over the delete.
+      if (brec && !same(srec, brec)) {
+        merged.push(srec);
+      } else if (!brec) {
+        merged.push(srec);
+      }
+      continue;
+    }
+    if (!brec) {
+      // Added on both sides under one id: keep when identical, else the server wins and says so.
+      if (same(lrec, srec)) merged.push(srec);
+      else {
+        merged.push(srec);
+        pushConflict(srec.id as string, srec, Object.keys(srec).filter((k) => !same(lrec[k], srec[k])));
+      }
+      continue;
+    }
+    if (same(lrec, brec)) {
+      merged.push(srec);
+      continue;
+    }
+    if (same(srec, brec)) {
+      merged.push(lrec);
+      continue;
+    }
+    // Changed on both sides: field-level merge, server wins field conflicts.
+    const out: Rec = { ...srec };
+    const fields: string[] = [];
+    for (const k of new Set([...Object.keys(lrec), ...Object.keys(srec), ...Object.keys(brec)])) {
+      const fl = lrec[k];
+      const fs = srec[k];
+      const fb = brec[k];
+      if (same(fl, fb)) out[k] = fs;
+      else if (same(fs, fb)) out[k] = fl;
+      else {
+        out[k] = fs;
+        fields.push(k);
+      }
+    }
+    merged.push(out);
+    pushConflict(srec.id as string, out, fields);
+  }
+  for (const [id, lrec] of l) {
+    if (s.has(id)) continue;
+    const brec = b.get(id);
+    if (brec && same(lrec, brec)) continue; // deleted on the server, untouched here: the delete wins
+    if (!brec || !same(lrec, brec)) merged.push(lrec); // added here, or changed here while deleted there: the edit wins
+  }
+  return { merged, conflicts };
 }

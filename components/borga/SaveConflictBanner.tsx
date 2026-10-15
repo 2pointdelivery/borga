@@ -23,10 +23,10 @@ const label = (entity: string) => LABELS[entity] ?? entity.replace(/([A-Z])/g, '
  * The user can load the server copy (discarding their edit) or keep their own (overwriting the server copy).
  */
 export function SaveConflictBanner() {
-  const { saveConflicts, loadLatest, forceSaveEntity } = useBorga();
+  const { saveConflicts, mergeNotices, dismissMergeNotice, loadLatest, forceSaveEntity } = useBorga();
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmKeep, setConfirmKeep] = useState<string | null>(null);
-  if (!saveConflicts.length && !confirmKeep) return null;
+  if (!saveConflicts.length && !mergeNotices.length && !confirmKeep) return null;
 
   const doKeepMine = async (entity: string) => {
     setConfirmKeep(null);
@@ -78,6 +78,23 @@ export function SaveConflictBanner() {
         confirmLabel="Keep my copy"
         onConfirm={() => { if (confirmKeep) void doKeepMine(confirmKeep); }}
       />
+      {mergeNotices.map((m) => (
+        <span key={m.entity} className="flex max-w-3xl flex-wrap items-center gap-2" role="status">
+          <span>
+            <strong>Merged {label(m.entity)} with newer changes.</strong>{' '}
+            {m.records.map((r) => `${r.label} kept the saved ${r.fields.join(', ')}`).join('; ')}.
+            Everything else united — nothing else was lost.
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5 border-amber-600/50 bg-white/70 text-amber-950 hover:bg-white dark:bg-amber-900 dark:text-amber-100"
+            onClick={() => dismissMergeNotice(m.entity)}
+          >
+            Got it
+          </Button>
+        </span>
+      ))}
     </div>
   );
 }

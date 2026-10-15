@@ -17,6 +17,8 @@ import { ValuationConfigEditor } from './ValuationConfigEditor';
 import { FeaturesCard } from './FeaturesCard';
 import { EmailUpdatesCard } from './EmailUpdatesCard';
 import { InvitesCard } from './InvitesCard';
+import { AuditCard } from './AuditCard';
+import { usePush } from '../use-push';
 import { cn } from '@/lib/utils';
 
 const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
@@ -33,6 +35,8 @@ export function SettingsTab() {
   const { userName, setUserName, log, settings, setSettings, dbAvailable } = useBorga();
   const { mode, setMode } = useTheme();
   const [name, setName] = useState(userName);
+  const { state: push, subscribe, unsubscribe, sendTest } = usePush();
+  const [pushMsg, setPushMsg] = useState<string | null>(null);
 
   const setNotif = (key: keyof typeof settings.notifications, v: boolean) => {
     setSettings({ notifications: { ...settings.notifications, [key]: v } });
@@ -114,6 +118,45 @@ export function SettingsTab() {
                 />
               </div>
             ))}
+          </div>
+          <div className="mt-4 border-t pt-4">
+            <p className="text-sm font-medium">Browser push</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">Urgent and noteworthy notices reach subscribed devices even with the dashboard closed. Info stays in the app.</p>
+            <div className="mt-2 space-y-2">
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm">Push urgent alerts</p>
+                <Switch checked={settings.notifications.pushUrgent ?? true} onCheckedChange={(v) => setNotif('pushUrgent', v)} />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm">Push noteworthy alerts</p>
+                <Switch checked={settings.notifications.pushNoteworthy ?? true} onCheckedChange={(v) => setNotif('pushNoteworthy', v)} />
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {!push.supported && <p className="text-xs text-muted-foreground">This browser cannot receive push notifications.</p>}
+              {push.supported && !push.configured && (
+                <p className="text-xs text-muted-foreground">Server push is not configured yet — add VAPID keys to the deployment (see docs/PUSH.md).</p>
+              )}
+              {push.supported && push.configured && !push.subscribed && (
+                <Button size="sm" disabled={push.busy} onClick={() => void subscribe()}>
+                  Notify this device
+                </Button>
+              )}
+              {push.supported && push.subscribed && (
+                <>
+                  <Badge variant="secondary">{push.count} device{push.count === 1 ? '' : 's'} for this company</Badge>
+                  <Button size="sm" variant="outline" disabled={push.busy} onClick={() => void sendTest().then(setPushMsg)}>
+                    Send test
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={push.busy} onClick={() => void unsubscribe()}>
+                    Turn off
+                  </Button>
+                </>
+              )}
+            </div>
+            {(pushMsg || (push.supported && push.error)) && (
+              <p className="mt-2 text-xs text-muted-foreground">{pushMsg ?? (push.supported ? push.error : null)}</p>
+            )}
           </div>
         </Card>
 
@@ -200,6 +243,7 @@ export function SettingsTab() {
 
       <EmailUpdatesCard />
       <InvitesCard />
+      <AuditCard />
 
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">

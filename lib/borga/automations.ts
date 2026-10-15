@@ -8,7 +8,8 @@ import { inQuietHours } from './heartbeat';
 import { paymentRequired } from './billing-server';
 import { loadFeatures } from './features-server';
 import { anyModelReady } from './llm-fallback';
-import { AGENTS, type ActivityEvent, type Agent, type Invoice, type Lead, type Task } from './data';
+import { AGENTS, type ActivityEvent, type Agent, type Employee, type Invoice, type Lead, type Task } from './data';
+import { roundRobinAssignee } from './tickets';
 import {
   MAX_BATCH, MAX_RUNS_PER_DAY, MAX_RUNS_PER_SCAN, TICKET_FRESH_MS, agentTasks, invoicePriority, invoicesBatchGoal, isLowValueTicket, leadPriority,
   leadsBatchGoal, normalizeLedger, overdueInvoices, pruneLedger, resolveAutomations, routeAgent, shouldRetry, staleLeads, taskGoal,
@@ -146,6 +147,10 @@ function skip(led: Ledger, key: string): void {
 
 /** A new ticket: assign it to the support agent (unless a person already owns it) and have that agent triage it. */
 export async function onTicketCreated(u: string, ws: string, t: { id: string; subject: string; priority: string; assignee: string; requesterEmail?: string }): Promise<ScanResult> {
+  // User flows listen too, independent of the built-in triage switch below.
+  void import('./flows-server')
+    .then((m) => m.fireEvent(u, ws, 'ticket.created', { ticketId: t.id, subject: t.subject, priority: t.priority, requesterEmail: t.requesterEmail ?? '' }, `ticket:${t.id}`))
+    .catch(() => undefined);
   return serialize(`${u}|${ws}`, async () => {
     const ctx = await context(u, ws);
     if ('off' in ctx) return { dispatched: [], skipped: ctx.off };
@@ -163,8 +168,18 @@ export async function onTicketCreated(u: string, ws: string, t: { id: string; su
     const agent = routeAgent(ctx.agents, 'support');
     if (!agent) return { dispatched: [], skipped: 'no support agent' };
     if (!t.assignee) {
-      const { updateTicket } = await import('./tickets-server');
-      await updateTicket(u, ws, t.id, { assignee: agent.name }, `${agent.name} (automation)`).catch(() => undefined);
+      const { updateTicket, listTickets } = await import('./tickets-server');
+      // Round-robin the human team first: the least-loaded person owns the
+      // ticket and the AI agent works it with them. Falls back to the agent
+      // alone when the company has no employees on the roster.
+      const roster = ((await stateOf<Employee[]>(u, ws, 'employees')) ?? []).filter((e) => e.status === 'active');
+      let owner: { name: string; id?: string } | null = null;
+      if (roster.length > 0) {
+        const open = (await listTickets(u, ws).catch(() => []))
+          .filter((x) => !['resolved', 'closed'].includes(x.status));
+        owner = roundRobinAssignee(roster.map((e) => ({ id: e.id, name: e.name })), open);
+      }
+      await updateTicket(u, ws, t.id, { assignee: owner?.name ?? agent.name, assigneeId: owner?.id }, `${owner?.name ?? agent.name} (auto-assign)`).catch(() => undefined);
     }
     const ok = await dispatch(u, ws, led, [key], agent, ticketGoal(t), { urgent, priority: ticketPriority(t.priority), maxSteps: 5, what: `ticket ${t.id}` });
     await setBorgaState(ledgerKey(u, ws), pruneLedger(led));
@@ -209,7 +224,10 @@ export async function runAutomations(
       const support = routeAgent(agents, 'support');
       if (support) {
         const { listTickets, updateTicket } = await import('./tickets-server');
-        const fresh = (await listTickets(u, ws).catch(() => []))
+        const all = await listTickets(u, ws).catch(() => []);
+        // Same round-robin rule as onTicketCreated: the least-loaded person owns it.
+        const roster = ((await stateOf<Employee[]>(u, ws, 'employees')) ?? []).filter((e) => e.status === 'active');
+        const fresh = all
           .filter((t) => t.status === 'open' && now - Date.parse(t.createdAt) < TICKET_FRESH_MS)
           .sort((a, b) => ticketPriority(a.priority) - ticketPriority(b.priority))
           .slice(0, 20);
@@ -221,7 +239,12 @@ export async function runAutomations(
           if (await handled(u, ws, led, key)) continue;
           if (isLowValueTicket(t)) { skip(led, key); changed = true; continue; }
           if (quiet && t.priority !== 'critical') continue;
-          if (!t.assignee) await updateTicket(u, ws, t.id, { assignee: support.name }, `${support.name} (automation)`).catch(() => undefined);
+          if (!t.assignee) {
+            const owner = roster.length > 0
+              ? roundRobinAssignee(roster.map((e) => ({ id: e.id, name: e.name })), all.filter((x) => !['resolved', 'closed'].includes(x.status)))
+              : null;
+            await updateTicket(u, ws, t.id, { assignee: owner?.name ?? support.name, assigneeId: owner?.id }, `${owner?.name ?? support.name} (auto-assign)`).catch(() => undefined);
+          }
           if (await dispatch(u, ws, led, [key], support, ticketGoal(t), { urgent: t.priority === 'critical', priority: ticketPriority(t.priority), maxSteps: 5, what: `ticket ${t.id}` })) {
             dispatched.push(key); changed = true; runs++;
           }

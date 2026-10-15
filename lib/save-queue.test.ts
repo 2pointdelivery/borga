@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SaveQueue, canonicalJson, unionAppendOnly, type SendResult } from './borga/save-queue';
+import { SaveQueue, canonicalJson, mergeRecords, recordLabel, unionAppendOnly, type MergeConflict, type SendResult } from './borga/save-queue';
 
 type Payload = { value: unknown };
 
@@ -227,7 +227,10 @@ test('an append-only feed merges both sides instead of conflicting', async () =>
   const queue = new SaveQueue<Payload>({
     send: (id, p, base) => s.handle(id, p, base),
     valueOf: (p) => p.value,
-    merge: (_id, local, server) => unionAppendOnly(local, server, 200),
+    merge: (_id, local, server) => {
+      const u = unionAppendOnly(local, server, 200);
+      return u ? { merged: u, conflicts: [] } : null;
+    },
     withValue: (p, value) => ({ ...p, value }),
     onConflict: (id) => events.conflicts.push(id),
     onError: () => {},
@@ -247,7 +250,10 @@ test('an explicit clear never merges: emptied feeds stay empty instead of resurr
   const queue = new SaveQueue<Payload>({
     send: (id, p, base) => s.handle(id, p, base),
     valueOf: (p) => p.value,
-    merge: (_id, local, server) => unionAppendOnly(local, server, 200),
+    merge: (_id, local, server) => {
+      const u = unionAppendOnly(local, server, 200);
+      return u ? { merged: u, conflicts: [] } : null;
+    },
     withValue: (p, value) => ({ ...p, value }),
     onConflict: (id) => events.conflicts.push(id),
     onError: () => {},
@@ -270,7 +276,8 @@ test('a merge that keeps losing to a hot writer still ends in a conflict, not a 
       merges++;
       // simulate a writer that always moves first: poison the merge target
       s.external('ws1|activity', [{ id: `hot-${merges}` }]);
-      return unionAppendOnly(local, server, 200);
+      const u = unionAppendOnly(local, server, 200);
+      return u ? { merged: u, conflicts: [] } : null;
     },
     withValue: (p, value) => ({ ...p, value }),
     onConflict: (id) => events.conflicts.push(id),
@@ -292,4 +299,102 @@ test('unionAppendOnly dedupes by id, keeps local-first order, and caps', () => {
   assert.equal((unionAppendOnly([{ id: 1 }], [{ id: 2 }, { id: 3 }], 2) ?? []).length, 2);
   assert.equal(unionAppendOnly([], [{ id: 1 }], 10), null, 'empty local refuses to merge');
   assert.equal(unionAppendOnly([{ id: 1 }], { nope: true }, 10), null, 'non-arrays refuse to merge');
+});
+
+test('mergeRecords unites different records and different fields with no conflicts', () => {
+  const base = [{ id: 'a', number: 'INV-1', amount: 100, due: '2026-01-01' }, { id: 'b', number: 'INV-2', amount: 200, due: '2026-01-01' }];
+  const local = [{ id: 'a', number: 'INV-1', amount: 150, due: '2026-01-01' }, { id: 'b', number: 'INV-2', amount: 200, due: '2026-01-01' }, { id: 'c', number: 'INV-3', amount: 300, due: '2026-01-01' }];
+  const server = [{ id: 'a', number: 'INV-1', amount: 100, due: '2026-02-01' }, { id: 'b', number: 'INV-2', amount: 200, due: '2026-01-01' }, { id: 'd', number: 'INV-4', amount: 400, due: '2026-01-01' }];
+  const r = mergeRecords(base, local, server)!;
+  assert.deepEqual(r.conflicts, []);
+  assert.deepEqual(r.merged, [
+    { id: 'a', number: 'INV-1', amount: 150, due: '2026-02-01' },
+    { id: 'b', number: 'INV-2', amount: 200, due: '2026-01-01' },
+    { id: 'd', number: 'INV-4', amount: 400, due: '2026-01-01' },
+    { id: 'c', number: 'INV-3', amount: 300, due: '2026-01-01' },
+  ]);
+});
+
+test('mergeRecords keeps the server on same-field collisions and reports them', () => {
+  const base = [{ id: 'a', number: 'INV-1', amount: 100, due: '2026-01-01' }];
+  const local = [{ id: 'a', number: 'INV-1', amount: 150, due: '2026-01-01' }];
+  const server = [{ id: 'a', number: 'INV-1', amount: 175, due: '2026-01-01' }];
+  const r = mergeRecords(base, local, server)!;
+  assert.deepEqual(r.merged, [{ id: 'a', number: 'INV-1', amount: 175, due: '2026-01-01' }]);
+  assert.deepEqual(r.conflicts, [{ id: 'a', label: 'INV-1', fields: ['amount'] }]);
+});
+
+test('mergeRecords honours deletes, never resurrects them, and never loses edits to deleted rows', () => {
+  const base = [{ id: 'a', n: 1 }, { id: 'b', n: 2 }, { id: 'c', n: 3 }];
+  // local deleted b, edited c; server left b alone (so the local delete wins) and added d
+  const local = [{ id: 'a', n: 1 }, { id: 'c', n: 30 }];
+  const server = [{ id: 'a', n: 1 }, { id: 'b', n: 2 }, { id: 'd', n: 4 }];
+  const r = mergeRecords(base, local, server)!;
+  assert.deepEqual(r.merged, [{ id: 'a', n: 1 }, { id: 'd', n: 4 }, { id: 'c', n: 30 }]);
+  assert.deepEqual(r.conflicts, []);
+  // both deleted b, nobody touched a: quiet
+  const r2 = mergeRecords(base, [{ id: 'a', n: 1 }], [{ id: 'a', n: 1 }])!;
+  assert.deepEqual(r2.merged, [{ id: 'a', n: 1 }]);
+});
+
+test('mergeRecords refuses non-record lists and labels conflicts humanely', () => {
+  assert.equal(mergeRecords([], ['a'], ['b']), null);
+  assert.equal(mergeRecords([], [{ id: 1 }], [{ id: 1 }]), null);
+  assert.equal(mergeRecords([], { a: 1 }, { a: 1 }), null);
+  assert.equal(recordLabel({ id: 'x-1', name: 'Ama Serwaa' }), 'Ama Serwaa');
+  assert.equal(recordLabel({ id: 'x-2' }), '#x-2');
+});
+
+test('two tabs editing different records merge silently through the queue', async () => {
+  const s = new FakeServer();
+  const events = { conflicts: [] as string[], merged: [] as { id: string; conflicts: MergeConflict[] }[] };
+  const mkQueue = () => new SaveQueue<Payload>({
+    send: (id, p, base) => s.handle(id, p, base),
+    valueOf: (p) => p.value,
+    merge: (_id, local, server, base) => mergeRecords(base, local, server),
+    withValue: (p, value) => ({ ...p, value }),
+    onConflict: (id) => events.conflicts.push(id),
+    onMerged: (id, conflicts) => events.merged.push({ id, conflicts }),
+    onError: () => {},
+  });
+  const qa = mkQueue();
+  const qb = mkQueue();
+  const v0 = [{ id: 'a', amount: 100 }, { id: 'b', amount: 200 }];
+  await qa.save(ID, { value: v0 });
+  qb.setVersions('ws1|', { invoices: 1 });
+  qb.setBase(ID, v0);
+  // tab A changes record a (server now v2)
+  await qa.save(ID, { value: [{ id: 'a', amount: 150 }, { id: 'b', amount: 200 }] });
+  // tab B, still on v1, changes record b: must merge, not banner
+  await qb.save(ID, { value: [{ id: 'a', amount: 100 }, { id: 'b', amount: 250 }] });
+  assert.deepEqual(events.conflicts, []);
+  assert.deepEqual(events.merged, [], 'no field collisions, so no merge notice');
+  assert.deepEqual(s.rows.get(ID)?.value, [{ id: 'a', amount: 150 }, { id: 'b', amount: 250 }]);
+  assert.equal(qb.isBlocked(ID), false);
+});
+
+test('same-field collisions merge with the server winning, and are reported', async () => {
+  const s = new FakeServer();
+  const events = { conflicts: [] as string[], merged: [] as { id: string; conflicts: MergeConflict[] }[] };
+  const mkQueue = () => new SaveQueue<Payload>({
+    send: (id, p, base) => s.handle(id, p, base),
+    valueOf: (p) => p.value,
+    merge: (_id, local, server, base) => mergeRecords(base, local, server),
+    withValue: (p, value) => ({ ...p, value }),
+    onConflict: (id) => events.conflicts.push(id),
+    onMerged: (id, conflicts) => events.merged.push({ id, conflicts }),
+    onError: () => {},
+  });
+  const qa = mkQueue();
+  const qb = mkQueue();
+  const v0 = [{ id: 'a', number: 'INV-1', amount: 100 }];
+  await qa.save(ID, { value: v0 });
+  qb.setVersions('ws1|', { invoices: 1 });
+  qb.setBase(ID, v0);
+  await qa.save(ID, { value: [{ id: 'a', number: 'INV-1', amount: 150 }] });
+  await qb.save(ID, { value: [{ id: 'a', number: 'INV-1', amount: 175 }] });
+  assert.deepEqual(events.conflicts, [], 'merged, not blocked');
+  assert.equal(events.merged.length, 1);
+  assert.deepEqual(events.merged[0].conflicts, [{ id: 'a', label: 'INV-1', fields: ['amount'] }]);
+  assert.deepEqual(s.rows.get(ID)?.value, [{ id: 'a', number: 'INV-1', amount: 150 }]);
 });

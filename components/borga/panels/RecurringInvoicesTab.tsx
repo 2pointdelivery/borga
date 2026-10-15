@@ -53,7 +53,7 @@ const emptyForm = (taxId?: string): Form => ({
 });
 
 export function RecurringInvoicesTab() {
-  const { recurringInvoices, addRecurringInvoice, updateRecurringInvoice, deleteRecurringInvoice, runRecurringInvoices, invoices, customers, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
+  const { recurringInvoices, addRecurringInvoice, updateRecurringInvoice, deleteRecurringInvoice, runRecurringServer, invoices, customers, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
   const money = (n: number) => fmtMoney(n, currency);
 
@@ -133,14 +133,16 @@ export function RecurringInvoicesTab() {
     }
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Recurring invoice "${fields.name}" ${editingId ? 'updated' : 'created'}: ${cadence(fields)} from ${fields.startDateIso}.` });
     setOpen(false);
-    // A schedule starting today (or in the past) should bill right away, not on the next page load.
-    const r = runRecurringInvoices();
-    if (r.created) toast({ title: `${r.created} draft invoice${r.created === 1 ? '' : 's'} created`, description: r.invoices.join(', '), variant: 'success' });
+    // A schedule starting today (or in the past) should bill right away: the server generates it, then this tab reloads.
+    void runRecurringServer().then((r) => {
+      if (r.invoices.length) toast({ title: `${r.invoices.length} draft invoice${r.invoices.length === 1 ? '' : 's'} created`, description: r.invoices.join(', '), variant: 'success' });
+    });
   };
 
   const runNow = () => {
-    const r = runRecurringInvoices();
-    toast(r.created ? { title: `${r.created} draft invoice${r.created === 1 ? '' : 's'} created`, description: `${r.invoices.join(', ')}. Review and send them under Invoicing.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    void runRecurringServer().then((r) => {
+      toast(r.invoices.length ? { title: `${r.invoices.length} draft invoice${r.invoices.length === 1 ? '' : 's'} created`, description: `${r.invoices.join(', ')}. Review and send them under Invoicing.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    });
   };
 
   const setLine = (id: string, patch: Partial<InvoiceLine>) => setForm((f) => ({ ...f, lines: f.lines.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));
@@ -230,23 +232,19 @@ export function RecurringInvoicesTab() {
             )}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Schedule name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Monthly hosting — Acme" /></Field>
-              <Field label="Customer">
+              <Field label="Customer" hint="Search your customers — or type a name to use it just for this schedule.">
                 <SearchSelect
-                  options={[
-                    { value: NONE, label: 'Type a name…' },
-                    ...customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry })),
-                  ]}
-                  value={form.customerId && customers.some((c) => c.id === form.customerId) ? form.customerId : NONE}
-                  onChange={(v) => {
+                  options={customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry }))}
+                  value={form.customerId ?? form.client}
+                  onChange={(v, option) => {
                     const c = customers.find((x) => x.id === v);
                     if (c) setForm({ ...form, customerId: c.id, client: c.name });
-                    else setForm({ ...form, customerId: undefined });
+                    else setForm({ ...form, customerId: undefined, client: option?.label ?? v });
                   }}
-                  placeholder="Pick a customer or type below"
+                  placeholder="Search customers or type a name…"
                   searchPlaceholder="Search customers"
-                  clearable={false}
+                  allowCustom
                 />
-                <Input className="mt-1.5" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value, customerId: undefined })} placeholder="Customer name on the invoice" />
               </Field>
             </div>
             <div className="grid grid-cols-3 gap-3">

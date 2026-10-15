@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AgentsTab } from '../panels/AgentsTab';
 import { RunsQueueTab } from '../panels/RunsQueueTab';
+import { FlowsTab } from '../panels/FlowsTab';
 import { PlannerTab } from '../panels/PlannerTab';
 import { ActivityTab } from '../panels/ActivityTab';
 
@@ -17,11 +18,13 @@ export function AIPlatformPage({ initialTab }: { initialTab?: string }) {
       <TabsList>
         <TabsTrigger value="agents">Agents</TabsTrigger>
         <TabsTrigger value="runs">Runs & Queue</TabsTrigger>
+        <TabsTrigger value="flows">Workflows</TabsTrigger>
         <TabsTrigger value="planner">Planner</TabsTrigger>
         <TabsTrigger value="activity">Activity Log</TabsTrigger>
       </TabsList>
       <TabsContent value="agents"><AgentsTab /></TabsContent>
       <TabsContent value="runs"><RunsQueueTab /></TabsContent>
+      <TabsContent value="flows"><FlowsTab /></TabsContent>
       <TabsContent value="planner"><PlannerTab /></TabsContent>
       <TabsContent value="activity"><ActivityTab /></TabsContent>
     </Tabs>

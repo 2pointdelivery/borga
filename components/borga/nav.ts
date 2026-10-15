@@ -58,8 +58,10 @@ export const NAV_PAGES: NavPage[] = [
     id: 'sales', label: 'Sales', icon: DollarSign,
     tabs: [
       { id: 'pipeline', label: 'Pipeline' },
+      { id: 'inbox', label: 'Inbox' },
       { id: 'customers', label: 'Customers' },
       { id: 'invoices', label: 'Invoicing' },
+      { id: 'quotes', label: 'Quotes' },
     ],
   },
   {
@@ -70,11 +72,9 @@ export const NAV_PAGES: NavPage[] = [
     ],
   },
   {
-    id: 'communications', label: 'Communications', icon: Inbox,
+    id: 'communications', label: 'Inbox', icon: Inbox,
     tabs: [
-      { id: 'inbox', label: 'Unified Inbox' },
-      { id: 'securechat', label: 'Encrypted Chat' },
-      { id: 'calls', label: 'Calls' },
+      { id: 'inbox', label: 'All channels' },
     ],
   },
   {
@@ -93,6 +93,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'assets', label: 'Fixed Assets' },
       { id: 'banking', label: 'Banking' },
       { id: 'vendors', label: 'Vendors & AP' },
+      { id: 'tax', label: 'Tax' },
       { id: 'budgeting', label: 'Budgeting' },
       { id: 'revenue', label: 'Revenue Tracker' },
       { id: 'reports', label: 'Reports' },
@@ -107,6 +108,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'stock', label: 'Stock & Costing' },
       { id: 'locations', label: 'Warehouses & Stores' },
       { id: 'pos', label: 'Point of Sale' },
+      { id: 'orders', label: 'Purchase Orders' },
     ],
   },
   {
@@ -116,6 +118,7 @@ export const NAV_PAGES: NavPage[] = [
     id: 'hr', label: 'HR', icon: Briefcase,
     tabs: [
       { id: 'directory', label: 'Directory' },
+      { id: 'payroll', label: 'Payroll' },
       { id: 'timeoff', label: 'Time Off' },
       { id: 'timeclock', label: 'Time Clock' },
       { id: 'invites', label: 'Team Invites' },
@@ -129,6 +132,7 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'workspaces', label: 'Companies' },
       { id: 'valuation', label: 'Valuation' },
       { id: 'fundraising', label: 'Fundraising' },
+      { id: 'equity', label: 'Cap Table' },
       { id: 'knowledge', label: 'Knowledge Base' },
       { id: 'engine', label: 'Company Engine' },
     ],
@@ -138,6 +142,7 @@ export const NAV_PAGES: NavPage[] = [
     tabs: [
       { id: 'agents', label: 'Agents' },
       { id: 'runs', label: 'Runs & Queue' },
+      { id: 'flows', label: 'Workflows' },
       { id: 'planner', label: 'Planner' },
       { id: 'activity', label: 'Activity Log' },
     ],
