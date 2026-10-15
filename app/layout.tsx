@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { Analytics } from '@vercel/analytics/next';
 import { AgentationGuard } from '@/components/AgentationGuard';
 import { HappySeedsWatermark } from '@/components/HappySeedsWatermark';
@@ -22,6 +23,9 @@ export default async function RootLayout({
   // Analytics scripts need the visitor's consent (signed cookie + GPC override).
   const { choice } = await effectiveConsent().catch(() => ({ choice: null }) as never);
   const allowAnalytics = choice?.choices.analytics === true;
+  // CSP nonce for <Script> components (set per request by proxy.ts; absent when
+  // a page is served without the proxy, in which case no nonce policy applies).
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
 
   return (
     <html lang="en">
@@ -31,6 +35,7 @@ export default async function RootLayout({
             allowAnalytics={allowAnalytics}
             src={umamiUrl}
             websiteId={process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID}
+            nonce={nonce}
           />
         )}
       </head>

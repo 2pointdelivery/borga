@@ -1,9 +1,9 @@
 import 'server-only';
 import { randomBytes } from 'crypto';
 import { getBorgaState, listBorgaKeys, setBorgaState } from './persistence';
-import { API_KEY_PREFIX, hashApiKey, parseBearerSecret, safeEqual, toPublic, type ApiKeyPublic, type ApiKeyRecord } from './api-keys';
+import { API_KEY_PREFIX, hashApiKey, isExpiredKey, parseBearerSecret, safeEqual, toPublic, type ApiKeyPublic, type ApiKeyRecord } from './api-keys';
 
-export { API_KEY_PREFIX, hashApiKey, parseBearerSecret, safeEqual, toPublic };
+export { API_KEY_PREFIX, hashApiKey, isExpiredKey, parseBearerSecret, safeEqual, toPublic };
 export type { ApiKeyPublic, ApiKeyRecord };
 
 const storeKey = (userId: string) => `t::${userId}::apikeys`;
@@ -12,7 +12,12 @@ export async function listApiKeys(userId: string): Promise<ApiKeyRecord[]> {
   return (await getBorgaState<ApiKeyRecord[]>(storeKey(userId))) ?? [];
 }
 
-export async function createApiKey(userId: string, name: string, wsIds: string[]): Promise<{ record: ApiKeyPublic; secret: string }> {
+export async function createApiKey(
+  userId: string,
+  name: string,
+  wsIds: string[],
+  opts: { expiresInDays?: number } = {},
+): Promise<{ record: ApiKeyPublic; secret: string }> {
   const secret = `${API_KEY_PREFIX}${randomBytes(24).toString('base64url')}`;
   const now = new Date().toISOString();
   const record: ApiKeyRecord = {
@@ -24,6 +29,10 @@ export async function createApiKey(userId: string, name: string, wsIds: string[]
     createdAt: now,
     lastUsedAt: null,
     revokedAt: null,
+    // Optional rotation deadline: after it, the key verifies as invalid without a revoke event.
+    expiresAt: opts.expiresInDays && opts.expiresInDays > 0
+      ? new Date(Date.now() + opts.expiresInDays * 86_400_000).toISOString().slice(0, 10)
+      : null,
   };
   const all = await listApiKeys(userId);
   await setBorgaState(storeKey(userId), [...all, record]);
@@ -39,15 +48,16 @@ export async function revokeApiKey(userId: string, id: string): Promise<boolean>
   return true;
 }
 
-/** Finds the live key matching a presented secret. Scans owners (acceptable at this scale); compares hashes in constant time. */
-export async function verifyApiKey(secret: string): Promise<{ userId: string; key: ApiKeyRecord } | null> {
+/** Finds the live key matching a presented secret. Scans owners (acceptable at this scale); compares hashes in constant time.
+ *  Revoked and expired keys verify as invalid — an expiry is a silent revoke for rotation. */
+export async function verifyApiKey(secret: string, nowIso = new Date().toISOString()): Promise<{ userId: string; key: ApiKeyRecord } | null> {
   const wanted = hashApiKey(secret);
   for (const k of await listBorgaKeys('t::%::apikeys')) {
     const m = /^t::([^:]+)::apikeys$/.exec(k);
     if (!m) continue;
     const rows = (await getBorgaState<ApiKeyRecord[]>(k)) ?? [];
     for (const r of rows) {
-      if (r.revokedAt || !safeEqual(r.hash, wanted)) continue;
+      if (r.revokedAt || isExpiredKey(r, nowIso) || !safeEqual(r.hash, wanted)) continue;
       return { userId: m[1], key: r };
     }
   }

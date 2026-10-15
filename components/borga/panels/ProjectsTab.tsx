@@ -822,12 +822,17 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <p className="mb-1 text-xs font-medium text-muted-foreground">Owner</p>
-                <Select value={form.ownerId} onValueChange={(v) => setForm((f) => ({ ...f, ownerId: v }))}>
-                  <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                  <SelectContent>
-                    {agents.map((a) => <SelectItem key={a.id} value={a.id}>{a.name} — {a.department}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={[
+                    { value: '', label: 'Unassigned' },
+                    ...agents.map((a) => ({ value: a.id, label: a.name, detail: a.department })),
+                  ]}
+                  value={form.ownerId ?? ''}
+                  onChange={(v) => setForm((f) => ({ ...f, ownerId: v }))}
+                  placeholder="Unassigned"
+                  searchPlaceholder="Search agents"
+                  clearable={false}
+                />
               </div>
               <div>
                 <p className="mb-1 text-xs font-medium text-muted-foreground">Budget</p>

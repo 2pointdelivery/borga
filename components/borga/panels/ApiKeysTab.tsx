@@ -20,6 +20,7 @@ interface ApiKeyMeta {
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  expiresAt: string | null;
 }
 
 export function ApiKeysTab() {
@@ -29,6 +30,7 @@ export function ApiKeysTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState('');
   const [wsIds, setWsIds] = useState<string[]>([]);
+  const [expiresInDays, setExpiresInDays] = useState('');
   const [creating, setCreating] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -57,7 +59,10 @@ export function ApiKeysTab() {
     const r = await fetch('/api/borga/api-keys', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-      body: JSON.stringify({ action: 'create', name: name.trim(), wsIds }),
+      body: JSON.stringify({
+        action: 'create', name: name.trim(), wsIds,
+        ...(expiresInDays.trim() ? { expiresInDays: Number(expiresInDays) || undefined } : {}),
+      }),
     });
     const j = (await r.json().catch(() => null)) as { ok?: boolean; key?: ApiKeyMeta; secret?: string; error?: string } | null;
     setCreating(false);
@@ -91,6 +96,8 @@ export function ApiKeysTab() {
   };
 
   const live = keys.filter((k) => !k.revokedAt);
+  const today = new Date().toISOString().slice(0, 10);
+  const expired = (k: ApiKeyMeta) => !!k.expiresAt && k.expiresAt.slice(0, 10) <= today;
 
   return (
     <div className="borga-fade-up space-y-5">
@@ -117,6 +124,9 @@ export function ApiKeysTab() {
                 <p className="truncate font-mono text-[11px] text-muted-foreground">{k.prefix}</p>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
                   {k.wsIds.length} workspace{k.wsIds.length === 1 ? '' : 's'} · created {new Date(k.createdAt).toLocaleDateString()} · {k.lastUsedAt ? `last used ${new Date(k.lastUsedAt).toLocaleString()}` : 'never used'}
+                  {k.expiresAt && (
+                    <> · <span className={expired(k) ? 'font-semibold text-rose-500' : ''}>expires {new Date(k.expiresAt).toLocaleDateString()}{expired(k) ? ' (expired — verify refuses it)' : ''}</span></>
+                  )}
                 </p>
                 {k.wsIds.length > 0 && (
                   <p className="mt-1 flex flex-wrap gap-1">
@@ -175,6 +185,17 @@ export function ApiKeysTab() {
                   ))}
                 </div>
                 {wsIds.length === 0 && <p className="mt-1 text-[11px] text-muted-foreground">Unticked means every workspace you own.</p>}
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Expires in (days, optional)</label>
+                <Input
+                  value={expiresInDays}
+                  onChange={(e) => setExpiresInDays(e.target.value)}
+                  placeholder="never — leave blank"
+                  inputMode="numeric"
+                  className="mt-1"
+                />
+                <p className="mt-0.5 text-[11px] text-muted-foreground">Rotation deadline: after it the key stops verifying — create a replacement first.</p>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>

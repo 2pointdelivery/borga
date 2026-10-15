@@ -7,6 +7,7 @@ import { ValuationTab } from '../panels/ValuationTab';
 import { FundraisingTab } from '../panels/FundraisingTab';
 import { KnowledgeBaseTab } from '../panels/KnowledgeBaseTab';
 import { OrchestrationTab } from '../panels/OrchestrationTab';
+import { CapTableTab } from '../panels/CapTableTab';
 import { useFeature } from '@/lib/borga/features-client';
 
 export function CompanyPage({ initialTab }: { initialTab?: string }) {
@@ -14,18 +15,21 @@ export function CompanyPage({ initialTab }: { initialTab?: string }) {
   const valuation = useFeature('valuation');
   const fundraising = useFeature('fundraising');
   const engine = useFeature('companyEngine');
+  const capTable = useFeature('capTable');
   return (
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>
         <TabsTrigger value="workspaces">Companies</TabsTrigger>
         {valuation && <TabsTrigger value="valuation">Valuation</TabsTrigger>}
         {fundraising && <TabsTrigger value="fundraising">Fundraising</TabsTrigger>}
+        {capTable && <TabsTrigger value="equity">Cap Table</TabsTrigger>}
         <TabsTrigger value="knowledge">Knowledge Base</TabsTrigger>
         {engine && <TabsTrigger value="engine">Company Engine</TabsTrigger>}
       </TabsList>
       <TabsContent value="workspaces"><WorkspacesTab /></TabsContent>
       {valuation && <TabsContent value="valuation"><ValuationTab /></TabsContent>}
       {fundraising && <TabsContent value="fundraising"><FundraisingTab /></TabsContent>}
+      {capTable && <TabsContent value="equity"><CapTableTab /></TabsContent>}
       <TabsContent value="knowledge"><KnowledgeBaseTab /></TabsContent>
       {engine && <TabsContent value="engine"><OrchestrationTab /></TabsContent>}
     </Tabs>

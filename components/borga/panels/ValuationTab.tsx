@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TrendingUp, BarChart3 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -25,6 +25,7 @@ import { SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
 import { useBorga } from '@/lib/borga/store';
 import { deriveValuation, industryProfile, VALUATION_CONFIG_SEED } from '@/lib/borga/data';
+import { CompsCard } from './CompsCard';
 import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 
 const HISTORY_1Y = [
@@ -174,6 +175,10 @@ export function ValuationTab() {
           </Badge>
         </div>
       </Card>
+
+      {/* Real snapshot history (replaces illustrative HISTORY_1Y trend) */}
+      <SnapshotCard wsId={ws?.id} />
+      <CompsCard />
 
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
@@ -391,5 +396,64 @@ export function ValuationTab() {
         </p>
       </Card>
     </div>
+  );
+}
+
+function SnapshotCard({ wsId }: { wsId?: string }) {
+  const [snaps, setSnaps] = useState<Array<{ at: string; fmv: number; revenue: number; multiple: number; ev: number; source: string }>>([]);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [cmpA, setCmpA] = useState('');
+  const [cmpB, setCmpB] = useState('');
+  const load = async () => {
+    if (!wsId) return;
+    const r = await fetch(`/api/borga/valuation/snapshots?ws=${encodeURIComponent(wsId)}`);
+    const d = await r.json() as { snapshots?: Array<{ at: string; fmv: number; revenue: number; multiple: number; ev: number; source: string }> };
+    setSnaps(d.snapshots ?? []);
+  };
+  useEffect(() => { void load(); }, [wsId]);
+  const save = async () => {
+    setMsg(null);
+    const r = await fetch('/api/borga/valuation/snapshots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+      body: JSON.stringify({ ws: wsId }),
+    });
+    const d = await r.json() as { ok?: boolean; error?: string };
+    setMsg(d.ok ? 'Snapshot saved — history is now real.' : `Failed: ${d.error}`);
+    await load();
+  };
+  const a = snaps.find((s) => s.at === cmpA);
+  const b = snaps.find((s) => s.at === cmpB);
+  const delta = (x?: number, y?: number) => (x === undefined || y === undefined ? '—' : `${x >= y ? '+' : ''}${(x - y).toFixed(2)}`);
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold">Snapshot history ({snaps.length}) — real, saved on demand + monthly via cron</p>
+        <button onClick={save} className="rounded-full bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground">Save snapshot</button>
+      </div>
+      {msg && <p className="mt-1 text-xs text-muted-foreground">{msg}</p>}
+      {snaps.length > 0 && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          {snaps.slice(0, 12).map((s) => (
+            <p key={s.at}>{s.at.slice(0, 10)} — FMV {s.fmv.toFixed(2)}M · rev {s.revenue.toFixed(2)}M · {s.multiple.toFixed(1)}× · {s.source}</p>
+          ))}
+        </div>
+      )}
+      {snaps.length >= 2 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span>Compare:</span>
+          <select className="rounded border px-1 py-0.5" value={cmpA} onChange={(e) => setCmpA(e.target.value)}>
+            <option value="">A…</option>
+            {snaps.map((s) => <option key={s.at} value={s.at}>{s.at.slice(0, 10)}</option>)}
+          </select>
+          <select className="rounded border px-1 py-0.5" value={cmpB} onChange={(e) => setCmpB(e.target.value)}>
+            <option value="">B…</option>
+            {snaps.map((s) => <option key={s.at} value={s.at}>{s.at.slice(0, 10)}</option>)}
+          </select>
+          {a && b && <span>FMV {delta(a.fmv, b.fmv)}M · revenue {delta(a.revenue, b.revenue)}M · multiple {delta(a.multiple, b.multiple)}×</span>}
+        </div>
+      )}
+      <p className="mt-1 text-xs text-muted-foreground">Comps are native-first below (manual peers work fully offline; SEC EDGAR enrichment optional).</p>
+    </Card>
   );
 }

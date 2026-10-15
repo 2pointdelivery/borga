@@ -5,7 +5,7 @@
 
 import { MAILDOG_HOST, MAILDOG_URL } from './maildog';
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram' | 'fish';
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram' | 'fish' | 'stripe';
 
 export interface FieldDef {
   key: string;
@@ -249,6 +249,24 @@ export const PROVIDERS: ProviderDef[] = [
     steps: ['The connector is built once the API spec and a test credential are supplied. You can store credentials now.'],
     docsUrl: '',
     testable: false,
+  },
+  {
+    id: 'stripe',
+    label: 'Stripe (this workspace merchant)',
+    description: 'Separate Stripe account per workspace for customer payments (invoices, quotes). Platform subscription billing stays deployment-wide. Usage is billed to this Stripe account.',
+    fields: [
+      { key: 'secretKey', label: 'Secret key', secret: true, required: true, hint: 'sk_live_… or sk_test_… — stored encrypted, never shown again.', pattern: '^sk_(live|test)_[A-Za-z0-9]+$' },
+      { key: 'publishableKey', label: 'Publishable key', secret: false, required: false, placeholder: 'pk_live_…', pattern: '^pk_(live|test)_[A-Za-z0-9]+$' },
+      { key: 'webhookSecret', label: 'Webhook signing secret', secret: true, required: false, hint: 'whsec_… from Developers → Webhooks for invoice.paid auto-posting.' },
+    ],
+    steps: [
+      'Create a separate Stripe account for this workspace (one merchant per company).',
+      'Copy the secret key from Developers → API keys (use a restricted key: Checkout Sessions + Payment Links write).',
+      'Create a webhook endpoint to /api/borga/hooks/stripe with events checkout.session.completed + payment_intent.succeeded, then paste its signing secret here.',
+      'Press Test connection, then create a payment link from an invoice.',
+    ],
+    docsUrl: 'https://docs.stripe.com/',
+    testable: true,
   },
 ];
 

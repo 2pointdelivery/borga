@@ -177,6 +177,13 @@ async function testFish(v: Record<string, string>, f: Fetch): Promise<TestResult
   return { ok: true, message: v.voiceId ? 'Connected to Fish Audio and the voice was found.' : 'Connected to Fish Audio (default voice).' };
 }
 
+async function testStripe(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  if (!v.secretKey?.startsWith('sk_')) return { ok: false, message: 'Paste the secret key (sk_live_… or sk_test_…).' };
+  const m = await getJson(f, 'https://api.stripe.com/v1/balance', { headers: { Authorization: `Bearer ${v.secretKey}` } });
+  if ((m as { status?: number }).status === 401) return { ok: false, message: 'Stripe rejected the key (401).' };
+  return { ok: true, message: 'Connected to Stripe (this workspace merchant).' };
+}
+
 export async function runProviderTest(id: ProviderId, values: Record<string, string>, f: Fetch = fetch): Promise<TestResult> {
   try {
     switch (id) {
@@ -192,6 +199,7 @@ export async function runProviderTest(id: ProviderId, values: Record<string, str
       case 'fish': return await testFish(values, f);
       case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
       case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
+      case 'stripe': return await testStripe(values, f);
     }
   } catch (e) {
     const name = (e as Error).name;

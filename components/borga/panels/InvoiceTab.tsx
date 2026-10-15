@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -40,7 +41,9 @@ import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
 import { toast } from '@/lib/toast-bus';
 import { findInvoiceDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
-import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { DateInput, Field, ProjectSelect, AccountSelect,
+  TaxProfilesMultiSelect, CurrencySelect } from '../form-widgets';
+import { rateFor } from '@/lib/borga/fx';
 import { SearchSelect } from '../SearchSelect';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
@@ -61,6 +64,8 @@ interface InvoiceForm {
   lines: InvoiceLine[];
   projectId?: string;
   accountId?: string;
+  /** Billing currency (ISO). Empty = workspace currency. */
+  currency: string;
 }
 
 // Module-scope helper keeps impure clock access out of component render.
@@ -87,6 +92,7 @@ function emptyForm(number: string, defaultTaxProfileId?: string): InvoiceForm {
     issued: new Date().toISOString().slice(0, 10),
     due: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
     taxProfileIds: defaultTaxProfileId ? [defaultTaxProfileId] : [], externalRef: '', paymentMethod: 'bank-transfer', notes: '', description: '',
+    currency: '',
     lines: [
       { id: nextLineId(), description: '', qty: 1, unitPrice: 0 },
       { id: nextLineId(), description: '', qty: 1, unitPrice: 0 },
@@ -97,7 +103,7 @@ function emptyForm(number: string, defaultTaxProfileId?: string): InvoiceForm {
 export function InvoiceTab() {
   const {
     invoices, addInvoice, updateInvoice, deleteInvoice, voidInvoice, payInvoice, runDunningSweep,
-    customers, composio, log, activeWorkspace, activeWorkspaceId,
+    customers, inventoryItems, fxRates, composio, log, activeWorkspace, activeWorkspaceId,
     taxProfiles, defaultTaxProfileId,
     settings, addApproval,
   } = useBorga();
@@ -130,6 +136,7 @@ export function InvoiceTab() {
         paymentMethod: editing.paymentMethod ?? 'bank-transfer',
         notes: editing.notes ?? '',
         description: editing.description ?? '',
+        currency: editing.currency ?? '',
         lines: editing.lines?.length ? editing.lines : [
           { id: nextLineId(), description: 'Services rendered', qty: 1, unitPrice: editing.amount },
         ],
@@ -162,8 +169,24 @@ export function InvoiceTab() {
     if (!form.client.trim() || form.lines.length === 0) return;
     const lines = form.lines.filter((l) => l.description.trim() || l.unitPrice);
     if (lines.length === 0) return;
-    const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const total = subtotal + (subtotal * formTaxRate) / 100;
+    const foreignSubtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
+    const foreignTotal = foreignSubtotal + (foreignSubtotal * formTaxRate) / 100;
+    // Foreign face value converts to workspace currency at the FX table rate (snapshotted on the invoice).
+    const docCcy = form.currency.trim().toUpperCase() || currency;
+    let amount = Math.round(foreignTotal * 100) / 100;
+    let fxRate: number | undefined;
+    let foreignAmount: number | undefined;
+    if (docCcy !== currency) {
+      const rate = rateFor(fxRates, docCcy, currency);
+      if (rate === null) {
+        toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or bill in ${currency}.`, variant: 'error' });
+        return;
+      }
+      fxRate = rate;
+      foreignAmount = Math.round(foreignTotal * 100) / 100;
+      amount = Math.round(foreignTotal * rate * 100) / 100;
+    }
+    const total = amount;
     const profileNames = taxProfiles.filter((t) => form.taxProfileIds.includes(t.id)).map((t) => t.name).join(' + ');
     const base: Invoice = {
       id: editing?.id ?? `inv-${Date.now().toString(36)}`,
@@ -185,6 +208,9 @@ export function InvoiceTab() {
       customerId: form.customerId ?? editing?.customerId,
       projectId: form.projectId,
       accountId: form.accountId,
+      currency: docCcy === currency ? undefined : docCcy,
+      fxRate,
+      foreignAmount,
     };
     if (editing) {
       updateInvoice(editing.id, base);
@@ -451,6 +477,7 @@ export function InvoiceTab() {
                 </td>
                 <td className="px-4 py-2.5 text-right font-mono text-xs">
                   {money(i.amount)}
+                  {i.foreignAmount !== undefined && i.currency && <span className="block text-[10px] font-normal text-muted-foreground">{i.currency} {i.foreignAmount.toFixed(2)}</span>}
                   {i.taxProfileName && <span className="block text-[10px] font-normal text-muted-foreground">{i.taxProfileName} {i.taxRate ?? 0}%</span>}
                 </td>
                 <td className="px-4 py-2.5">
@@ -515,6 +542,7 @@ export function InvoiceTab() {
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing ? `Edit invoice ${editing.number}` : 'New invoice'}</DialogTitle>
+            <DialogDescription>Bill a customer for work done. Totals add up as you type; sending starts the payment clock.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
@@ -549,17 +577,31 @@ export function InvoiceTab() {
               <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. September freight services — Vancouver–Calgary lane" />
             </Field>
 
-            {/* Line items */}
+            {/* Line items — pick from the catalog (price fills in) or type free text */}
             <div className="rounded-xl border p-3">
-              <div className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
+              <div className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <span>Catalog item</span><span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
               </div>
               <div className="space-y-2">
                 {form.lines.map((line, idx) => (
-                  <div key={line.id} className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2">
+                  <div key={line.id} className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2">
+                    <SearchSelect
+                      options={[
+                        { value: '', label: 'Free text…' },
+                        ...inventoryItems.filter((x) => x.active).map((x) => ({ value: x.id, label: x.name, detail: `$${x.price}` })),
+                      ]}
+                      value={line.itemId ?? ''}
+                      onChange={(v) => {
+                        const item = inventoryItems.find((x) => x.id === v);
+                        setForm({ ...form, lines: form.lines.map((l) => (l.id === line.id ? { ...l, itemId: item?.id, description: item ? item.name : l.description, unitPrice: item ? item.price : l.unitPrice } : l)) });
+                      }}
+                      placeholder="Free text…"
+                      searchPlaceholder="Search catalog"
+                      clearable={false}
+                    />
                     <Input
                       value={line.description}
-                      onChange={(e) => setForm({ ...form, lines: form.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value } : l)) })}
+                      onChange={(e) => setForm({ ...form, lines: form.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value, itemId: undefined } : l)) })}
                       placeholder={idx === 0 ? 'e.g. Freight services — Vancouver run' : 'Line description'}
                       className="h-8 text-xs"
                     />
@@ -627,6 +669,18 @@ export function InvoiceTab() {
                 </Select>
               </Field>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Billing currency" hint={form.currency && form.currency.toUpperCase() !== currency ? `Converts to ${currency} at the FX table rate on save.` : `Same as the company (${currency}) — no conversion.`}>
+                <CurrencySelect value={form.currency || currency} onChange={(v) => setForm({ ...form, currency: v === currency ? '' : v })} />
+              </Field>
+              <Field label="Total">
+                <p className="py-2 font-mono text-sm font-semibold">
+                  {form.currency && form.currency.toUpperCase() !== currency
+                    ? (() => { const r = rateFor(fxRates, form.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(formTotals.total * r)} (${form.currency.toUpperCase()} ${formTotals.total.toFixed(2)})`; })()
+                    : money(formTotals.total)}
+                </p>
+              </Field>
+            </div>
             <Field label="Taxes" hint="Select every tax that applies — rates stack (e.g. GST + PST).">
               <TaxProfilesMultiSelect taxProfiles={taxProfiles} selectedIds={form.taxProfileIds} onChange={(ids) => setForm({ ...form, taxProfileIds: ids })} />
             </Field>
@@ -646,9 +700,10 @@ export function InvoiceTab() {
             </Field>
           </div>
           <DialogFooter>
+            <Button variant="ghost" onClick={() => { setCreateOpen(false); setEditing(null); }}>Cancel</Button>
             <Button onClick={submit} disabled={!form.client.trim() || formTotals.total <= 0}>
               <ReceiptText className="mr-1 h-3.5 w-3.5" />
-              {editing ? 'Save changes' : 'Create invoice'}
+              ＋ {editing ? 'Save changes' : 'Create invoice'}
             </Button>
           </DialogFooter>
         </DialogContent>

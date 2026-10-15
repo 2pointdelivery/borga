@@ -57,15 +57,24 @@ export interface CatalogProviderLike {
  *   1. The workspace's DB-backed `llmCatalog` override (per-company dynamic).
  *   2. The server env default for that provider id.
  *   3. The global fallback map above.
+ *
+ * Security (vibe-check #6): only llm-custom and llm-muse accept a custom
+ * endpoint (Muse is assertPublicUrl-checked at call time; custom is the
+ * operator's own deployment). Every other provider uses its built-in base
+ * URL: a workspace member must not be able to point a shared provider key
+ * (e.g. OPENAI_API_KEY) at their own server and harvest it.
  */
+const CUSTOM_URL_PROVIDERS = new Set(['llm-custom', 'llm-muse']);
 export async function resolveProviderConfig(
   providerId: string,
   ws?: string | null,
   userId?: string | null,
 ): Promise<ProviderConfig> {
   const base = DEFAULT_PROVIDER_CONFIG[providerId] ?? DEFAULT_PROVIDER_CONFIG['llm-nvidia'];
-  // The default map is evaluated at import time from process.env; a URL saved in the dashboard must win over it.
-  const savedUrl = URL_KEY[providerId] ? await getApiKey(URL_KEY[providerId]).catch(() => '') : '';
+  const customUrls = CUSTOM_URL_PROVIDERS.has(providerId);
+  // The default map is evaluated at import time from process.env; a URL saved in the dashboard must win over it —
+  // but only for providers whose endpoint is meant to be custom.
+  const savedUrl = customUrls && URL_KEY[providerId] ? await getApiKey(URL_KEY[providerId]).catch(() => '') : '';
   const fallback: ProviderConfig = { ...base, baseUrl: savedUrl || base.baseUrl };
   // Keyless providers never inherit another provider's key requirement through a catalog entry.
   const keyless = !!presetFor(providerId)?.keyless;
@@ -75,8 +84,11 @@ export async function resolveProviderConfig(
       const entry = catalog?.find((p) => p.id === providerId);
       if (entry) {
         return {
-          // A URL saved on the provider card (custom endpoint / Muse) wins: the seeded catalog entry would otherwise shadow it.
-          baseUrl: savedUrl || fixGeminiUrl(providerId, entry.baseUrl && entry.baseUrl.length > 0 ? entry.baseUrl : fallback.baseUrl),
+          // Custom endpoints (custom/Muse) honour the saved catalog URL; known
+          // providers always use the built-in address (see above).
+          baseUrl: customUrls
+            ? savedUrl || fixGeminiUrl(providerId, entry.baseUrl && entry.baseUrl.length > 0 ? entry.baseUrl : fallback.baseUrl)
+            : fixGeminiUrl(providerId, base.baseUrl),
           envVar: keyless ? '' : entry.envVar && entry.envVar.length > 0 ? entry.envVar : fallback.envVar,
           anonymousKey: fallback.anonymousKey,
           optionalKey: fallback.optionalKey,

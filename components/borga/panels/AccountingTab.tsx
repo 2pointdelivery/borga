@@ -48,6 +48,7 @@ import {
 } from '@/lib/borga/accounting-labels';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { TieOutCard } from './TieOutCard';
 import { ProjectSelect, AccountSelect } from '../form-widgets';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { toast } from '@/lib/toast-bus';
@@ -222,8 +223,9 @@ export function AccountingTab() {
         </div>
       </div>
 
-      {/* Trial balance */}
-      <Card className="overflow-hidden">
+      <TieOutCard />
+
+      {/* Trial balance */}      <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2.5">
           <div>
             <p className="flex items-center gap-1.5 text-sm font-semibold"><FileCheck className="h-3.5 w-3.5" /> Trial balance</p>

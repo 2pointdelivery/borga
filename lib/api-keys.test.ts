@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { API_KEY_PREFIX, hashApiKey, parseBearerSecret, safeEqual, toPublic, wsAllowed } from './borga/api-keys';
+import { API_KEY_PREFIX, hashApiKey, isExpiredKey, parseBearerSecret, safeEqual, toPublic, wsAllowed } from './borga/api-keys';
 
 test('bearer parsing accepts only borga_ secrets', () => {
   assert.equal(parseBearerSecret('Bearer borga_abc123'), 'borga_abc123');
@@ -29,6 +29,19 @@ test('public records never carry the hash', () => {
   });
   assert.ok(!('hash' in pub));
   assert.equal(pub.prefix, 'borga_abcd…wxyz');
+});
+
+test('expiry is carried on the public record and rejects expired keys', async () => {
+  const pub = toPublic({
+    id: 'key-1', name: 'Rotating', prefix: 'borga_abcd…wxyz', hash: 'deadbeef',
+    wsIds: ['ws1'], createdAt: '2026-01-01', lastUsedAt: null, revokedAt: null, expiresAt: '2026-12-01',
+  });
+  assert.equal(pub.expiresAt, '2026-12-01');
+  // pure expiry check: today is before → live; on/beyond the date → invalid
+  assert.equal(isExpiredKey({ expiresAt: '2026-12-01' }, '2026-10-10T00:00:00.000Z'), false);
+  assert.equal(isExpiredKey({ expiresAt: '2026-12-01' }, '2026-12-01T00:00:00.000Z'), true);
+  assert.equal(isExpiredKey({ expiresAt: '2026-12-01' }, '2027-01-01T00:00:00.000Z'), true);
+  assert.equal(isExpiredKey({ expiresAt: null }, '2026-10-10T00:00:00.000Z'), false, 'no expiry = never expires');
 });
 
 test('workspace scoping: valid id required, keys stay inside their scope', () => {

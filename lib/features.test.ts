@@ -41,8 +41,14 @@ test('every feature has a known group, a unique id, and newer modules are switch
   assert.equal(featureForTab('finance', 'assets'), 'fixedAssets');
   assert.equal(featureForTab('finance', 'filing'), 'filings');
   assert.equal(featureForTab('company', 'engine'), 'companyEngine');
-  const { flags } = resolveFeatures({ fixedAssets: false, filings: false, companyEngine: false, bankFeeds: false });
+  assert.equal(featureForTab('company', 'equity'), 'capTable');
+  assert.equal(featureForTab('finance', 'payroll'), null, 'payroll lives under HR, not Finance');
+  assert.equal(featureForTab('hr', 'payroll'), 'payroll');
+  assert.equal(featureForTab('inventory', 'orders'), 'procurement');
+  assert.equal(featureForTab('sales', 'quotes'), 'quotes');
+  const { flags } = resolveFeatures({ fixedAssets: false, filings: false, companyEngine: false, bankFeeds: false, capTable: true, payroll: false, procurement: false, quotes: false });
   assert.deepEqual([flags.fixedAssets, flags.filings, flags.companyEngine, flags.bankFeeds], [false, false, false, false]);
+  assert.deepEqual([flags.capTable, flags.payroll, flags.procurement, flags.quotes], [true, false, false, false]);
   assert.equal(resolveFeatures(null).flags.bankFeeds, true);
 });
 

@@ -38,15 +38,17 @@ import {
   type ClosurePeriodType,
   type SignoffReport,
 } from '@/lib/borga/data';
+import { balanceSheetAt, outstandingBalanceSheetItems } from '@/lib/borga/closure-snapshot';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
+import { ArrowRight, Scale } from 'lucide-react';
 
 export function BookClosureTab() {
   const {
     closures, addClosure, updateClosure, deleteClosure,
     journals, addJournalEntry, voidJournalEntry,
-    coa, bankTxns, invoices, userName, log, activeWorkspace,
+    coa, bankTxns, invoices, bills, fixedAssets, fxRates, userName, log, activeWorkspace,
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
@@ -92,6 +94,22 @@ export function BookClosureTab() {
   }, [journals, bankTxns, invoices, period.start, period.end]);
 
   const blockers = checklist.unbalancedEntries > 0;
+
+  // ── Balance sheet at the period end + outstanding balance-sheet items ──────
+  const bs = useMemo(
+    () => balanceSheetAt(coa, journals, period.end),
+    [coa, journals, period.end],
+  );
+  const outstanding = useMemo(
+    () => outstandingBalanceSheetItems({
+      invoices, bills, bankTxns, journals, coa,
+      fixedAssets: { assets: fixedAssets.assets, runs: fixedAssets.runs },
+      wsCurrency: activeWorkspace()?.currency ?? 'USD',
+      fxRates,
+      periodEnd: period.end,
+    }),
+    [invoices, bills, bankTxns, journals, coa, fixedAssets, fxRates, activeWorkspace, period.end],
+  );
 
   // ── Period P&L (what will roll into retained earnings) ─────────────────────
   const periodResult = useMemo(() => {
@@ -165,7 +183,18 @@ export function BookClosureTab() {
       closedAt: new Date().toISOString(),
       closedBy: userName,
       closingEntryId: lines.length > 0 ? closingId : undefined,
-      checklist,
+      checklist: {
+        ...checklist,
+        // Balance-sheet snapshot at close — the audit record of what was outstanding when the books locked.
+        bsAssets: bs.assets,
+        bsLiabilities: bs.liabilities,
+        bsEquity: bs.equity,
+        bsDiff: bs.diff,
+        openArCount: outstanding.find((i) => i.id === 'ar')?.count,
+        openArAmount: outstanding.find((i) => i.id === 'ar')?.amount ?? undefined,
+        openApCount: outstanding.find((i) => i.id === 'ap')?.count,
+        openApAmount: outstanding.find((i) => i.id === 'ap')?.amount ?? undefined,
+      },
       netIncome: periodResult.netIncome,
       signoffs: (['pl', 'bs', 'cf', 'equity'] as SignoffReport[]).map((reportId) => ({ reportId, status: 'pending', issues: [] })),
     };
@@ -218,7 +247,7 @@ export function BookClosureTab() {
       </div>
 
       {/* Period selector + result */}
-      <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+      <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
         <Card className="p-5">
           <div className="flex flex-wrap items-end gap-3">
             <div>
@@ -281,34 +310,116 @@ export function BookClosureTab() {
           </div>
         </Card>
 
-        {/* Checklist */}
-        <Card className="p-5">
-          <p className="flex items-center gap-1.5 text-sm font-semibold"><ClipboardCheck className="h-4 w-4 text-primary" /> Pre-close checklist</p>
-          <div className="mt-3 space-y-2">
-            {checklistItems.map((c) => (
+        {/* Checklist + balance sheet */}
+        <div className="space-y-4">
+          <Card className="p-5">
+            <p className="flex items-center gap-1.5 text-sm font-semibold"><ClipboardCheck className="h-4 w-4 text-primary" /> Pre-close checklist</p>
+            <div className="mt-3 space-y-2">
+              {checklistItems.map((c) => (
+                <button
+                  key={c.label}
+                  onClick={() => c.count > 0 && goto(c.href)}
+                  disabled={c.count === 0 || !c.href}
+                  className={cn(
+                    'flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left',
+                    c.count > 0 && c.href && 'cursor-pointer hover:border-primary/40 hover:bg-primary/5',
+                    c.count === 0 && 'opacity-80',
+                  )}
+                  title={c.count > 0 && c.href ? `Resolve in ${c.href.tab}` : undefined}
+                >
+                  <span className="text-xs">{c.label}</span>
+                  {c.count === 0 ? (
+                    <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-600"><ShieldCheck className="h-3 w-3" /> clear</span>
+                  ) : (
+                    <span className={cn('flex items-center gap-1 text-[11px] font-semibold', c.fatal ? 'text-destructive' : 'text-amber-600')}>
+                      <AlertTriangle className="h-3 w-3" /> {c.count} →
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </Card>
+
+          {/* Balance sheet at the closing date */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between">
+              <p className="flex items-center gap-1.5 text-sm font-semibold"><Scale className="h-4 w-4 text-primary" /> Balance sheet at {period.end}</p>
               <button
-                key={c.label}
-                onClick={() => c.count > 0 && goto(c.href)}
-                disabled={c.count === 0 || !c.href}
-                className={cn(
-                  'flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left',
-                  c.count > 0 && c.href && 'cursor-pointer hover:border-primary/40 hover:bg-primary/5',
-                  c.count === 0 && 'opacity-80',
-                )}
-                title={c.count > 0 && c.href ? `Resolve in ${c.href.tab}` : undefined}
+                onClick={() => goto({ page: 'finance', tab: 'reports' })}
+                className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                title="Open the Balance Sheet report"
               >
-                <span className="text-xs">{c.label}</span>
-                {c.count === 0 ? (
-                  <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-600"><ShieldCheck className="h-3 w-3" /> clear</span>
-                ) : (
-                  <span className={cn('flex items-center gap-1 text-[11px] font-semibold', c.fatal ? 'text-destructive' : 'text-amber-600')}>
-                    <AlertTriangle className="h-3 w-3" /> {c.count} →
-                  </span>
-                )}
+                Report <ArrowRight className="h-3 w-3" />
               </button>
-            ))}
-          </div>
-        </Card>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg border bg-muted/20 p-2">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Assets</p>
+                <p className="mt-0.5 font-mono text-xs font-semibold">{money(bs.assets)}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-2">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Liabilities</p>
+                <p className="mt-0.5 font-mono text-xs font-semibold">{money(bs.liabilities)}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-2">
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Equity</p>
+                <p className="mt-0.5 font-mono text-xs font-semibold">{money(bs.equity)}</p>
+              </div>
+            </div>
+            <p
+              className={cn(
+                'mt-2 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium',
+                bs.balanced ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-600',
+              )}
+              title="Assets must equal Liabilities + Equity on posted books"
+            >
+              {bs.balanced
+                ? <><ShieldCheck className="h-3.5 w-3.5" /> Balances: Assets = Liabilities + Equity</>
+                : <><AlertTriangle className="h-3.5 w-3.5" /> Out of balance by {money(bs.diff)} — fix unbalanced postings before trusting the close</>}
+            </p>
+          </Card>
+
+          {/* Outstanding balance-sheet items — each row jumps to where it is resolved */}
+          <Card className="p-5">
+            <p className="text-sm font-semibold">Outstanding balance-sheet items</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">What is still open at {period.end} — click a row to resolve it.</p>
+            <div className="mt-3 space-y-2">
+              {outstanding.map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() => o.count > 0 && goto(o.href)}
+                  disabled={o.count === 0}
+                  className={cn(
+                    'flex w-full items-start justify-between gap-2 rounded-lg border px-3 py-2 text-left',
+                    o.count > 0 && 'cursor-pointer hover:border-primary/40 hover:bg-primary/5',
+                    o.count === 0 && 'opacity-80',
+                  )}
+                  title={o.count > 0 ? `Resolve in ${o.href.page} → ${o.href.tab}` : undefined}
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium">{o.label}</p>
+                    {o.note && <p className="text-[10px] text-muted-foreground">{o.note}</p>}
+                  </div>
+                  <div className="shrink-0 text-right">
+                    {o.count === 0 ? (
+                      <span className="flex items-center justify-end gap-1 text-[11px] font-medium text-emerald-600"><ShieldCheck className="h-3 w-3" /> clear</span>
+                    ) : (
+                      <>
+                        <p className={cn('flex items-center justify-end gap-1 text-[11px] font-semibold', o.id === 'tieout' ? 'text-destructive' : 'text-amber-600')}>
+                          {o.count} <ArrowRight className="h-3 w-3" />
+                        </p>
+                        {o.amount !== null && <p className="font-mono text-[10px] text-muted-foreground">{money(o.amount)}</p>}
+                      </>
+                    )}
+                  </div>
+                </button>
+              ))}
+              {outstanding.length === 0 && (
+                <p className="py-4 text-center text-xs text-muted-foreground">Nothing outstanding — the balance sheet is clean at {period.end}.</p>
+              )}
+            </div>
+          </Card>
+        </div>
       </div>
 
       {/* Closure history */}
@@ -323,6 +434,7 @@ export function BookClosureTab() {
               <th className="px-4 py-2 font-medium">Period</th>
               <th className="hidden px-4 py-2 font-medium md:table-cell">Range</th>
               <th className="px-4 py-2 text-right font-medium">Net income</th>
+              <th className="hidden px-4 py-2 font-medium lg:table-cell">BS at close</th>
               <th className="hidden px-4 py-2 font-medium lg:table-cell">Closed</th>
               <th className="hidden px-4 py-2 font-medium lg:table-cell">By</th>
               <th className="px-4 py-2 font-medium">Sign-offs</th>
@@ -338,6 +450,21 @@ export function BookClosureTab() {
                 </td>
                 <td className="hidden px-4 py-2.5 text-xs text-muted-foreground md:table-cell">{c.startDate} → {c.endDate}</td>
                 <td className="px-4 py-2.5 text-right font-mono text-xs">{money(c.netIncome)}</td>
+                <td className="hidden px-4 py-2.5 lg:table-cell">
+                  {c.checklist.bsAssets !== undefined ? (
+                    <span
+                      className="font-mono text-[11px]"
+                      title={`Assets ${money(c.checklist.bsAssets ?? 0)} · Liabilities ${money(c.checklist.bsLiabilities ?? 0)} · Equity ${money(c.checklist.bsEquity ?? 0)}${c.checklist.openArAmount !== undefined ? ` · open AR ${money(c.checklist.openArAmount)} (${c.checklist.openArCount ?? 0})` : ''}${c.checklist.openApAmount !== undefined ? ` · open AP ${money(c.checklist.openApAmount)} (${c.checklist.openApCount ?? 0})` : ''}`}
+                    >
+                      <span className="text-muted-foreground">A</span> {money(c.checklist.bsAssets ?? 0)}{' '}
+                      <span className={Math.abs(c.checklist.bsDiff ?? 0) < 0.005 ? 'text-emerald-600' : 'text-rose-500'}>
+                        {Math.abs(c.checklist.bsDiff ?? 0) < 0.005 ? '= L+E ✓' : `≠ L+E (${money(Math.abs(c.checklist.bsDiff ?? 0))})`}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-muted-foreground">—</span>
+                  )}
+                </td>
                 <td className="hidden px-4 py-2.5 text-xs text-muted-foreground lg:table-cell">{new Date(c.closedAt).toLocaleDateString()}</td>
                 <td className="hidden px-4 py-2.5 text-xs text-muted-foreground lg:table-cell">{c.closedBy}</td>
                 <td className="px-4 py-2.5">
@@ -400,7 +527,7 @@ export function BookClosureTab() {
               </tr>
             ))}
             {closures.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-xs text-muted-foreground">No closures yet — the books have never been locked.</td></tr>
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-xs text-muted-foreground">No closures yet — the books have never been locked.</td></tr>
             )}
           </tbody>
         </table>

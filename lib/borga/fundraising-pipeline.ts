@@ -1,5 +1,6 @@
 import 'server-only';
 import { getBorgaState, setBorgaState, scopedKey } from './persistence';
+import { fetchPublic, readTextCapped } from './safe-url';
 import { userWsKey, userWorkspacesKey } from './keys';
 import {
   buildApplicationDraft,
@@ -75,18 +76,16 @@ export interface FetchedPage {
 }
 
 export async function fetchFundingPage(rawUrl: string): Promise<FetchedPage> {
-  const u = new URL(rawUrl.includes('://') ? rawUrl : `https://${rawUrl}`);
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Only http/https URLs are allowed');
-  if (/^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1$|localhost$|0\.0\.0\.0$)/i.test(u.hostname)) {
-    throw new Error('Internal network URLs are blocked');
-  }
-  const res = await fetch(u.toString(), {
+  // SSRF-guarded: every hop is DNS-resolved and private/internal targets are
+  // refused (vibe-check #6). Redirects are followed only to public hosts.
+  const first = await fetchPublic(rawUrl.includes('://') ? rawUrl : `https://${rawUrl}`, {
     headers: { 'User-Agent': 'Borga/1.0 (autonomous fundraising agent)' },
     signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error(`The site answered ${res.status}`);
-  const html = await res.text();
-  const title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(html)?.[1]?.trim() ?? u.hostname;
+  }, { allowHttp: true });
+  if (!first.ok) throw new Error(`The site answered ${first.status}`);
+  const finalUrl = first.url;
+  const html = await readTextCapped(first, 500_000);
+  const title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(html)?.[1]?.trim() ?? finalUrl;
   const markdown = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -96,7 +95,7 @@ export async function fetchFundingPage(rawUrl: string): Promise<FetchedPage> {
     .trim()
     .slice(0, 20_000);
   if (markdown.length < 200) throw new Error('The page had almost no readable text — it may need JavaScript or a login');
-  return { url: u.toString(), title, markdown };
+  return { url: finalUrl, title, markdown };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
 import { getBorgaState, setBorgaState } from '@/lib/borga/persistence';
 import { encryptSecret } from '@/lib/borga/secrets';
 import { exchangeMcpOAuthCode } from '@/lib/borga/mcp-client';
 import { userWsKey } from '@/lib/borga/keys';
+import { verifySessionToken } from '@/lib/auth/session';
+import { sessionCookieName } from '@/lib/auth/session';
 import type { McpServer } from '@/lib/borga/data';
 
 export const runtime = 'nodejs';
@@ -43,6 +46,17 @@ export async function GET(req: Request) {
   }
   if (Date.now() - record.createdAt > 10 * 60_000) {
     return new NextResponse(popupPage('This authorization request expired. Try connecting again.', false), { headers: { 'Content-Type': 'text/html' } });
+  }
+
+  // Defense in depth (vibe-check #4): when the browser still holds the
+  // dashboard session, it must be the same user who started the flow — so a
+  // leaked callback URL + provider code can't attach tokens to someone else.
+  // (No session at all — e.g. signed in elsewhere — keeps working.)
+  const jar = await cookies();
+  const token = jar.get(sessionCookieName())?.value;
+  const sessionUid = await verifySessionToken(token);
+  if (sessionUid && sessionUid !== record.userId) {
+    return new NextResponse(popupPage('This window is signed in as a different user. Sign in as the account that started the connection and try again.', false), { headers: { 'Content-Type': 'text/html' } });
   }
 
   const exchange = await exchangeMcpOAuthCode(record.tokenEndpoint, {

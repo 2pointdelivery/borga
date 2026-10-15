@@ -21,9 +21,16 @@ export interface ApiKeyRecord {
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  /** Optional expiry (ISO date). An expired key verifies as invalid — rotation without revocation. */
+  expiresAt?: string | null;
 }
 
 export type ApiKeyPublic = Omit<ApiKeyRecord, 'hash'>;
+
+/** An expired key verifies as invalid — expiry is a silent revoke for rotation. Pure. */
+export function isExpiredKey(r: Pick<ApiKeyRecord, 'expiresAt'>, nowIso = new Date().toISOString()): boolean {
+  return !!r.expiresAt && r.expiresAt.slice(0, 10) <= nowIso.slice(0, 10);
+}
 
 export function hashApiKey(secret: string): string {
   return createHash('sha256').update(secret, 'utf8').digest('hex');
@@ -45,7 +52,7 @@ export function safeEqual(a: string, b: string): boolean {
 
 export function toPublic(r: ApiKeyRecord): ApiKeyPublic {
   // Explicit allowlist (not a rest spread) so a future sensitive field can never leak by accident.
-  return { id: r.id, name: r.name, prefix: r.prefix, wsIds: r.wsIds, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt, revokedAt: r.revokedAt };
+  return { id: r.id, name: r.name, prefix: r.prefix, wsIds: r.wsIds, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt, revokedAt: r.revokedAt, expiresAt: r.expiresAt ?? null };
 }
 
 /** The ?ws= workspace must be valid and, for API keys, inside the key's scope. */

@@ -1,10 +1,17 @@
 import { NextResponse } from 'next/server';
 import { getApiKey } from '@/lib/borga/secrets';
+import { sessionUserId } from '@/lib/borga/features-server';
+import type { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 
 /** Server-side health check for a configured wigolo daemon (github.com/KnockOutEZ/wigolo). */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Defense in depth (vibe-check #3): proxy-gated, re-checked here (the base
+  // URL + reachability are deployment details, not public info).
+  if (!(await sessionUserId(req))) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
   const base = ((await getApiKey('WIGOLO_BASE_URL')) || 'http://127.0.0.1:3333').replace(/\/$/, '');
   const token = await getApiKey('WIGOLO_API_TOKEN');
   try {

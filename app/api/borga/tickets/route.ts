@@ -11,6 +11,7 @@ import {
   getTicket,
   listTickets,
   loadSettings,
+  mergeTickets,
   pollMailbox,
   saveSettings,
   settingsPatchSchema,
@@ -51,6 +52,7 @@ const bodySchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('similar'), id: z.string().max(40) }),
   z.object({ action: z.literal('sweep') }),
   z.object({ action: z.literal('delete'), id: z.string().max(40), actor: actorSchema }),
+  z.object({ action: z.literal('merge'), id: z.string().max(40), duplicateId: z.string().max(40), actor: actorSchema }),
 ]);
 
 function inboundUrl(req: NextRequest, userId: string, ws: string): string {
@@ -136,6 +138,12 @@ export async function POST(req: NextRequest) {
         return r.ok
           ? NextResponse.json({ ok: true, deleted: b.id })
           : NextResponse.json({ ok: false, error: r.error }, { status: r.error === 'Ticket not found' ? 404 : 400 });
+      }
+      case 'merge': {
+        const r = await mergeTickets(userId, g.ws, b.id, b.duplicateId, b.actor);
+        return r.error
+          ? NextResponse.json({ ok: false, error: r.error }, { status: r.error.includes('not found') ? 404 : 400 })
+          : NextResponse.json({ ok: true, primary: summarize(r.primary!), duplicate: summarize(r.duplicate!) });
       }
     }
   } catch (e) {

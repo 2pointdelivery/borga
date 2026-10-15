@@ -4,6 +4,13 @@ import { NextResponse } from 'next/server';
 import { featureGate, sessionUserId } from './features-server';
 import { parseBearerSecret, touchApiKey, verifyApiKey, type ApiKeyRecord } from './api-keys-server';
 import { wsAllowed } from './api-keys';
+import { KeyThrottle } from './api-throttle';
+
+// Per-credential throttle (vibe-check #10): 120 calls/min per API key or per
+// session user, on top of the proxy's per-IP bucket. Kept on globalThis so a
+// dev reload does not reset it.
+const g = globalThis as typeof globalThis & { __borgaV1Throttle?: KeyThrottle };
+const v1Throttle = (g.__borgaV1Throttle ??= new KeyThrottle(120));
 
 export interface V1Auth {
   userId: string;
@@ -38,6 +45,12 @@ export async function guardV1(req: NextRequest): Promise<{ auth: V1Auth; ws: str
   }
   const ws = wsAllowed(new URL(req.url).searchParams.get('ws'), auth.key?.wsIds);
   if (!ws) return { res: NextResponse.json({ ok: false, error: "a valid ?ws= workspace id is required (and must be inside this key's scope)" }, { status: 400 }) };
+  // Per-credential throttle: a leaked key (or one session across many IPs)
+  // cannot burn the shared IP bucket alone.
+  const verdict = v1Throttle.take(`v1:${auth.userId}:${auth.key?.id ?? 'session'}`);
+  if (verdict.limited) {
+    return { res: NextResponse.json({ ok: false, error: 'Too many requests. Slow down and try again.' }, { status: 429, headers: { 'Retry-After': String(verdict.retryAfterSec) } }) };
+  }
   // The public API is part of Developer tools: a company that switched them off (Settings → Features) is not reachable through it.
   const off = await featureGate('developers', auth.userId, ws);
   if (off) return { res: off };

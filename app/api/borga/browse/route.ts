@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { fetchPublic, readTextCapped } from '@/lib/borga/safe-url';
+import { sessionUserId } from '@/lib/borga/features-server';
 
 export const runtime = 'nodejs';
 
@@ -200,7 +201,12 @@ function extractEntities(text: string): { entities: string[]; topics: string[] }
   return { entities, topics };
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  // Defense in depth (vibe-check #3): the proxy already gates this route, but
+  // the handler re-checks so a deployment serving without the proxy is still safe.
+  if (!(await sessionUserId(req))) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
   let body: { url?: string; browsedBy?: string; objective?: string; deep?: boolean } = {};
   try {
     body = await req.json();

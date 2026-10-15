@@ -1,11 +1,11 @@
 import type { Employee } from './data';
 
 /**
- * Company organogram: reporting tree built from each employee's `manager`
- * field (matched by name, case-insensitive). Pure (no I/O) so it can be unit
- * tested; the dashboard renders it under HR → Organogram.
+ * Company organogram: reporting tree built from each employee's `managerId`
+ * (preferred) with fallback to the legacy `manager` name match. Pure (no I/O)
+ * so it can be unit tested; the dashboard renders it under HR → Organogram.
  *
- * Rules, all defensive because manager is free text:
+ * Rules, all defensive because manager was historically free text:
  * - someone whose manager names nobody on the roster (or nobody at all) is a
  *   root — the top of the hierarchy, i.e. board & executive leadership;
  * - a manager naming yourself is ignored (you cannot report to yourself);
@@ -24,11 +24,14 @@ export function activeRoster(employees: Employee[]): Employee[] {
 
 export function buildOrgTree(employees: Employee[]): OrgNode[] {
   const roster = activeRoster(employees);
+  const byId = new Map(roster.map((e) => [e.id, e]));
   const byName = new Map(roster.map((e) => [e.name.trim().toLowerCase(), e]));
   const parentOf = new Map<string, string | null>();
   for (const e of roster) {
+    // Prefer the stored id; fall back to the legacy name match for older rows.
+    const byRef = e.managerId ? byId.get(e.managerId) : undefined;
     const m = e.manager?.trim().toLowerCase();
-    const mgr = m ? byName.get(m) : undefined;
+    const mgr = byRef ?? (m ? byName.get(m) : undefined);
     parentOf.set(e.id, mgr && mgr.id !== e.id ? mgr.id : null);
   }
   // Cut any link that would close a reporting cycle.
@@ -72,10 +75,12 @@ export function departmentTable(employees: Employee[]): DepartmentRow[] {
   const names = [...new Set(roster.map((e) => e.department.trim() || 'General'))].sort((a, b) => a.localeCompare(b));
   return names.map((name) => {
     const members = roster.filter((e) => (e.department.trim() || 'General') === name);
+    const inDeptIds = new Set(members.map((m) => m.id));
     const inDept = new Set(members.map((m) => m.name.trim().toLowerCase()));
     // Head = the member whose manager sits outside this department (or who has
     // none): structurally, the person the department reports up through.
     const head = members.find((m) => {
+      if (m.managerId) return !inDeptIds.has(m.managerId);
       const mgr = m.manager?.trim().toLowerCase();
       return !mgr || !inDept.has(mgr);
     }) ?? null;

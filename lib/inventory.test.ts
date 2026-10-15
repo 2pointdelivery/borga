@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { expiringItems, tillVariance } from './borga/inventory';
 import {
   ean13CheckDigit, internalBarcode, isEan13, nextBarcodeSequence, assignBarcode, ean13Bars,
   roundMoney, recomputeCosting, stockByWarehouse, totalOnHand, stockStatus, valuation,
@@ -414,4 +415,33 @@ test('service items are derived from the revenue tracks once, deduped', () => {
   assert.equal(items.length, 3);
   assert.ok(items.every((i) => i.type === 'service' && !i.trackStock && !i.barcode));
   assert.ok(items.some((i) => i.name === 'Same-day delivery'));
+});
+
+test('expiring report is FEFO-ordered and bands correctly', () => {
+  const mk = (id: string, iso?: string): InventoryItem => ({
+    id, name: `Item ${id}`, type: 'product', sku: '', barcode: '', category: '', description: '',
+    unit: '', costPrice: 1, price: 2, taxRate: 0, trackStock: true, reorderPoint: 0, active: true,
+    createdAtIso: '2026-01-01', expiryDateIso: iso,
+  });
+  const items = [mk('a', '2026-10-03'), mk('b', '2026-10-20'), mk('c', undefined), mk('d', '2027-06-01'), mk('e', '2026-10-12')];
+  const movements: StockMovement[] = [
+    { id: '1', itemId: 'a', warehouseId: 'w', qty: 5, reason: 'purchase', at: '2026-10-01' },
+    { id: '2', itemId: 'b', warehouseId: 'w', qty: 3, reason: 'purchase', at: '2026-10-01' },
+    { id: '3', itemId: 'e', warehouseId: 'w', qty: 2, reason: 'purchase', at: '2026-10-01' },
+  ];
+  const rows = expiringItems(items, movements, '2026-10-09', 30);
+  assert.equal(rows.map((r) => r.item.id).join(','), 'a,e,b'); // worst first
+  assert.equal(rows[0].band, 'expired'); // 2026-10-03 already passed
+  assert.equal(rows[1].band, 'this-week'); // 3 days out
+  assert.equal(rows[2].band, 'this-month');
+  // out-of-stock and far-future items never appear
+  assert.ok(!rows.some((r) => r.item.id === 'c' || r.item.id === 'd'));
+});
+
+test('till close: expected = float + cash sales; variance signs both ways', () => {
+  assert.deepEqual(tillVariance(100, 47.5, 147.5), { expected: 147.5, variance: 0 });
+  const short = tillVariance(100, 47.5, 140);
+  assert.equal(short.variance, -7.5);
+  const over = tillVariance(50, 10, 65);
+  assert.equal(over.variance, 5);
 });

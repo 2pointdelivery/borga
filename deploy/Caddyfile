@@ -2,8 +2,8 @@
 {$DOMAIN} {
 	encode zstd gzip
 	header {
-		# Browsers must use https for this host from now on.
-		Strict-Transport-Security "max-age=31536000"
+		# Browsers must use https for this host from now on (matches the app header).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		-Server
 	}
 	# The app rate-limits by client address, so the address must come from Caddy and never from the client: overwrite the

@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useBorga } from '@/lib/borga/store';
 import { fmtMoney } from '@/lib/borga/currencies';
 import {
-  recomputeCosting, stockByWarehouse, totalOnHand, stockStatus, valuation,
+  recomputeCosting, stockByWarehouse, totalOnHand, stockStatus, valuation, expiringItems,
   type InventoryItem, type StockMovement, type MovementReason,
 } from '@/lib/borga/inventory';
 import { toast } from '@/lib/toast-bus';
@@ -120,12 +120,42 @@ export function InventoryStockTab() {
 
   const stockOf = (item: InventoryItem, whId: string) => stockByWarehouse(stockMovements, item.id)[whId] ?? 0;
 
+  // FEFO: expiring and expired stock, worst first (pure helper in lib/borga/inventory.ts).
+  const expiring = useMemo(
+    () => expiringItems(inventoryItems, stockMovements, new Date().toISOString().slice(0, 10), 30),
+    [inventoryItems, stockMovements],
+  );
+
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="Stock & Costing" sub="Quantities per location, weighted-average cost, and what the shelves are worth." />
         <Badge variant="secondary">{products.length} tracked product{products.length !== 1 ? 's' : ''}</Badge>
       </div>
+
+      {expiring.length > 0 && (
+        <Card className="p-4">
+          <p className="text-sm font-semibold">Expiring stock — pick first (FEFO)</p>
+          <p className="text-[11px] text-muted-foreground">Worst first. Expired goods should be adjusted out (negative adjustment below), never sold.</p>
+          <div className="mt-2 space-y-1">
+            {expiring.map((r) => (
+              <p key={r.item.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium">{r.item.name}</span>
+                <span className="text-muted-foreground">{r.onHand} on hand{r.item.lotRef ? ` · lot ${r.item.lotRef}` : ''}</span>
+                <span className={cn(
+                  'rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1',
+                  r.band === 'expired' ? 'bg-rose-500/10 text-rose-600 ring-rose-500/30'
+                    : r.band === 'this-week' ? 'bg-amber-500/10 text-amber-600 ring-amber-500/30'
+                    : 'bg-sky-500/10 text-sky-600 ring-sky-500/30',
+                )}>
+                  {r.band === 'expired' ? `expired ${Math.abs(r.daysLeft)} day${Math.abs(r.daysLeft) === 1 ? '' : 's'} ago` : `${r.daysLeft} day${r.daysLeft === 1 ? '' : 's'} left`}
+                </span>
+                <span className="text-[11px] text-muted-foreground">best before {r.item.expiryDateIso}</span>
+              </p>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Card className="p-4">

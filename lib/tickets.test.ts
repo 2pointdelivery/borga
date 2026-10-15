@@ -8,6 +8,7 @@ import {
   elapsedMs,
   isAutomatedMail,
   normalizeSubject,
+  roundRobinAssignee,
   stripQuotedReply,
   ticketInsights,
   tokenFromSubject,
@@ -151,4 +152,21 @@ test('insights are danger-first and capped', () => {
   assert.ok(out.length <= 5);
   const rank = { danger: 0, warn: 1, info: 2 };
   assert.deepEqual(out.map((i) => rank[i.tone]), [...out.map((i) => rank[i.tone])].sort((a, b) => a - b));
+});
+
+test('round-robin picks the least-loaded team member', () => {
+  const roster = [
+    { id: 'e1', name: 'Ada' },
+    { id: 'e2', name: 'Bo' },
+    { id: 'e3', name: 'Cy' },
+  ];
+  const open = [
+    { assigneeId: 'e1', assignee: 'Ada', status: 'open' },
+    { assigneeId: 'e1', assignee: 'Ada', status: 'in-progress' },
+    { assigneeId: 'e3', assignee: 'Cy', status: 'open' },
+    { assignee: 'Ada', status: 'resolved' }, // closed tickets never count
+  ];
+  assert.equal(roundRobinAssignee(roster, open)?.id, 'e2'); // Bo has zero
+  assert.equal(roundRobinAssignee([], open), null);
+  assert.equal(roundRobinAssignee(roster, [])?.id, 'e1'); // all empty → alphabetical
 });

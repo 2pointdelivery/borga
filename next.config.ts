@@ -22,7 +22,11 @@ const nextConfig: NextConfig = {
   async headers() {
     const isDev = process.env.NODE_ENV === 'development';
 
-    // Allow a configured Umami analytics host in the CSP (only when set).
+    // NOTE: script-src lives in proxy.ts (per-request nonce). This static
+    // policy deliberately omits it: two CSP headers are enforced as an
+    // intersection, so a static script-src here would re-allow what the nonce
+    // policy forbids. Static assets keep every other directive below.
+    // Allow a configured Umami analytics host in connect-src (only when set).
     let umamiHost = '';
     try {
       const u = process.env.NEXT_PUBLIC_UMAMI_SCRIPT_URL;
@@ -44,12 +48,6 @@ const nextConfig: NextConfig = {
     }
     // Vercel Web Analytics is only present on real Vercel deployments.
     const vercelAnalytics = !!process.env.VERCEL;
-    const scriptExtra = [
-      umamiHost ? `https://${umamiHost}` : '',
-      vercelAnalytics ? 'https://va.vercel-analytics.com https://*.vercel-insights.com' : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
     const connectExtra = [
       umamiHost ? `https://${umamiHost}` : '',
       vercelAnalytics ? 'https://va.vercel-analytics.com https://*.vercel-insights.com' : '',
@@ -74,10 +72,6 @@ const nextConfig: NextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              // 'unsafe-eval' is required by Turbopack/Next.js in development; removed in production.
-              isDev
-                ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${scriptExtra}`.trim()
-                : `script-src 'self' 'unsafe-inline' ${scriptExtra}`.trim(),
               "style-src 'self' 'unsafe-inline'",
               // happyseeds.ai required for the watermark logo image.
               "img-src 'self' data: blob: https://happyseeds.ai https://*.happyseeds.ai",
@@ -92,6 +86,7 @@ const nextConfig: NextConfig = {
               // No other site may frame the app (clickjacking), and forms may only post back to it.
               "frame-ancestors 'none'",
               "form-action 'self'",
+              ...(isDev ? [] : ['upgrade-insecure-requests']),
             ].join('; '),
           },
         ],

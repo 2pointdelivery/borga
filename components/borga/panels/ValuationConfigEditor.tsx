@@ -1,17 +1,22 @@
 'use client';
 
-import { Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Plus, Trash2, Calculator } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
+import { dcfValue } from '@/lib/borga/dcf';
 import type { ValuationMethod } from '@/lib/borga/data';
+
+const DCF_NAME = 'DCF (discounted cash flow)';
 
 export function ValuationConfigEditor() {
   const { valuation, setValuation } = useBorga();
   const config = valuation ?? { baseline: undefined as any, methods: [] };
+  const [dcf, setDcf] = useState({ wacc: '18', growth: '', margin: '12', years: '5', terminal: '2' });
 
   const updateBaseline = (patch: Partial<typeof config.baseline>) =>
     setValuation({ ...config, baseline: { ...config.baseline, ...patch } });
@@ -134,6 +139,69 @@ export function ValuationConfigEditor() {
             <Plus className="h-4 w-4 mr-1" /> Add
           </Button>
         </div>
+
+        {/* DCF calculator — projects free cash flow from live revenue and
+            writes the result straight into a method row (weight is yours). */}
+        <div className="mb-4 rounded-lg border bg-muted/30 p-3">
+          <p className="text-xs font-semibold">Compute a DCF from your numbers</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Projects free cash flow from the baseline revenue for N years, adds a terminal value, discounts everything at your WACC.
+            The result lands in the “{DCF_NAME}” method — set its weight like any other.
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <label className="text-[11px] text-muted-foreground">WACC %
+              <Input className="mt-0.5 h-8 text-xs" inputMode="decimal" value={dcf.wacc} onChange={(e) => setDcf((d) => ({ ...d, wacc: e.target.value }))} />
+            </label>
+            <label className="text-[11px] text-muted-foreground">Growth %/yr
+              <Input className="mt-0.5 h-8 text-xs" inputMode="decimal" placeholder={`live ${config.baseline?.growthPct ?? 40}`} value={dcf.growth} onChange={(e) => setDcf((d) => ({ ...d, growth: e.target.value }))} />
+            </label>
+            <label className="text-[11px] text-muted-foreground">FCF margin %
+              <Input className="mt-0.5 h-8 text-xs" inputMode="decimal" value={dcf.margin} onChange={(e) => setDcf((d) => ({ ...d, margin: e.target.value }))} />
+            </label>
+            <label className="text-[11px] text-muted-foreground">Years
+              <Input className="mt-0.5 h-8 text-xs" inputMode="numeric" value={dcf.years} onChange={(e) => setDcf((d) => ({ ...d, years: e.target.value }))} />
+            </label>
+            <label className="text-[11px] text-muted-foreground">Terminal %/yr
+              <Input className="mt-0.5 h-8 text-xs" inputMode="decimal" value={dcf.terminal} onChange={(e) => setDcf((d) => ({ ...d, terminal: e.target.value }))} />
+            </label>
+          </div>
+          {(() => {
+            const revenueM = Math.max(0, config.baseline?.revenue ?? 0);
+            const r = dcfValue({
+              revenue: revenueM,
+              growthPct: dcf.growth.trim() ? Number(dcf.growth) || 0 : (config.baseline?.growthPct ?? 40),
+              fcfMarginPct: Number(dcf.margin) || 0,
+              waccPct: Number(dcf.wacc) || 15,
+              years: Number(dcf.years) || 5,
+              terminalGrowthPct: Number(dcf.terminal) || 0,
+            });
+            return (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  Enterprise value ≈ <strong className="text-foreground">{r.enterpriseValue.toFixed(2)}$M</strong>
+                  <span className="ml-1">(explicit {r.explicitValue.toFixed(2)} + terminal {r.terminalValue.toFixed(2)})</span>
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!Number.isFinite(r.enterpriseValue) || !(revenueM > 0)}
+                  onClick={() => {
+                    const note = `WACC ${dcf.wacc || 15}% · growth ${(dcf.growth.trim() ? Number(dcf.growth) : config.baseline?.growthPct ?? 40)}%/yr · FCF margin ${dcf.margin || 0}% · ${dcf.years || 5}y + terminal ${dcf.terminal || 0}%`;
+                    const others = config.methods.filter((m) => m.name !== DCF_NAME);
+                    const existing = config.methods.find((m) => m.name === DCF_NAME);
+                    setValuation({
+                      ...config,
+                      methods: [...others, { name: DCF_NAME, weight: existing?.weight ?? 10, value: Math.round(r.enterpriseValue * 100) / 100, note }],
+                    });
+                  }}
+                >
+                  <Calculator className="mr-1 h-3.5 w-3.5" /> Write into a method row
+                </Button>
+              </div>
+            );
+          })()}
+        </div>
+
         <div className="space-y-2">
           {config.methods?.map((m) => (
             <div key={m.name} className="grid gap-2 items-start sm:grid-cols-5">

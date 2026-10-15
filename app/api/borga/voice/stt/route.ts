@@ -57,11 +57,14 @@ export async function POST(req: NextRequest) {
       if (!(file instanceof Blob)) {
         return NextResponse.json({ error: 'audio field is required.' }, { status: 400 });
       }
+      // MIME comes from the client: allow audio only (vibe-check #14) — the
+      // value only selects the upstream content type, never storage or exec.
+      mime = /^audio\/[a-z0-9.+-]+$/i.test(file.type || '') ? file.type : 'audio/webm';
       audio = await file.arrayBuffer();
-      mime = file.type || mime;
     } else {
       audio = await req.arrayBuffer();
-      if (ctype) mime = ctype.split(';')[0].trim() || mime;
+      const bare = ctype.split(';')[0].trim();
+      mime = /^audio\/[a-z0-9.+-]+$/i.test(bare) ? bare : mime;
     }
   } catch {
     return NextResponse.json({ error: 'Invalid audio body.' }, { status: 400 });

@@ -145,6 +145,9 @@ function EmployeeDialog({
     const startedAt = form.startedAt.trim()
       ? formatStartedAt(form.startedAt.trim())
       : editing?.startedAt ?? new Date().toLocaleDateString([], { month: 'short', year: 'numeric' });
+    // Roster-only manager: resolve the id alongside the name (kills ghost-manager typos; reads prefer the id).
+    const managerName = form.manager.trim() || undefined;
+    const managerId = managerName ? employees.find((e) => e.id !== editing?.id && e.name.toLowerCase() === managerName.toLowerCase())?.id : undefined;
     if (editing) {
       updateEmployee(editing.id, {
         name: form.name.trim(),
@@ -154,7 +157,8 @@ function EmployeeDialog({
         employmentType: form.employmentType,
         salary: form.salary.trim() ? salary : editing.salary,
         location: form.location.trim(),
-        manager: form.manager.trim() || undefined,
+        manager: managerName,
+        managerId,
         status: form.status,
         performance,
         startedAt,
@@ -173,7 +177,8 @@ function EmployeeDialog({
         location: form.location.trim() || 'Remote',
         startedAt,
         performance,
-        manager: form.manager.trim() || undefined,
+        manager: managerName,
+        managerId,
       });
       log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `New hire added to HR records: ${form.name.trim()} — ${form.role.trim()}.` });
     }
@@ -248,8 +253,7 @@ function EmployeeDialog({
               value={form.manager}
               onChange={(v) => setForm({ ...form, manager: v })}
               placeholder="Manager name…"
-              searchPlaceholder="Search team"
-              allowCustom
+              searchPlaceholder="Search team (roster only — no typos)"
               className="mt-1"
             />
           </div>

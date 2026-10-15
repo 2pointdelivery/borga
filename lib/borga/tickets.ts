@@ -63,6 +63,8 @@ export interface Ticket {
   /** Extra addresses seen on the thread (cc / other repliers) — allowed to reply by token. */
   participants: string[];
   assignee: string; // free text / employee name; '' = unassigned
+  /** Assignee's employee id — written by pickers alongside `assignee`; readers prefer it, falling back to the name. */
+  assigneeId?: string;
   labels: string[];
   projectId?: string;
   customerId?: string;
@@ -449,3 +451,24 @@ export function isAutomatedMail(headers: Record<string, string>, fromEmail: stri
 }
 
 export const EMAIL_RE = /^[^\s@<>()]+@[^\s@<>()]+\.[^\s@<>()]+$/;
+
+// ── Round-robin assignment ────────────────────────────────────────────────────
+// New tickets go to the team member with the fewest open tickets (ties break
+// alphabetically), so work spreads evenly instead of piling on one person.
+// Pure — tested in lib/tickets.test.ts.
+
+export interface RosterMember { id: string; name: string; }
+export interface OpenTicketLike { assigneeId?: string; assignee: string; status: string; }
+
+/** The least-loaded active member, or null when the roster is empty. */
+export function roundRobinAssignee(roster: RosterMember[], openTickets: OpenTicketLike[]): RosterMember | null {
+  if (roster.length === 0) return null;
+  const load = new Map<string, number>(roster.map((r) => [r.id, 0]));
+  for (const t of openTickets) {
+    const id = t.assigneeId ?? roster.find((r) => r.name === t.assignee)?.id;
+    if (id && load.has(id)) load.set(id, (load.get(id) ?? 0) + 1);
+  }
+  return [...roster]
+    .sort((a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0) || a.name.localeCompare(b.name))
+    [0];
+}

@@ -3,17 +3,20 @@ import crypto from 'node:crypto';
 
 // Password hashing using Node's built-in scrypt (no extra dependency).
 // Storage format: `<saltHex>:<hashHex>` where both are 32+ byte hex strings.
+// Parameters are pinned (vibe-check #16) so every deployment hashes identically.
+
+const SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 } as const;
 
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64, SCRYPT_OPTS).toString('hex');
   return `${salt}:${hash}`;
 }
 
 export function verifyPassword(password: string, stored: string): boolean {
   const [salt, hash] = stored.split(':');
   if (!salt || !hash) return false;
-  const computed = crypto.scryptSync(password, salt, 64).toString('hex');
+  const computed = crypto.scryptSync(password, salt, 64, SCRYPT_OPTS).toString('hex');
   const a = Buffer.from(hash, 'hex');
   const b = Buffer.from(computed, 'hex');
   if (a.length !== b.length) return false;

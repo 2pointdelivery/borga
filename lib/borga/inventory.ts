@@ -41,6 +41,10 @@ export interface InventoryItem {
   createdAtIso: string;
   /** Preferred supplier (Vendors & AP) — products only. */
   supplierId?: string;
+  /** Lot or best-before date (YYYY-MM-DD). Drives the expiring report + FEFO picking hint. */
+  expiryDateIso?: string;
+  /** Lot / batch reference for traceability (e.g. a supplier lot number). */
+  lotRef?: string;
 }
 
 export type WarehouseKind = 'warehouse' | 'store';
@@ -710,3 +714,73 @@ export function serviceItemsFromTracks(tracks: Array<{ lines?: Array<{ name?: st
 export const INITIAL_WAREHOUSES: Warehouse[] = [
   { id: 'wh-main', name: 'Main Store', code: 'STORE-01', kind: 'store', address: '', active: true },
 ];
+
+// ---------------------------------------------------------------------------
+// Expiry (FEFO: first-expired, first-out)
+// ---------------------------------------------------------------------------
+
+export interface ExpiryRow {
+  item: InventoryItem;
+  onHand: number;
+  /** Days until expiry; negative = already expired. */
+  daysLeft: number;
+  band: 'expired' | 'this-week' | 'this-month' | 'ok';
+}
+
+/** Items with an expiry date on stock, worst first. FEFO order for picking. */
+export function expiringItems(
+  items: InventoryItem[],
+  movements: StockMovement[],
+  todayIso = new Date().toISOString().slice(0, 10),
+  horizonDays = 30,
+): ExpiryRow[] {
+  const today = Date.parse(todayIso);
+  const out: ExpiryRow[] = [];
+  for (const item of items) {
+    if (!item.trackStock || !item.expiryDateIso) continue;
+    const onHand = totalOnHand(movements, item.id);
+    if (onHand <= 0) continue;
+    const daysLeft = Math.round((Date.parse(item.expiryDateIso) - today) / 86_400_000);
+    if (daysLeft > horizonDays) continue;
+    out.push({
+      item,
+      onHand,
+      daysLeft,
+      band: daysLeft < 0 ? 'expired' : daysLeft <= 7 ? 'this-week' : daysLeft <= horizonDays ? 'this-month' : 'ok',
+    });
+  }
+  return out.sort((a, b) => a.daysLeft - b.daysLeft);
+}
+
+// ---------------------------------------------------------------------------
+// Till sessions (POS cash drawer)
+// ---------------------------------------------------------------------------
+
+export interface TillSession {
+  id: string;
+  openedAt: string;
+  openedBy: string;
+  /** Cash counted in the drawer when the till opened. */
+  openingFloat: number;
+  closedAt?: string;
+  closedBy?: string;
+  /** Cash the register says should be in the drawer at close (float + cash sales). */
+  expected?: number;
+  /** Cash physically counted at close. */
+  counted?: number;
+  /** counted − expected. Positive = overage, negative = shortage. */
+  variance?: number;
+}
+
+export const EMPTY_TILL_SESSIONS: TillSession[] = [];
+
+/** What the drawer should hold: opening float plus every cash sale since. */
+export function expectedDrawer(session: TillSession, cashSales: number): number {
+  return Math.round((session.openingFloat + cashSales) * 100) / 100;
+}
+
+/** Close-out variance: counted vs expected, rounded to cents. */
+export function tillVariance(openingFloat: number, cashSales: number, counted: number): { expected: number; variance: number } {
+  const expected = Math.round((openingFloat + cashSales) * 100) / 100;
+  return { expected, variance: Math.round((counted - expected) * 100) / 100 };
+}

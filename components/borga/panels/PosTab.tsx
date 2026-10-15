@@ -177,6 +177,8 @@ export function PosTab() {
         </div>
       </div>
 
+      <TillCard cashier={cashier} cashSalesSince={(iso) => posSales.filter((s) => s.at >= iso && s.payment === 'cash' && s.status === 'completed').reduce((t, s) => t + s.total, 0)} />
+
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
         {/* Item grid */}
         <div className="space-y-3">
@@ -495,4 +497,84 @@ export function PosTab() {
     if (onHand <= item.reorderPoint) return 'low';
     return 'ok';
   }
+}
+
+/**
+ * Cash-drawer session: open with a counted float, close with a counted
+ * drawer. Expected = float + cash sales since opening; the difference is
+ * recorded (over/short) so the till's story is auditable.
+ */
+function TillCard({ cashier, cashSalesSince }: { cashier: string; cashSalesSince: (openedIso: string) => number }) {
+  const { tillSessions, openTillSession, closeTillSession, activeWorkspace } = useBorga();
+  const currency = activeWorkspace()?.currency ?? 'USD';
+  const money = (n: number) => fmtMoney(n, currency);
+  const [float, setFloat] = useState('');
+  const [counted, setCounted] = useState('');
+  const [closeOpen, setCloseOpen] = useState(false);
+
+  const open = tillSessions.find((s) => !s.closedAt) ?? null;
+  const last = tillSessions.find((s) => s.closedAt) ?? null;
+  const cashSales = open ? cashSalesSince(open.openedAt) : 0;
+  const expected = open ? Math.round((open.openingFloat + cashSales) * 100) / 100 : 0;
+
+  return (
+    <Card className="flex flex-wrap items-center gap-3 p-3">
+      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary"><Banknote className="h-4 w-4" /></div>
+      {open ? (
+        <>
+          <div>
+            <p className="text-sm font-semibold">Till open — {money(open.openingFloat)} float</p>
+            <p className="text-[11px] text-muted-foreground">
+              opened {new Date(open.openedAt).toLocaleString()} by {open.openedBy} · cash sales {money(cashSales)} · expected drawer {money(expected)}
+            </p>
+          </div>
+          <Button size="sm" className="ml-auto" onClick={() => { setCounted(''); setCloseOpen(true); }}>Count & close the till</Button>
+        </>
+      ) : (
+        <>
+          <div>
+            <p className="text-sm font-semibold">Till closed</p>
+            <p className="text-[11px] text-muted-foreground">
+              {last
+                ? `Last session: expected ${money(last.expected ?? 0)}, counted ${money(last.counted ?? 0)} — variance ${money(last.variance ?? 0)}${Math.abs(last.variance ?? 0) < 0.005 ? '' : (last.variance ?? 0) < 0 ? ' (short)' : ' (over)'}`
+                : 'No sessions yet — open the drawer with its counted float before the first sale.'}
+            </p>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <Input
+              className="w-28 text-right"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={float}
+              onChange={(e) => setFloat(e.target.value)}
+              title="Cash counted in the drawer at opening"
+            />
+            <Button size="sm" onClick={() => { const s = openTillSession(cashier, Number(float) || 0); if (!s) toast({ title: 'Till already open', description: 'Close the current session first.', variant: 'warning' }); setFloat(''); }}>Open till</Button>
+          </div>
+        </>
+      )}
+
+      <Dialog open={closeOpen} onOpenChange={setCloseOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader><DialogTitle>Count & close the till</DialogTitle></DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p className="text-muted-foreground">Expected drawer: <strong className="text-foreground">{money(expected)}</strong> (float {money(open?.openingFloat ?? 0)} + cash sales {money(cashSales)})</p>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-muted-foreground">Cash counted in the drawer</span>
+              <Input inputMode="decimal" placeholder="0.00" value={counted} onChange={(e) => setCounted(e.target.value)} />
+            </label>
+            {counted.trim() && (
+              <p className="text-muted-foreground">
+                Variance: <strong>{money((Number(counted) || 0) - expected)}</strong>{Math.abs((Number(counted) || 0) - expected) < 0.005 ? '' : (Number(counted) || 0) - expected < 0 ? ' — short' : ' — over'}
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCloseOpen(false)}>Cancel</Button>
+            <Button onClick={() => { closeTillSession(cashier, Number(counted) || 0, cashSales); setCloseOpen(false); }}>Close till</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
 }

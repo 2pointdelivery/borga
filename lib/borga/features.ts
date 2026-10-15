@@ -62,6 +62,10 @@ export const FEATURES = [
   { id: 'advisor', label: 'Advisor bubble', description: 'The floating assistant that suggests what to look at on each page.', status: 'beta', defaultOn: true, group: 'AI & automation' },
   { id: 'widgets', label: 'Dashboard widgets', description: 'The side column with project progress, support tickets, calendar, AI assistant and plan.', status: 'stable', defaultOn: true, group: 'Platform' },
   { id: 'whatsapp', label: 'WhatsApp', description: 'WhatsApp Business messaging.', status: 'experimental', defaultOn: false, group: 'Communications' },
+  { id: 'capTable', label: 'Cap table & equity', description: 'Owners, share classes, SAFEs, convertible notes, option pool, vesting, 409A inputs and scenario modeling. Carta-style equity ledger that feeds Valuation and Fundraising.', status: 'experimental', defaultOn: true, page: 'company', tab: 'equity', group: 'Company' },
+  { id: 'payroll', label: 'Payroll', description: 'Pay runs from HR salaries with withholding taxes and employer contributions, every line mapped to a ledger account. Lives under HR.', status: 'experimental', defaultOn: true, page: 'hr', tab: 'payroll', group: 'Company' },
+  { id: 'procurement', label: 'Purchase orders', description: 'Purchase orders, goods receipt and 3-way PO → receipt → bill matching. Feeds Vendors & AP, Inventory costing and Approvals.', status: 'experimental', defaultOn: true, page: 'inventory', tab: 'orders', group: 'Operations' },
+  { id: 'quotes', label: 'Quotes & estimates', description: 'Quotes and estimates with versioning, expiry and one-click convert to invoice or project. HubSpot-style CPQ lite for the Sales pipeline.', status: 'experimental', defaultOn: true, page: 'sales', tab: 'quotes', group: 'Operations' },
 ] as const satisfies readonly FeatureDef[];
 
 export type FeatureId = (typeof FEATURES)[number]['id'];
@@ -76,9 +80,10 @@ export function isFeatureId(id: unknown): id is FeatureId {
  * Policy: a feature that is simulated, or experimental and not yet backed by real data, ships OFF. A company turns it on
  * under Settings, Features, knowing its status. lib/features.test.ts enforces this, so a new experimental feature cannot
  * be added switched on by accident. (Revenue tracker is the one experimental feature that is on: it records real,
- * user-entered revenue; only its ledger-based actuals are still to come.)
+ * user-entered revenue; only its ledger-based actuals are still to come. Cap table, payroll, procurement and quotes
+ * are on for the same reason: each is now backed by real persistence, server routes and tests — see the 2026 maturity pass.)
  */
-export const EXPERIMENTAL_ON_BY_DEFAULT: readonly string[] = ['revenueTracker'];
+export const EXPERIMENTAL_ON_BY_DEFAULT: readonly string[] = ['revenueTracker', 'capTable', 'payroll', 'procurement', 'quotes'];
 
 /** Stored overrides: only explicit choices are persisted; absent = feature default. */
 export type FeatureOverrides = Partial<Record<FeatureId, boolean>>;

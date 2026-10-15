@@ -446,6 +446,30 @@ export function InventoryCatalogTab() {
                   </div>
                 )}
 
+                {isProduct && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Best before / expiry (optional)</label>
+                      <Input
+                        className="mt-1"
+                        type="date"
+                        value={editingItem.expiryDateIso ?? ''}
+                        onChange={(e) => patch({ expiryDateIso: e.target.value || undefined })}
+                      />
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">Feeds the expiring-stock report and FEFO picking.</p>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">Lot / batch (optional)</label>
+                      <Input
+                        className="mt-1"
+                        value={editingItem.lotRef ?? ''}
+                        onChange={(e) => patch({ lotRef: e.target.value.trim() || undefined })}
+                        placeholder="e.g. supplier lot number"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <div className="mb-1 flex items-center justify-between">
                     <label className="text-xs font-medium text-muted-foreground">Description</label>

@@ -35,10 +35,10 @@ const BOARD_COLUMNS: TicketStatus[] = ['open', 'in-progress', 'pending', 'resolv
 const POLL_MS = 20_000;
 const PRIORITY_RANK: Record<TicketPriority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-const EMPTY_FORM = { subject: '', description: '', requesterName: '', requesterEmail: '', type: 'request' as TicketType, priority: 'medium' as TicketPriority, assignee: NONE, projectId: NONE };
+const EMPTY_FORM = { subject: '', description: '', requesterName: '', requesterEmail: '', customerId: NONE, type: 'request' as TicketType, priority: 'medium' as TicketPriority, assignee: NONE, projectId: NONE };
 
 export function TicketsTab() {
-  const { activeWorkspaceId: ws, employees, projects, userName } = useBorga();
+  const { activeWorkspaceId: ws, employees, projects, customers, userName } = useBorga();
   const actor = userName?.trim() ? userName.trim() : 'Agent';
   const [tickets, setTickets] = useState<TicketSummary[]>([]);
   const [settings, setSettings] = useState<ClientSettings | null>(null);
@@ -121,9 +121,11 @@ export function TicketsTab() {
         description: form.description,
         requesterName: form.requesterName,
         requesterEmail: form.requesterEmail,
+        customerId: form.customerId === NONE ? undefined : form.customerId,
         type: form.type,
         priority: form.priority,
         assignee: form.assignee === NONE ? '' : form.assignee,
+        assigneeId: employees.find((e) => e.name === form.assignee)?.id,
         projectId: form.projectId === NONE ? undefined : form.projectId,
       },
       actor,
@@ -301,6 +303,28 @@ export function TicketsTab() {
           </DialogHeader>
           <div className="grid gap-3">
             <Field label="Subject"><Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} maxLength={200} autoFocus /></Field>
+            <Field label="Customer account (optional)" hint="Links the ticket to the account — pick, or leave on “No account”.">
+              <SearchSelect
+                options={[
+                  { value: NONE, label: 'No account' },
+                  ...customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry })),
+                ]}
+                value={form.customerId}
+                onChange={(v) => {
+                  const picked = customers.find((c) => c.id === v);
+                  setForm((f) => ({
+                    ...f,
+                    customerId: v,
+                    // Offer the account's details as a starting point — editable below.
+                    requesterName: f.requesterName || picked?.name || '',
+                    requesterEmail: f.requesterEmail || picked?.email || '',
+                  }));
+                }}
+                placeholder="No account"
+                searchPlaceholder="Search customers"
+                clearable={false}
+              />
+            </Field>
             <Field label="Description"><Textarea rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Requester name"><Input value={form.requesterName} onChange={(e) => setForm({ ...form, requesterName: e.target.value })} /></Field>

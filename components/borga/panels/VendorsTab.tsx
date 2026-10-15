@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -36,7 +37,9 @@ import { findBillDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
 import { SearchSelect } from '../SearchSelect';
 import { ConfirmDialog } from '../ConfirmDialog';
-import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect, CountrySelect, CityInput } from '../form-widgets';
+import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect, CountrySelect, CityInput, CurrencySelect } from '../form-widgets';
+import { rateFor } from '@/lib/borga/fx';
+import { FormDialog, FieldGrid, TextField, SelectField } from '../form-kit';
 import { billHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { cn } from '@/lib/utils';
 
@@ -54,6 +57,8 @@ interface BillForm {
   taxProfileIds: string[]; externalRef?: string;
   paymentMethod: PaymentMethod; notes: string; description: string; lines: BillLine[];
   projectId?: string; accountId?: string;
+  /** Billing currency (ISO). Empty = workspace currency. */
+  currency: string;
 }
 
 const EMPTY_VENDOR: VendorForm = {
@@ -71,6 +76,7 @@ function emptyBill(vendorId: string, defaultTaxProfileId?: string): BillForm {
     received: new Date().toISOString().slice(0, 10),
     due: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
     status: 'unpaid', taxProfileIds: defaultTaxProfileId ? [defaultTaxProfileId] : [], externalRef: '', paymentMethod: 'bank-transfer', notes: '', description: '',
+    currency: '',
     lines: [{ id: nextBillLine(), description: '', qty: 1, unitPrice: 0 }],
   };
 }
@@ -79,7 +85,7 @@ export function VendorsTab() {
   const {
     vendors, addVendor, updateVendor, deleteVendor,
     bills, addBill, updateBill, setBillStatus, deleteBill, voidBill, payBill,
-    composio, log, activeWorkspace, activeWorkspaceId,
+    inventoryItems, fxRates, composio, log, activeWorkspace, activeWorkspaceId,
     taxProfiles, defaultTaxProfileId,
     settings, addApproval,
   } = useBorga();
@@ -123,6 +129,7 @@ export function VendorsTab() {
         paymentMethod: b.paymentMethod ?? 'bank-transfer',
         notes: b.notes ?? '',
         description: b.description ?? '',
+        currency: b.currency ?? '',
         lines: b.lines?.length ? b.lines : [{ id: nextBillLine(), description: 'Services / goods received', qty: 1, unitPrice: b.amount }],
         projectId: b.projectId,
         accountId: b.accountId,
@@ -194,8 +201,22 @@ export function VendorsTab() {
     if (!vendor || billTotals.total <= 0) return;
     const lines = billForm.lines.filter((l) => l.description.trim() || l.unitPrice);
     if (lines.length === 0) return;
-    const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const total = subtotal + (subtotal * billTaxRate) / 100;
+    const foreignSubtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
+    const foreignTotal = foreignSubtotal + (foreignSubtotal * billTaxRate) / 100;
+    const docCcy = billForm.currency.trim().toUpperCase() || currency;
+    let total = Math.round(foreignTotal * 100) / 100;
+    let fxRate: number | undefined;
+    let foreignAmount: number | undefined;
+    if (docCcy !== currency) {
+      const rate = rateFor(fxRates, docCcy, currency);
+      if (rate === null) {
+        toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or record in ${currency}.`, variant: 'error' });
+        return;
+      }
+      fxRate = rate;
+      foreignAmount = Math.round(foreignTotal * 100) / 100;
+      total = Math.round(foreignTotal * rate * 100) / 100;
+    }
     const profileNames = taxProfiles.filter((t) => billForm.taxProfileIds.includes(t.id)).map((t) => t.name).join(' + ');
     const shared = {
       vendorId: vendor.id, vendorName: vendor.name, number: billForm.number.trim(),
@@ -210,6 +231,9 @@ export function VendorsTab() {
       paymentMethod: billForm.paymentMethod,
       projectId: billForm.projectId,
       accountId: billForm.accountId,
+      currency: docCcy === currency ? undefined : docCcy,
+      fxRate,
+      foreignAmount,
     };
     if (editingBill) {
       updateBill(editingBill.id, shared);
@@ -427,6 +451,7 @@ export function VendorsTab() {
                   </td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs">
                     {money(b.amount)}
+                    {b.foreignAmount !== undefined && b.currency && <span className="block text-[10px] font-normal text-muted-foreground">{b.currency} {b.foreignAmount.toFixed(2)}</span>}
                     {b.taxProfileName && <span className="block text-[10px] font-normal text-muted-foreground">{b.taxProfileName} {b.taxRate ?? 0}%</span>}
                   </td>
                   <td className="px-4 py-2.5">
@@ -577,119 +602,57 @@ export function VendorsTab() {
       </Card>
 
       {/* Vendor dialog */}
-      <Dialog open={vendorDialogOpen} onOpenChange={(o) => { setVendorDialogOpen(o); if (!o) setEditingVendor(null); }}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingVendor ? `Edit ${editingVendor.name}` : 'New vendor'}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Vendor name *</label>
-                <Input value={vendorForm.name} onChange={(e) => setVendorForm({ ...vendorForm, name: e.target.value })} placeholder="Acme Supplies" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Service / category</label>
-                <Input value={vendorForm.service} onChange={(e) => setVendorForm({ ...vendorForm, service: e.target.value })} placeholder="Office supplies" className="mt-1" />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Email</label>
-                <Input type="email" value={vendorForm.email} onChange={(e) => setVendorForm({ ...vendorForm, email: e.target.value })} placeholder="ap@acme.com" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Phone</label>
-                <Input value={vendorForm.phone} onChange={(e) => setVendorForm({ ...vendorForm, phone: e.target.value })} placeholder="+1 555 0400" className="mt-1" />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Website</label>
-                <Input value={vendorForm.website} onChange={(e) => setVendorForm({ ...vendorForm, website: e.target.value })} placeholder="acme.com" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Payment terms</label>
-                <Select value={vendorForm.terms} onValueChange={(v) => setVendorForm({ ...vendorForm, terms: v as PaymentTerms })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {(Object.keys(PAYMENT_TERMS_LABEL) as PaymentTerms[]).map((t) => (
-                      <SelectItem key={t} value={t}>{PAYMENT_TERMS_LABEL[t]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Status</label>
-                <Select value={vendorForm.status} onValueChange={(v) => setVendorForm({ ...vendorForm, status: v as VendorForm['status'] })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="paused">Paused</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Legal name</label>
-                <Input value={vendorForm.legalName} onChange={(e) => setVendorForm({ ...vendorForm, legalName: e.target.value })} placeholder="Acme Supplies Inc." className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Trading name</label>
-                <Input value={vendorForm.tradingName} onChange={(e) => setVendorForm({ ...vendorForm, tradingName: e.target.value })} placeholder="Acme" className="mt-1" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Address</label>
-              <Input value={vendorForm.addressLine} onChange={(e) => setVendorForm({ ...vendorForm, addressLine: e.target.value })} placeholder="123 Market St, Suite 400" className="mt-1" />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">City</label>
-                <div className="mt-1"><CityInput country={vendorForm.country} value={vendorForm.city} onChange={(v) => setVendorForm({ ...vendorForm, city: v })} /></div>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Country</label>
-                <div className="mt-1"><CountrySelect value={vendorForm.country} onChange={(v) => setVendorForm({ ...vendorForm, country: v, city: '' })} /></div>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Tax number</label>
-                <Input value={vendorForm.taxNumber} onChange={(e) => setVendorForm({ ...vendorForm, taxNumber: e.target.value })} placeholder="VAT / GST" className="mt-1" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Billing address (if different)</label>
-              <Input value={vendorForm.billingAddress} onChange={(e) => setVendorForm({ ...vendorForm, billingAddress: e.target.value })} placeholder="PO Box 9001, Springfield" className="mt-1" />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Contact person</label>
-                <Input value={vendorForm.contactName} onChange={(e) => setVendorForm({ ...vendorForm, contactName: e.target.value })} placeholder="Jordan Lee" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Contact email</label>
-                <Input type="email" value={vendorForm.contactEmail} onChange={(e) => setVendorForm({ ...vendorForm, contactEmail: e.target.value })} placeholder="ap@acme.com" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Contact phone</label>
-                <Input value={vendorForm.contactPhone} onChange={(e) => setVendorForm({ ...vendorForm, contactPhone: e.target.value })} placeholder="+1 555 0100" className="mt-1" />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button onClick={submitVendor} disabled={!vendorForm.name.trim()}>
-              {editingVendor ? 'Save changes' : 'Add vendor'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <FormDialog
+        open={vendorDialogOpen}
+        onOpenChange={(o) => { setVendorDialogOpen(o); if (!o) setEditingVendor(null); }}
+        title={editingVendor ? `Edit ${editingVendor.name}` : 'New vendor'}
+        description="Who you buy from. Bills, purchase orders and payment history live under this record."
+        submitLabel={editingVendor ? 'Save changes' : 'Add vendor'}
+        onSubmit={submitVendor}
+        submitDisabled={!vendorForm.name.trim()}
+        wide
+      >
+        <FieldGrid cols={2}>
+          <TextField label="Vendor name *" value={vendorForm.name} onChange={(v) => setVendorForm({ ...vendorForm, name: v })} placeholder="Acme Supplies" />
+          <TextField label="What they sell you" value={vendorForm.service} onChange={(v) => setVendorForm({ ...vendorForm, service: v })} placeholder="Office supplies" hint="Used to suggest them on orders." />
+        </FieldGrid>
+        <FieldGrid cols={2}>
+          <TextField label="Email" value={vendorForm.email} onChange={(v) => setVendorForm({ ...vendorForm, email: v })} placeholder="ap@acme.com" type="email" />
+          <TextField label="Phone" value={vendorForm.phone} onChange={(v) => setVendorForm({ ...vendorForm, phone: v })} placeholder="+1 555 0400" />
+        </FieldGrid>
+        <FieldGrid cols={3}>
+          <TextField label="Website" value={vendorForm.website} onChange={(v) => setVendorForm({ ...vendorForm, website: v })} placeholder="acme.com" />
+          <SelectField label="Payment terms" value={vendorForm.terms} onChange={(v) => setVendorForm({ ...vendorForm, terms: v as PaymentTerms })} options={(Object.keys(PAYMENT_TERMS_LABEL) as PaymentTerms[]).map((t) => ({ value: t, label: PAYMENT_TERMS_LABEL[t] }))} hint="When you usually pay them." />
+          <SelectField label="Status" value={vendorForm.status} onChange={(v) => setVendorForm({ ...vendorForm, status: v as VendorForm['status'] })} options={[{ value: 'active', label: 'Active' }, { value: 'paused', label: 'Paused' }]} hint="Paused hides them from new orders." />
+        </FieldGrid>
+        <FieldGrid cols={2}>
+          <TextField label="Legal name" value={vendorForm.legalName} onChange={(v) => setVendorForm({ ...vendorForm, legalName: v })} placeholder="Acme Supplies Inc." hint="Exactly as on their invoice." />
+          <TextField label="Trading name" value={vendorForm.tradingName} onChange={(v) => setVendorForm({ ...vendorForm, tradingName: v })} placeholder="Acme" />
+        </FieldGrid>
+        <TextField label="Street address" value={vendorForm.addressLine} onChange={(v) => setVendorForm({ ...vendorForm, addressLine: v })} placeholder="123 Market St, Suite 400" />
+        <FieldGrid cols={3}>
+          <Field label="City">
+            <CityInput country={vendorForm.country} value={vendorForm.city} onChange={(v) => setVendorForm({ ...vendorForm, city: v })} />
+          </Field>
+          <Field label="Country">
+            <CountrySelect value={vendorForm.country} onChange={(v) => setVendorForm({ ...vendorForm, country: v, city: '' })} />
+          </Field>
+          <TextField label="Tax number" value={vendorForm.taxNumber} onChange={(v) => setVendorForm({ ...vendorForm, taxNumber: v })} placeholder="VAT / GST ID" />
+        </FieldGrid>
+        <TextField label="Billing address (if different)" value={vendorForm.billingAddress} onChange={(v) => setVendorForm({ ...vendorForm, billingAddress: v })} placeholder="PO Box 9001, Springfield" />
+        <FieldGrid cols={3}>
+          <TextField label="Contact person" value={vendorForm.contactName} onChange={(v) => setVendorForm({ ...vendorForm, contactName: v })} placeholder="Jordan Lee" />
+          <TextField label="Contact email" value={vendorForm.contactEmail} onChange={(v) => setVendorForm({ ...vendorForm, contactEmail: v })} placeholder="ap@acme.com" type="email" />
+          <TextField label="Contact phone" value={vendorForm.contactPhone} onChange={(v) => setVendorForm({ ...vendorForm, contactPhone: v })} placeholder="+1 555 0100" />
+        </FieldGrid>
+      </FormDialog>
 
       {/* Bill dialog */}
       <Dialog open={billDialogOpen} onOpenChange={(o) => { setBillDialogOpen(o); if (!o) setEditingBill(null); }}>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingBill ? `Edit bill ${editingBill.number}` : 'Record a bill'}</DialogTitle>
+            <DialogDescription>A supplier invoice you need to pay. Totals add up as you type; paying posts it to your books.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
@@ -712,15 +675,29 @@ export function VendorsTab() {
               <Textarea rows={2} value={billForm.description} onChange={(e) => setBillForm({ ...billForm, description: e.target.value })} placeholder="e.g. August cloud hosting — AWS production environment" />
             </Field>
 
-            {/* Line items */}
+            {/* Line items — pick from the catalog (cost fills in) or type free text */}
             <div className="rounded-xl border p-3">
-              <div className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
+              <div className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <span>Catalog item</span><span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
               </div>
               <div className="space-y-2">
                 {billForm.lines.map((line, idx) => (
-                  <div key={line.id} className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2">
-                    <Input value={line.description} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value } : l)) })} placeholder={idx === 0 ? 'e.g. Cloud hosting — August' : 'Line description'} className="h-8 text-xs" />
+                  <div key={line.id} className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2">
+                    <SearchSelect
+                      options={[
+                        { value: '', label: 'Free text…' },
+                        ...inventoryItems.filter((x) => x.active).map((x) => ({ value: x.id, label: x.name, detail: `$${x.costPrice}` })),
+                      ]}
+                      value={line.itemId ?? ''}
+                      onChange={(v) => {
+                        const item = inventoryItems.find((x) => x.id === v);
+                        setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, itemId: item?.id, description: item ? item.name : l.description, unitPrice: item ? item.costPrice : l.unitPrice } : l)) });
+                      }}
+                      placeholder="Free text…"
+                      searchPlaceholder="Search catalog"
+                      clearable={false}
+                    />
+                    <Input value={line.description} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value, itemId: undefined } : l)) })} placeholder={idx === 0 ? 'e.g. Cloud hosting — August' : 'Line description'} className="h-8 text-xs" />
                     <Input type="number" min={0} step="any" value={line.qty} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, qty: Number(e.target.value) || 0 } : l)) })} className="h-8 text-right text-xs" />
                     <Input type="number" min={0} step="any" value={line.unitPrice} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, unitPrice: Number(e.target.value) || 0 } : l)) })} className="h-8 text-right text-xs" />
                     <span className="text-right font-mono text-xs">{money((Number(line.qty) || 0) * (Number(line.unitPrice) || 0))}</span>
@@ -742,6 +719,18 @@ export function VendorsTab() {
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Billing currency" hint={billForm.currency && billForm.currency.toUpperCase() !== currency ? `Converts to ${currency} at the FX table rate on save.` : `Same as the company (${currency}) — no conversion.`}>
+                <CurrencySelect value={billForm.currency || currency} onChange={(v) => setBillForm({ ...billForm, currency: v === currency ? '' : v })} />
+              </Field>
+              <Field label="Total">
+                <p className="py-2 font-mono text-sm font-semibold">
+                  {billForm.currency && billForm.currency.toUpperCase() !== currency
+                    ? (() => { const r = rateFor(fxRates, billForm.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(billTotals.total * r)} (${billForm.currency.toUpperCase()} ${billTotals.total.toFixed(2)})`; })()
+                    : money(billTotals.total)}
+                </p>
+              </Field>
+            </div>
             <Field label="Taxes" hint="Select every tax that applies — rates stack (e.g. GST + PST).">
               <TaxProfilesMultiSelect taxProfiles={taxProfiles} selectedIds={billForm.taxProfileIds} onChange={(ids) => setBillForm({ ...billForm, taxProfileIds: ids })} />
             </Field>
@@ -791,9 +780,10 @@ export function VendorsTab() {
             </Field>
           </div>
           <DialogFooter>
+            <Button variant="ghost" onClick={() => { setBillDialogOpen(false); setEditingBill(null); }}>Cancel</Button>
             <Button onClick={submitBill} disabled={!billForm.vendorId || billTotals.total <= 0}>
               <ReceiptText className="mr-1 h-3.5 w-3.5" />
-              {editingBill ? 'Save changes' : 'Record bill'}
+              ＋ {editingBill ? 'Save changes' : 'Record bill'}
             </Button>
           </DialogFooter>
         </DialogContent>

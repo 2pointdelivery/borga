@@ -31,6 +31,8 @@ const createSchema = z.object({
   action: z.literal('create'),
   name: z.string().trim().min(1).max(80),
   wsIds: z.array(z.string().max(64)).max(50).optional(),
+  /** Optional rotation deadline in days (e.g. 90). After it the key verifies as invalid. */
+  expiresInDays: z.number().int().min(1).max(3650).optional(),
 });
 
 const revokeSchema = z.object({
@@ -54,7 +56,7 @@ export async function POST(req: NextRequest) {
   const requested = parsed.data.wsIds?.filter((w) => isValidWsId(w)) ?? [];
   // An empty or fully-invalid scope falls back to every workspace the user owns.
   const wsIds = requested.length ? requested.filter((w) => owned.includes(w)) : owned;
-  const { record, secret } = await createApiKey(userId, parsed.data.name, wsIds.length ? wsIds : owned);
+  const { record, secret } = await createApiKey(userId, parsed.data.name, wsIds.length ? wsIds : owned, { expiresInDays: parsed.data.expiresInDays });
   // The secret is shown exactly once — it is stored hashed and can never be read back.
   return NextResponse.json({ ok: true, key: record, secret });
 }
