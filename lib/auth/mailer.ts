@@ -5,6 +5,7 @@ import { workspaceSmtp } from '@/lib/borga/smtp-server';
 import { makeTransport } from '@/lib/borga/smtp-transport';
 import { fromHeader } from '@/lib/borga/smtp-core';
 import { describeMailError, maildogConfig, type MailTransportConfig } from '@/lib/borga/maildog';
+import { isPostmarkConfigured, postmarkFrom, sendViaPostmark } from '@/lib/borga/postmark-server';
 
 // Reusable SMTP mailer. Configure via env or the secrets store:
 //   SMTP_HOST, SMTP_PORT (default 587), SMTP_USER, SMTP_PASS,
@@ -46,8 +47,16 @@ async function deploymentConfig(): Promise<MailTransportConfig | null> {
 
 export async function isEmailConfigured(ctx?: MailContext): Promise<boolean> {
   if (ctx && (await workspaceSmtp(ctx.userId, ctx.ws))) return true;
+  if (await isPostmarkConfigured()) return true;
   const cfg = await deploymentConfig();
   return !!cfg?.host && !!cfg.from;
+}
+
+/** Which sender carries deployment mail: the API beats raw SMTP on deliverability (bounces, tracking). */
+export async function deploymentProvider(): Promise<'postmark' | 'smtp' | 'none'> {
+  if (await isPostmarkConfigured()) return 'postmark';
+  const cfg = await deploymentConfig();
+  return cfg?.host && cfg.from ? 'smtp' : 'none';
 }
 
 let cached: { sig: string; transport: Transporter } | null = null;
@@ -76,11 +85,34 @@ export interface ThreadedMail {
   inReplyTo?: string;
   references?: string[];
   headers?: Record<string, string>;
+  /** Open/click tracking for the API path. Defaults on; the workspace can switch it off. */
+  tracking?: boolean;
 }
 
 /** Sends with threading headers and returns the generated Message-ID so replies can be matched back. */
-export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): Promise<{ ok: boolean; messageId?: string; error?: string; provider?: 'smtp' | 'postmark' }> {
   const own = ctx ? await workspaceSmtp(ctx.userId, ctx.ws) : null;
+  if (!own && (await isPostmarkConfigured())) {
+    // Deployment API path: bounce handling and open/click tracking included. The sender
+    // must be verified in Postmark, so an explicit from falls back to SMTP instead of failing.
+    const from = opts.from || (await postmarkFrom()) || undefined;
+    if (from) {
+      const r = await sendViaPostmark({
+        from,
+        to: opts.to,
+        subject: opts.subject,
+        text: opts.text,
+        html: opts.html,
+        replyTo: opts.replyTo,
+        headers: opts.headers,
+        tracking: opts.tracking ?? true,
+        owner: ctx ? { u: ctx.userId, ws: ctx.ws } : { u: '', ws: '' },
+      });
+      if (r.tokenMissing) return { ok: false, error: 'No mail server is set up.' };
+      if (!r.ok) console.error(`[mailer] Postmark send to ${opts.to.replace(/(.{2}).*(@.*)/, '$1***$2')} failed: ${r.error}`);
+      return { ...r, provider: 'postmark' };
+    }
+  }
   const shared = own ? null : await deploymentConfig();
   if (!own && !(shared?.host && shared.from)) return { ok: false, error: 'No mail server is set up.' };
   try {
@@ -100,7 +132,7 @@ export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): 
       headers: opts.headers,
     });
     if (own) transport.close();
-    return { ok: true, messageId: info.messageId };
+    return { ok: true, messageId: info.messageId, provider: 'smtp' };
   } catch (e) {
     // Said plainly, with the server's own words, and never the password: a send that fails must be diagnosable, not silent.
     const why = describeMailError(e);

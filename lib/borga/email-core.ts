@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto';
+import type { ProfitAndLoss } from './financial-reports';
 
 /**
  * Workspace email updates: event definitions, settings, templates, digest model and unsubscribe
@@ -41,6 +42,8 @@ export interface EmailSettings {
   digest: { frequency: DigestFrequency; /** Local hour (0-23) in the company's timezone. */ hour: number; /** Skip the email when there is nothing to report. */ skipIfEmpty: boolean };
   /** Public address of this Borga instance, captured from the browser; used for links in emails. */
   appUrl?: string;
+  /** Open/click tracking on the API path (Postmark). Default on; SMTP mail is never tracked. */
+  tracking?: boolean;
 }
 
 export const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
@@ -49,6 +52,7 @@ export const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
   replyTo: '',
   events: { sla_breach: true, ticket_new: true, approval_requested: true, recurring_invoices: true, recurring_bills: true, agent_urgent: true },
   digest: { frequency: 'daily', hour: 8, skipIfEmpty: true },
+  tracking: true,
 };
 
 export const MAX_RECIPIENTS = 10;
@@ -423,4 +427,32 @@ export function digestPeriodKey(settings: EmailSettings['digest'], now: Date, ti
     return `week:${c.dateIso}`;
   }
   return `day:${c.dateIso}`;
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled financial reports (P&L by email; the report math lives in
+// lib/borga/financial-reports.ts so the dashboard and the email agree).
+
+/** Rows are capped so a 60-line P&L cannot turn the email unreadable; totals always show. */
+const REPORT_ROW_CAP = 12;
+
+export function renderPlReport(pl: ProfitAndLoss, ctx: MailContext, currency: string, periodLabel: string): RenderedMail {
+  const m = (n: number) => fmtMoney(n, currency);
+  const blocks: Block[] = [];
+  const section = (heading: string, rows: Array<{ name: string; amount: number }>) =>
+    blocks.push({ heading, rows: rows.slice(0, REPORT_ROW_CAP).map((r) => ({ left: r.name, right: m(r.amount) })) });
+  if (pl.revenueRows.length) section('Revenue', pl.revenueRows);
+  if (pl.costRows.length) section('Cost of sales', pl.costRows);
+  if (pl.expenseRows.length) section('Operating expenses', pl.expenseRows);
+  blocks.push({
+    heading: 'Result',
+    rows: [
+      { left: 'Total revenue', right: m(pl.totalRevenue) },
+      { left: 'Gross profit', right: m(pl.grossProfit) },
+      { left: 'Net income', right: m(pl.netIncome) },
+    ],
+  });
+  const intro = `Profit & Loss for ${periodLabel}. Net income ${m(pl.netIncome)} on revenue ${m(pl.totalRevenue)}.`;
+  const r = layout(ctx, `Profit & Loss — ${periodLabel}`, intro, blocks, { label: 'Open the report', path: '/app' });
+  return { subject: `[${clip(ctx.workspaceName, 40)}] P&L ${periodLabel}: net ${m(pl.netIncome)}`, ...r };
 }

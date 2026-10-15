@@ -10,6 +10,9 @@ const GOOD = {
   BORGA_OPERATOR_EMAILS: 'owner@acme.com',
   SMTP_HOST: 'smtp.example.org',
   APP_URL: 'https://borga.example.org',
+  VAPID_PUBLIC_KEY: 'B'.repeat(87),
+  VAPID_PRIVATE_KEY: 'C'.repeat(43),
+  VAPID_SUBJECT: 'mailto:ops@acme.com',
 };
 
 test('a complete production environment passes with no warnings', () => {
@@ -55,4 +58,15 @@ test('missing optional settings only warn', () => {
   const r = checkBootEnv(rest);
   assert.deepEqual(r.errors, []);
   assert.equal(r.warnings.length, 3);
+});
+
+test('missing or malformed VAPID keys only warn (push is additive)', () => {
+  const rest: Record<string, string | undefined> = { ...GOOD };
+  for (const k of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT']) delete rest[k];
+  const missing = checkBootEnv(rest);
+  assert.deepEqual(missing.errors, []);
+  assert.ok(missing.warnings.some((w) => w.includes('VAPID keys are not set')));
+  const malformed = checkBootEnv({ ...GOOD, VAPID_PUBLIC_KEY: 'short', VAPID_PRIVATE_KEY: 'also-short' });
+  assert.deepEqual(malformed.errors, []);
+  assert.ok(malformed.warnings.some((w) => w.includes('malformed')));
 });

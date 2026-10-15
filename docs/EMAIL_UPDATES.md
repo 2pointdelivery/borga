@@ -31,7 +31,33 @@ The digest lists pending approvals, overdue invoices, bills overdue or due withi
 ## Limits (be aware)
 - SMTP is one deployment-wide sender, not one mailbox per company (only the display name and Reply-To are per company). Use SPF/DKIM for your sending domain to stay out of spam folders.
 - Browser-raised events (recurring billing, approvals created in the UI) only fire while someone has Borga open. Agent approvals, SLA breaches, new tickets and the digest are server-side and do not need a browser.
-- There is no bounce processing yet; failures are visible in "Recent emails".
+
+## Deliverability via Postmark (Phase 2)
+
+Set `POSTMARK_API_KEY` (a server token) on the deployment and verify the
+`EMAIL_FROM` domain in Postmark. Sending order becomes: the company's own
+SMTP (if it set one) → Postmark → shared SMTP/MailDog, so nobody's setup
+changes underneath them. Postmark mail carries open/click tracking
+(workspace switch, on by default; SMTP mail is never tracked) and the
+MessageID round-trips the owner, so inbound events land on the right
+company's log without an index.
+
+- **Bounces**: hard bounces suppress the address deployment-wide (dead for
+  every company); soft/transient bounces are logged, never suppressed.
+  Postmark's own 300/406 refusals suppress too.
+- **Complaints**: a spam complaint suppresses immediately.
+- **Tracking**: Delivery → Opened → Clicked update the per-message row in
+  Recent emails (forward-only; a bounced row never walks back).
+- **Suppression list**: visible in Email updates (your recipients that are
+  suppressed, plus the deployment total). Removing an address re-allows it
+  everywhere — use it for fixed typos, not for complainers.
+- **Webhook**: configure `https://<your-domain>/api/borga/webhooks/postmark`
+  in Postmark (one webhook per event type: Bounce, Spam Complaint,
+  Delivery, Open, Click) with HTTP Basic Auth matching
+  `POSTMARK_WEBHOOK_USER` / `POSTMARK_WEBHOOK_PASS`. Unknown event types
+  are ignored (no retry storms); bad credentials get 401.
+- Account mail (password reset, invites) also rides Postmark when it is
+  configured, untracked.
 
 ## Verification
 Unit tests (`lib/email.test.ts`: escaping/injection, token tamper-proofing, digest model and timezone/period logic) and an end-to-end run against a local SMTP sink: defaults off, owner auto-added, test email headers, approval/recurring events, duplicate and muted-event suppression, browser cannot trigger server-only events, digest sections, scheduled digest once per day, quiet-day skip, new-ticket and SLA emails, unsubscribe (link, one-click, tampered), isolation between two companies, unauthenticated access. Not yet run through a real mail provider.

@@ -12,7 +12,6 @@ import {
   Plus,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { toast } from '@/lib/toast-bus';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useBorga } from '@/lib/borga/store';
@@ -23,7 +22,6 @@ import { useCrmPull } from './use-crm-pull';
 import { useAgentActivity } from './use-agent-activity';
 import { useSaltEdgeReturn } from './use-saltedge-return';
 import { BillingBanner, BillingPaywall, useBillingReturn } from './BillingGate';
-import { notifyEmail } from '@/lib/borga/email-client';
 import { useFeatures } from '@/lib/borga/features-client';
 import { ThemeProvider, useTheme } from './theme-provider';
 import { CommandPalette } from './CommandPalette';
@@ -34,6 +32,7 @@ import { useLiveKpis } from '@/components/borga/use-live-kpis';
 import { useVoice } from './use-voice';
 import { BorgaOrb } from './BorgaOrb';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
+import { NotificationBell } from './NotificationBell';
 import { NewWorkspaceDialog } from './WorkspaceDialogs';
 import { PageErrorBoundary } from './PageErrorBoundary';
 import { OverviewPage } from './pages/OverviewPage';
@@ -81,10 +80,10 @@ function ShellInner() {
   useVoiceSetup();
   useLiveKpis(dataReady);
   const [route, setRoute] = useState<ActiveRoute>({ page: 'overview' });
+  /** Inbox deep-link contact: clicking a lead's message icon opens its thread. */
+  const [inboxContactKey, setInboxContactKey] = useState<string | undefined>(undefined);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const runRecurringInvoices = useBorga((s) => s.runRecurringInvoices);
-  const runRecurringBills = useBorga((s) => s.runRecurringBills);
   const crmAutoPull = settings.crmAutoPull === true;
   const pullCrm = useCrmPull();
   const navPages = useVisibleNav();
@@ -102,25 +101,9 @@ function ShellInner() {
     return () => { clearTimeout(t0); clearInterval(t); };
   }, [dataReady, crmAutoPull, activeWorkspaceId, pullCrm]);
 
-  // Recurring billing: create any invoices that came due. It runs when the dashboard opens, every
-  // 30 minutes while it stays open, and when the tab regains focus. The schedule is advanced and the
-  // draft invoices are written in the same store update, so a repeat run never duplicates one.
-  useEffect(() => {
-    if (!dataReady) return;
-    const tick = () => {
-      const bills = runRecurringBills();
-      if (bills.created) notifyEmail(activeWorkspaceId, 'recurring_bills', { numbers: bills.bills });
-      if (bills.created) toast({ title: bills.created + ' recurring bill' + (bills.created === 1 ? '' : 's') + ' recorded', description: bills.bills.join(', ') + ' — unpaid; review under Finance → Vendors & AP.', variant: 'success' });
-      const r = runRecurringInvoices();
-      if (r.created) notifyEmail(activeWorkspaceId, 'recurring_invoices', { numbers: r.invoices });
-      if (r.created) toast({ title: r.created + ' recurring invoice' + (r.created === 1 ? '' : 's') + ' drafted', description: r.invoices.join(', ') + ' — review and send under Sales → Invoicing.', variant: 'success' });
-    };
-    tick();
-    const t = setInterval(tick, 30 * 60_000);
-    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
-  }, [dataReady, activeWorkspaceId, runRecurringInvoices, runRecurringBills]);
+  // Recurring billing now generates on the server (heartbeat tick: cron when
+  // nobody is around, this tab's tick poll while someone is). Nothing to run
+  // from here; the generation emails and toasts surface on their own.
   useAgentActivity(dataReady);
   const voiceEnabled = useFeatures((s) => s.flags.voice);
   const widgetsEnabled = useFeatures((s) => s.flags.widgets);
@@ -170,12 +153,14 @@ function ShellInner() {
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as string | NavTarget;
-      // Accept either "page" strings or { page, tab } deep links.
+      const detail = (e as CustomEvent).detail as string | (NavTarget & { contactKey?: string });
+      // Accept either "page" strings or { page, tab, contactKey? } deep links.
+      // contactKey threads a specific inbox contact (used by the Sales rows).
       if (typeof detail === 'string') {
         if (isPageId(detail)) setRoute({ page: detail });
       } else if (detail && isPageId(detail.page)) {
         setRoute({ page: detail.page, tab: detail.tab });
+        if (detail.contactKey) setInboxContactKey(detail.contactKey);
       }
     };
     window.addEventListener('borga:nav', handler);
@@ -377,6 +362,7 @@ function ShellInner() {
             >
               {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
+            <NotificationBell />
             <UserMenu />
           </div>
         </header>
@@ -409,9 +395,9 @@ function ShellInner() {
             {billing?.access === 'blocked' ? <BillingPaywall /> : (
             <PageErrorBoundary key={route.page} pageName={navPages.find((p) => p.id === route.page)?.label ?? route.page}>
               {route.page === 'overview' && <OverviewPage key={`ov-${route.tab ?? ''}`} initialTab={route.tab} />}
-              {route.page === 'sales' && <SalesPage key={`sa-${route.tab ?? ''}`} initialTab={route.tab} />}
+              {route.page === 'sales' && <SalesPage key={`sa-${route.tab ?? ''}-${inboxContactKey ?? ''}`} initialTab={route.tab} initialContactKey={inboxContactKey} />}
               {route.page === 'marketing' && <MarketingPage key={`mk-${route.tab ?? ''}`} initialTab={route.tab} />}
-              {route.page === 'communications' && <CommunicationsPage key={`co-${route.tab ?? ''}`} initialTab={route.tab} />}
+              {route.page === 'communications' && <CommunicationsPage key={`co-${route.tab ?? ''}-${inboxContactKey ?? ''}`} initialTab={route.tab} />}
               {route.page === 'support' && <SupportPage key={`su-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'finance' && <FinancePage key={`fi-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'inventory' && <InventoryPage key={`inv-${route.tab ?? ''}`} initialTab={route.tab} />}

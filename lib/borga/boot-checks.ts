@@ -50,6 +50,20 @@ export function checkBootEnv(env: Env): BootReport {
 
   if (!get('SMTP_HOST')) warnings.push('SMTP_HOST is not set: password reset, ticket replies and email updates cannot be delivered.');
   if (!get('APP_URL')) warnings.push('APP_URL is not set: links in emails will be missing.');
+
+  // Postmark deliverability (docs/EMAIL_UPDATES.md). Half-set webhook credentials fail closed at the route (503); warn early.
+  if (!!get('POSTMARK_WEBHOOK_USER') !== !!get('POSTMARK_WEBHOOK_PASS')) {
+    warnings.push('Only one of POSTMARK_WEBHOOK_USER / POSTMARK_WEBHOOK_PASS is set: the Postmark webhook answers 503 until both are set.');
+  }
+
+  // Web push (self-hosted VAPID, docs/PUSH.md). Additive: the app runs fine without it, so missing keys only warn.
+  const vapidPub = get('VAPID_PUBLIC_KEY');
+  const vapidPriv = get('VAPID_PRIVATE_KEY');
+  if (!vapidPub && !vapidPriv) {
+    warnings.push('VAPID keys are not set: browser push notifications stay off (generate: npx web-push generate-vapid-keys).');
+  } else if (!/^[A-Za-z0-9\-_]{80,90}$/.test(vapidPub) || !/^[A-Za-z0-9\-_]{43}$/.test(vapidPriv)) {
+    warnings.push('VAPID keys look malformed: push sends will fail (generate: npx web-push generate-vapid-keys).');
+  }
   if (get('BORGA_ADMIN_TOKEN') && weak(get('BORGA_ADMIN_TOKEN'))) errors.push('BORGA_ADMIN_TOKEN looks like a placeholder.');
 
   // Billing: $2 per user per month through Stripe. Off unless BILLING_MODE=enforce; switching it on without Stripe would lock everyone out.
