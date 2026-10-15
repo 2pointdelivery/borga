@@ -24,7 +24,6 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
@@ -54,6 +53,8 @@ import {
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { AgentAvatar, SectionTitle } from '../bits';
+import { RecordTimeline } from '../RecordTimeline';
+import { CustomerPortalCard } from './CustomerPortalCard';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { SearchSelect } from '../SearchSelect';
 import { CityInput, CountrySelect, Field, IndustryInput, RegionSelect } from '../form-widgets';
@@ -408,6 +409,13 @@ export function CustomerTab() {
               )}
             </Card>
 
+            {/* Timeline */}
+            <Card className="p-4">
+              <RecordTimeline target={{ kind: 'customer', id: selected.id }} />
+            </Card>
+
+            <CustomerPortalCard customerId={selected.id} customerName={selected.name} />
+
             {/* Contacts */}
             <Card className="overflow-hidden">
               <div className="flex items-center justify-between border-b bg-muted/40 px-4 py-2.5">
@@ -675,8 +683,9 @@ export function CustomerTab() {
             </Field>
           </div>
           <DialogFooter>
+            <Button variant="ghost" onClick={() => { setCustDialogOpen(false); setEditingCustomer(null); }}>Cancel</Button>
             <Button onClick={submitCustomer} disabled={!custForm.name.trim()}>
-              {editingCustomer ? 'Save changes' : 'Create account'}
+              ＋ {editingCustomer ? 'Save changes' : 'Create account'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -687,6 +696,7 @@ export function CustomerTab() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingContact ? `Edit ${editingContact.name}` : `Add contact at ${selected?.name ?? ''}`}</DialogTitle>
+            <DialogDescription>The person you actually talk to — quotes and invoices go to them.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
@@ -717,7 +727,7 @@ export function CustomerTab() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setContactDialogOpen(false); setEditingContact(null); }}><X className="mr-1 h-3 w-3" /> Cancel</Button>
-            <Button onClick={submitContact} disabled={!contactForm.name.trim()}>{editingContact ? 'Save changes' : 'Add contact'}</Button>
+            <Button onClick={submitContact} disabled={!contactForm.name.trim()}>＋ {editingContact ? 'Save changes' : 'Add contact'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -69,6 +69,8 @@ export interface ActivityEvent {
   actor: 'agent' | 'system' | 'user';
   kind: 'task' | 'handoff' | 'learn' | 'sync' | 'voice' | 'system';
   message: string;
+  /** What record this entry is about (lead, customer, quote, invoice…), for per-record timelines. */
+  ref?: { kind: string; id: string; label?: string };
 }
 
 export interface Connector {
@@ -102,6 +104,48 @@ export interface SocialPost {
 
 export type LeadStage = 'new' | 'qualified' | 'proposal' | 'won' | 'lost';
 
+/**
+ * Lead assignment rules (first match wins). Stored on the workspace settings.
+ * A rule either names one owner or a round-robin pool whose least-loaded
+ * member takes the lead. Empty conditions match every lead (the catch-all).
+ */
+export interface LeadAssignmentRule {
+  id: string;
+  name: string;
+  /** Blank/'any' matches every stage. */
+  stage?: LeadStage | 'any';
+  /** Case-insensitive substring of the lead source. Blank matches all. */
+  sourceContains?: string;
+  /** Minimum deal value. Unset/0 matches all. */
+  minValue?: number;
+  /** One owner (person name or agent id). Used when roundRobin is empty. */
+  assignee: string;
+  /** Round-robin pool (least-loaded wins). Overrides assignee when non-empty. */
+  roundRobin?: string[];
+}
+/**
+ * Stage win-probabilities for the weighted pipeline forecast (HubSpot-style).
+ * Editable nowhere by accident: these are the defaults the summary shows; the
+ * weighted number is always labelled as an estimate, never booked revenue.
+ */
+export const STAGE_PROBABILITY: Record<LeadStage, number> = {
+  new: 10,
+  qualified: 30,
+  proposal: 60,
+  won: 100,
+  lost: 0,
+};
+
+export const LEAD_LOSS_REASONS = [
+  'Price too high',
+  'Chose a competitor',
+  'No budget',
+  'Bad timing',
+  'Went dark / unresponsive',
+  'Not a fit',
+  'Other (write it below)',
+] as const;
+
 export interface Lead {
   id: string;
   name: string;
@@ -118,6 +162,9 @@ export interface Lead {
   createdAt?: string;
   lastContactAt?: string;
   crmId?: string; // id of this deal in the company CRM (Company Engine pull)
+  /** Why the deal closed the way it did — asked on won/lost so the loss report is honest, not guessed. */
+  outcomeNote?: string;
+  outcomeAt?: string; // ISO when the stage last moved to won/lost
   /** Three-question need diagnosis asked when the lead is captured. All optional — a lead without answers simply shows none. */
   diagnosis?: {
     problem?: string; // the single biggest problem they face right now
@@ -781,6 +828,17 @@ export interface Approval {
   status: ApprovalStatus;
   submittedBy: string;
   createdAt: string;
+  /** Who must decide. Blank = the account owner. Delegation moves it; history records every hand. */
+  assignee?: string;
+  /** Current holder after a delegation (the assignee handed it over). */
+  delegatedTo?: string;
+  /** ISO date by which it should be decided; past it, escalation fires. */
+  dueAt?: string;
+  /** Who it escalates to when undecided past dueAt. */
+  escalateTo?: string;
+  /** ISO timestamp of the escalation (set once). */
+  escalatedAt?: string | null;
+  history?: ApprovalHistory[];
   journalId?: string; // when set, approving this request auto-posts the journal entry
   /** Autonomous-mode payment gate: when set, approving this request executes the deferred payment. */
   pendingPayment?: {
@@ -815,6 +873,13 @@ export interface Approval {
   pendingWorkflow?: {
     workflowName: string;
   };
+}
+
+export interface ApprovalHistory {
+  at: string;
+  by: string;
+  action: 'created' | 'delegated' | 'approved' | 'rejected' | 'escalated';
+  note?: string;
 }
 
 /** Journal postings at or above this value require an approval before they hit the GL. */
@@ -1503,6 +1568,13 @@ export const WEBHOOK_EVENTS = [
   'sla.breached',
   'tracking.updated',
   'payment.received',
+  'invoice.paid',
+  'bill.due',
+  'bank.synced',
+  'equity.updated',
+  'payroll.posted',
+  'quote.accepted',
+  'purchase-order.received',
 ] as const;
 
 export const INITIAL_WEBHOOKS: Webhook[] = [];
@@ -1962,6 +2034,10 @@ export interface NotificationPrefs {
   sync: boolean;
   voice: boolean;
   kpi: boolean;
+  /** Browser push for urgent notices. On once a device is subscribed; unset (older workspaces) counts as on. */
+  pushUrgent?: boolean;
+  /** Browser push for noteworthy notices. Unset counts as on. Info never pushes. */
+  pushNoteworthy?: boolean;
 }
 
 export interface SettingsState {
@@ -1993,12 +2069,14 @@ export interface SettingsState {
   approvalThresholdUsd?: number;
   /** Always-on microphone (wake word). Separate from notifications.voice (spoken replies); falls back to it for older workspaces. */
   alwaysListening?: boolean;
+  /** Lead assignment rules (first match wins). Unset/empty: leads keep whatever owner they were given. */
+  leadAssignmentRules?: LeadAssignmentRule[];
   /** The model that answers spoken requests. Unset: the company's chat model (with the usual fallback). */
   voiceLlm?: { providerId: string; model: string };
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
-  notifications: { tasks: true, handoffs: true, sync: false, voice: false, kpi: false },
+  notifications: { tasks: true, handoffs: true, sync: false, voice: false, kpi: false, pushUrgent: true, pushNoteworthy: true },
   crmUrl: '', // Configure in Company Settings
   autonomousMode: true,
 };
@@ -2009,6 +2087,8 @@ export const DEFAULT_SETTINGS: SettingsState = {
  */
 export function normalizeSettings(saved: Partial<SettingsState> | null | undefined): SettingsState {
   const merged = { ...DEFAULT_SETTINGS, ...(saved ?? {}) } as SettingsState;
+  // Notifications gain new switches over time; a workspace saved before a switch existed gets its default, never undefined.
+  merged.notifications = { ...DEFAULT_SETTINGS.notifications, ...((saved as Partial<SettingsState> | null | undefined)?.notifications ?? {}) };
   return { ...merged, autonomousMode: merged.autonomousModeChosen ? !!merged.autonomousMode : true };
 }
 
@@ -2492,7 +2572,9 @@ export interface Employee {
   employmentType: EmploymentType;
   status: EmployeeStatus;
   salary: number; // annual, workspace currency
-  manager?: string;
+  manager?: string; // manager's display name (legacy; prefer managerId, falls back to name match)
+  /** Manager's employee id — written by the directory picker alongside `manager`; readers prefer it. */
+  managerId?: string;
   location: string;
   startedAt: string; // display date e.g. "Jan 2024"
   performance: number; // 0-100
@@ -2575,6 +2657,21 @@ export interface PayrollRun {
   releasedAt?: string;
   financeEntryId?: string;
   journalId?: string;
+  /** Split posting (gross / withholdings / net / employer) journal ids, oldest first. */
+  journalIds?: string[];
+  /** Payroll country used for the run's tax math (onboarding country unless overridden). */
+  country?: string;
+  /** Per-employee computed breakdown (gross, withholding, employer cost, net) for history and payslips. */
+  detail?: PayrollRunEmployeeDetail[];
+}
+
+export interface PayrollRunEmployeeDetail {
+  employeeId: string;
+  employeeName: string;
+  gross: number;
+  employeeTax: number;
+  employerCost: number;
+  net: number;
 }
 
 export const INITIAL_PAYROLL_RUNS: PayrollRun[] = [];
@@ -2635,6 +2732,8 @@ export interface InvoiceLine {
   description: string;
   qty: number;
   unitPrice: number;
+  /** Catalog item this line was picked from (pre-fills description/price; free-text lines leave it empty). */
+  itemId?: string;
 }
 
 export interface Invoice {
@@ -2662,6 +2761,12 @@ export interface Invoice {
   customerId?: string; // links this invoice to a Customer account
   projectId?: string; // links this invoice to a Project
   accountId?: string; // GlAccount.id — the revenue account this invoice recognizes against
+  /** Billing currency (ISO). Absent = workspace currency. `amount` is always stored in workspace currency. */
+  currency?: string;
+  /** Workspace units per 1 `currency`, snapshotted at issue from the FX table. */
+  fxRate?: number;
+  /** Face total in `currency` (equals `amount` when same-currency). */
+  foreignAmount?: number;
 }
 
 export const INVOICE_STATUS_STYLE: Record<InvoiceStatus, string> = {
@@ -2825,6 +2930,8 @@ export interface BillLine {
   description: string;
   qty: number;
   unitPrice: number;
+  /** Catalog item this line was picked from (pre-fills description/cost; free-text lines leave it empty). */
+  itemId?: string;
 }
 
 export interface Bill {
@@ -2851,6 +2958,12 @@ export interface Bill {
   voidReason?: string;
   projectId?: string; // links this bill to a Project
   accountId?: string; // GlAccount.id — the expense/cost account this bill posts against
+  /** Billing currency (ISO). Absent = workspace currency. `amount` is always stored in workspace currency. */
+  currency?: string;
+  /** Workspace units per 1 `currency`, snapshotted at record from the FX table. */
+  fxRate?: number;
+  /** Face total in `currency` (equals `amount` when same-currency). */
+  foreignAmount?: number;
 }
 
 export const PAYMENT_TERMS_LABEL: Record<PaymentTerms, string> = {
@@ -2918,7 +3031,7 @@ export interface JournalEntry {
   status: 'draft' | 'posted' | 'voided';
   lines: JournalLine[];
   createdAt?: string; // ISO timestamp — every transaction is stamped
-  auto?: 'closing' | 'reversal' | 'asset' | 'pos' | 'pos-refund'; // system-generated closing, reversal, fixed asset register and POS postings entries
+  auto?: 'closing' | 'reversal' | 'asset' | 'pos' | 'pos-refund' | 'payroll' | 'accrual' | 'fx' | 'bank'; // system-generated postings (close, reversal, asset register, POS, payroll, accruals, FX revaluation, bank booking)
   closesPeriod?: string; // closure id that produced this entry
   voidedAt?: string; // ISO — posted entries are never deleted, only voided
   voidReason?: string;
@@ -3523,6 +3636,16 @@ export interface ClosureChecklist {
   unbalancedEntries: number;
   unreconciledBankTxns: number;
   openInvoicesOverdue: number;
+  /** Balance-sheet snapshot at close (added 2026-10-10; present on new closures only). */
+  bsAssets?: number;
+  bsLiabilities?: number;
+  bsEquity?: number;
+  /** Assets − (Liabilities + Equity) at close; 0 on balanced books. */
+  bsDiff?: number;
+  openArCount?: number;
+  openArAmount?: number;
+  openApCount?: number;
+  openApAmount?: number;
 }
 
 export type SignoffReport = 'pl' | 'bs' | 'cf' | 'equity';

@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { create } from 'zustand';
 import { toast } from '@/lib/toast-bus';
@@ -64,7 +64,6 @@ INITIAL_APPROVALS,
   type ElevenLabsConfig,
   type CallRecord,
   type AgentMemory,
-  type MemoryKind,
   type KnowledgeEntry,
   type KbQuestion,
   INITIAL_MEMORIES,
@@ -106,7 +105,7 @@ INITIAL_APPROVALS,
   type Invoice,
   type InvoiceStatus,
   type PaymentMethod,
-  type InvoiceLine,  type MessagingChannelConfig,
+  type MessagingChannelConfig,
   type SecureThread,
   type Customer,
   type Contact,
@@ -153,10 +152,11 @@ INITIAL_APPROVALS,
   completeKpiGroups,
 } from './data';
 import type { InventoryItem, Warehouse, StockMovement, PosSale } from './inventory';
-import { INITIAL_WAREHOUSES, refundMovements, serviceItemsFromTracks, refundFinanceEntries, refundJournals } from './inventory';
+import { INITIAL_WAREHOUSES, refundMovements, serviceItemsFromTracks, refundFinanceEntries, refundJournals, tillVariance, EMPTY_TILL_SESSIONS } from './inventory';
+import type { TillSession } from './inventory';
 import { notifyEmail } from './email-client';
 import { mergeLoadedModels, repairCatalog } from './model-catalog';
-import { SaveQueue, unionAppendOnly } from './save-queue';
+import { SaveQueue, mergeRecords, unionAppendOnly, type MergeConflict } from './save-queue';
 import { fmtMoneyFull } from './currencies';
 import type { BillingInfo } from './billing';
 import { withPersonaInstructions } from './agent-personas';
@@ -167,7 +167,17 @@ import { EMPTY_FIXED_ASSETS, normalizeFixedAssets, planPostings, type Depreciati
 import { ASSET_ACCOUNTS, assetPolicyFor } from './fixed-asset-standards';
 import type { AssetEvent, FixedAsset } from './fixed-assets';
 import { mergeCustomers, mergeLeads, type CrmCustomer, type CrmLead, type MergeSummary } from './crm-core';
-import { buildBill, buildInvoice, dueRuns, isFinished, nextBillNumber, nextInvoiceNumber, recurringBillRef, recurringRef, type RecurringBill, type RecurringInvoice } from './recurring';
+import { type RecurringBill, type RecurringInvoice } from './recurring';
+import { accrueInvoice, accrueBill, reverseAccrual } from './accruals';
+import { EMPTY_CAP_TABLE, type CapTableState } from './cap-table';
+import { EMPTY_QUOTES, type Quote } from './quotes';
+import { assignOwner } from './lead-assign';
+import { applyCustomerMerge, applyLeadMerge } from './merge-entities';
+import { decide, delegate } from './approval-chain';
+import { EMPTY_POS, type PurchaseOrder } from './procurement';
+import { EMPTY_SNAPSHOTS, EMPTY_PEERS, type ValuationSnapshot, type ValuationPeer } from './valuation-history';
+import type { PayrollSettings } from './payroll-engine';
+import { EMPTY_FX, type FxRates } from './fx';
 
 type PersistEntity =
   | 'agents'
@@ -234,21 +244,29 @@ type PersistEntity =
   | 'inventoryItems'
   | 'warehouses'
   | 'stockMovements'
-  | 'posSales';
+  | 'posSales'
+  | 'capTable'
+  | 'quotes'
+  | 'purchaseOrders'
+  | 'valuationSnapshots'
+  | 'valuationPeers'
+  | 'payrollSettings'
+  | 'fxRates'
+  | 'tillSessions';
 
 // Active workspace id is tracked at module level so the fire-and-forget
 // persistence helper can scope every write to the current company without
 // threading the id through ~50 action call-sites.
 let ACTIVE_WS: string | null = null;
 
-// Monotonic hydrate sequence — only the latest hydrate may commit state, so a
+// Monotonic hydrate sequence � only the latest hydrate may commit state, so a
 // slow response for a previously-selected workspace can never clobber the
 // freshly-selected company's data (the workspace-switch isolation bug).
 let hydrateSeq = 0;
 
-// ── Per-workspace localStorage fallback ─────────────────────────────────────
+// -- Per-workspace localStorage fallback -------------------------------------
 // The server is the source of truth, but when the database is unavailable the
-// API returns shared seeds for *every* workspace — which collapsed each company
+// API returns shared seeds for *every* workspace � which collapsed each company
 // into identical data and lost edits on workspace switch. We mirror every
 // persisted entity into a per-workspace composite blob in localStorage and,
 // when the DB is unavailable, prefer that local copy on hydrate. This makes
@@ -264,7 +282,7 @@ function writeLocal(ws: string | null, entity: string, value: unknown) {
     obj[entity] = value;
     localStorage.setItem(key, JSON.stringify(obj));
   } catch {
-    /* quota / private mode — ignore */
+    /* quota / private mode � ignore */
   }
 }
 
@@ -303,6 +321,9 @@ const LS_FALLBACK_FIELDS: [keyof BorgaStore, string][] = [
   ['reconciliationRules', 'reconciliationRules'], ['mcpServers', 'mcpServers'],
   ['filings', 'filings'], ['fixedAssets', 'fixedAssets'], ['notices', 'notices'],
   ['inventoryItems', 'inventoryItems'], ['warehouses', 'warehouses'], ['stockMovements', 'stockMovements'], ['posSales', 'posSales'],
+  ['capTable', 'capTable'], ['quotes', 'quotes'], ['purchaseOrders', 'purchaseOrders'],
+  ['valuationSnapshots', 'valuationSnapshots'], ['valuationPeers', 'valuationPeers'],
+  ['payrollSettings', 'payrollSettings'], ['fxRates', 'fxRates'], ['tillSessions', 'tillSessions'],
 ];
 
 // The fundraising agent (Nadia) is a core built-in: whenever the agent list
@@ -341,19 +362,31 @@ interface SavePayload {
 const SAVES = new SaveQueue<SavePayload>({
   valueOf: (p) => p.value,
   /**
-   * The activity timeline is append-only on both sides (dashboard logs here,
-   * agents log on the server), so a version refusal unions both sides' entries
-   * instead of blocking the feed and raising a banner. Every other entity
-   * keeps the strict rule: a differing copy is a real conflict for the user.
-   * Notices and run history are deliberately excluded — dismissing or deleting
-   * one is an explicit act a blind union would undo.
+   * Refusals merge instead of blocking whenever the data allows it. The
+   * activity timeline is append-only on both sides, so it unions entries.
+   * Every other id-keyed list merges record-by-record against the last synced
+   * copy (mergeRecords): different records and different fields unite
+   * silently; only same-field collisions keep the server and are reported.
+   * Notices are deliberately excluded — dismissing one is an explicit act a
+   * merge would undo — as is anything without record ids (settings objects
+   * keep the strict rule: a differing copy is a real conflict for the user).
    */
-  merge: (id, localValue, serverValue) => {
+  merge: (id, localValue, serverValue, baseValue) => {
     const entity = id.slice(id.indexOf('|') + 1);
-    if (entity !== 'activity') return null;
-    return unionAppendOnly(localValue, serverValue, 200);
+    if (entity === 'activity') {
+      const u = unionAppendOnly(localValue, serverValue, 200);
+      return u ? { merged: u, conflicts: [] } : null;
+    }
+    if (entity === 'notices') return null;
+    return mergeRecords(baseValue, localValue, serverValue);
   },
   withValue: (p, value) => ({ ...p, value }),
+  onMerged: (_id, conflicts: MergeConflict[]) => {
+    const entity = _id.slice(_id.indexOf('|') + 1);
+    useBorga.setState((s) => ({
+      mergeNotices: [...s.mergeNotices.filter((m) => m.entity !== entity), { entity, records: conflicts.map((c) => ({ label: c.label, fields: c.fields })) }],
+    }));
+  },
   send: async (_id, p, baseVersion) => {
     try {
       const res = await fetch('/api/borga/data', {
@@ -380,11 +413,11 @@ const SAVES = new SaveQueue<SavePayload>({
       const version = typeof j.version === 'number' ? j.version : baseVersion + 1;
       // Tell other tabs in this browser the new version so their next save
       // goes out fresh instead of conflicting spuriously (storage events only
-      // fire in the *other* tabs — never here).
+      // fire in the *other* tabs � never here).
       try {
         localStorage.setItem(`borga-ver:${_id}`, String(version));
       } catch {
-        /* quota / private mode — ignore */
+        /* quota / private mode � ignore */
       }
       return { status: 'ok', version };
     } catch {
@@ -392,12 +425,12 @@ const SAVES = new SaveQueue<SavePayload>({
     }
   },
   onError: () => {
-    /* offline — state still lives in memory (+ localStorage fallback) */
+    /* offline � state still lives in memory (+ localStorage fallback) */
     if (!offlineNotified) {
       offlineNotified = true;
       toast({
         title: 'Working offline',
-        description: 'Cloud sync is unreachable — changes are saved locally on this device.',
+        description: 'Cloud sync is unreachable � changes are saved locally on this device.',
         variant: 'warning',
       });
     }
@@ -469,7 +502,7 @@ interface BorgaStore {
   loadedWorkspaceId: string | null;
   dbAvailable: boolean;
 
-  // ── Multi-company workspaces ──────────────────────────────────────────────
+  // -- Multi-company workspaces ----------------------------------------------
   workspaces: Workspace[];
   activeWorkspaceId: string;
   activeWorkspace: () => Workspace | undefined;
@@ -479,19 +512,19 @@ interface BorgaStore {
   deleteWorkspace: (id: string) => void;
   setOnboarding: (id: string, onboarding: Partial<WorkspaceOnboarding>) => void;
 
-  // ── HR / People ───────────────────────────────────────────────────────────
+  // -- HR / People -----------------------------------------------------------
   employees: Employee[];
   addEmployee: (e: Employee) => void;
   updateEmployee: (id: string, patch: Partial<Employee>) => void;
   payrollRuns: PayrollRun[];
   /**
    * Starts (or reopens) the payroll batch for a month (YYYY-MM). Returns null
-   * when that month is already released — a month is paid exactly once.
+   * when that month is already released � a month is paid exactly once.
    */
   createPayrollBatch: (monthKey: string) => PayrollRun | null;
   /** Posts a draft batch to the ledger + journal and marks it released. */
   releasePayrollBatch: (id: string) => boolean;
-  /** Drafts only — released runs stay on the books forever. */
+  /** Drafts only � released runs stay on the books forever. */
   deletePayrollBatch: (id: string) => boolean;
   deleteEmployee: (id: string) => void;
   leaveRequests: LeaveRequest[];
@@ -499,39 +532,39 @@ interface BorgaStore {
   addLeaveRequest: (l: LeaveRequest) => void;
   deleteLeaveRequest: (id: string) => void;
 
-  // ── Finance suite ─────────────────────────────────────────────────────────
+  // -- Finance suite ---------------------------------------------------------
   invoices: Invoice[];
   addInvoice: (i: Invoice) => void;
   updateInvoice: (id: string, patch: Partial<Invoice>) => void;
   setInvoiceStatus: (id: string, status: InvoiceStatus) => void;
-  /** Drafts only — issued/paid invoices are immutable and must be voided. */
+  /** Drafts only � issued/paid invoices are immutable and must be voided. */
   deleteInvoice: (id: string) => boolean;
   /** Voids an invoice for the audit trail; paid invoices also post reversing ledger + journal entries. */
   voidInvoice: (id: string, reason?: string) => void;
   /** Marks an invoice paid and posts the settlement to the ledger + journal. */
   payInvoice: (id: string, method: PaymentMethod, paidOnIso: string, externalRef?: string) => void;
-  /** Quote→cash: converts a won lead into a draft invoice (idempotent). Returns null when not convertible. */
+  /** Quote?cash: converts a won lead into a draft invoice (idempotent). Returns null when not convertible. */
   convertLeadToInvoice: (leadId: string) => Invoice | null;
-  /** Creates chase tasks for every overdue invoice (deduped) — the AR dunning sweep. */
+  /** Creates chase tasks for every overdue invoice (deduped) � the AR dunning sweep. */
   runDunningSweep: () => number;
   addFinanceEntry: (f: FinanceEntry) => void;
-  /** Manual drafts only — auto-posted entries are locked and must be voided. */
+  /** Manual drafts only � auto-posted entries are locked and must be voided. */
   deleteFinanceEntry: (id: string) => boolean;
   /** Edit a manual draft (same lock rule as deletion). */
   updateFinanceEntry: (id: string, patch: Partial<FinanceEntry>) => boolean;
   /** Voids a ledger entry in place (kept for audit, excluded from reports). */
   voidFinanceEntry: (id: string, reason?: string) => void;
 
-  // ── Messaging channels (unified inbox) ────────────────────────────────────
+  // -- Messaging channels (unified inbox) ------------------------------------
   messagingChannels: MessagingChannelConfig[];
   setChannelConnected: (channel: MessagingChannelConfig['channel'], patch: Partial<MessagingChannelConfig>) => void;
 
-  // ── Secure E2E chats ──────────────────────────────────────────────────────
+  // -- Secure E2E chats ------------------------------------------------------
   secureChats: SecureThread[];
   upsertSecureThread: (t: SecureThread) => void;
   deleteSecureThread: (id: string) => void;
 
-  // ── Sales: customers & contacts ───────────────────────────────────────────
+  // -- Sales: customers & contacts -------------------------------------------
   customers: Customer[];
   addCustomer: (c: Customer) => void;
   updateCustomer: (id: string, patch: Partial<Customer>) => void;
@@ -541,7 +574,7 @@ interface BorgaStore {
   updateContact: (id: string, patch: Partial<Contact>) => void;
   deleteContact: (id: string) => void;
 
-  // ── Finance: vendors, bills, GL, banking ──────────────────────────────────
+  // -- Finance: vendors, bills, GL, banking ----------------------------------
   vendors: Vendor[];
   addVendor: (v: Vendor) => void;
   updateVendor: (id: string, patch: Partial<Vendor>) => void;
@@ -550,7 +583,7 @@ interface BorgaStore {
   addBill: (b: Bill) => void;
   updateBill: (id: string, patch: Partial<Bill>) => void;
   setBillStatus: (id: string, status: Bill['status']) => void;
-  /** Unpaid drafts only — scheduled/paid bills are immutable and must be voided. */
+  /** Unpaid drafts only � scheduled/paid bills are immutable and must be voided. */
   deleteBill: (id: string) => boolean;
   /** Voids a bill for the audit trail; paid bills also post reversing ledger + journal entries. */
   voidBill: (id: string, reason?: string) => void;
@@ -562,15 +595,19 @@ interface BorgaStore {
   deleteAccount: (id: string) => void;
   journals: JournalEntry[];
   addJournalEntry: (j: JournalEntry) => void;
-  /** Drafts only — posted journal entries are immutable. */
+  /** Drafts only � posted journal entries are immutable. */
   updateJournalEntry: (id: string, patch: Partial<JournalEntry>) => boolean;
   postJournalEntry: (id: string) => void;
-  /** Drafts only — posted entries must be voided, never deleted. */
+  /** Drafts only � posted entries must be voided, never deleted. */
   deleteJournalEntry: (id: string) => boolean;
   /** Marks a posted entry voided and books a linked reversing entry (full audit trace). */
   voidJournalEntry: (id: string, reason?: string) => void;
+  /** Reverses a posted issuance accrual on void/delete-before-payment; false when none was posted. */
+  reverseAccrualIfPosted: (kind: 'invoice' | 'bill', id: string, number: string, amount: number) => boolean;
+  /** Posts every missing issuance accrual (repair for pre-automation books); returns counts. */
+  postMissingAccruals: () => { invoices: number; bills: number };
 
-  // ── Tax configuration ──
+  // -- Tax configuration --
   taxProfiles: TaxProfile[];
   defaultTaxProfileId: string;
   addTaxProfile: (p: TaxProfile) => void;
@@ -590,32 +627,34 @@ interface BorgaStore {
   /** Marks the accounts fed by a connection as disconnected (their history stays). */
   disconnectBankFeed: (connectionId: string) => void;
   matchBankTxn: (id: string, matchedRef: string, accountId?: string) => void;
+  /** Books an unmatched bank line into ledger + journal (idempotent); returns false when refused. */
+  bookBankLine: (txnId: string, incomeOrExpenseAccountId: string) => boolean;
   setBankTxnAccount: (id: string, accountId: string) => void;
   unmatchBankTxn: (id: string) => void;
   excludeBankTxn: (id: string) => void;
   deleteBankTxn: (id: string) => void;
   updateBankTxn: (id: string, patch: Partial<BankTxn>) => void;
 
-  // ── Reconciliation rule memory ────────────────────────────────────────────
+  // -- Reconciliation rule memory --------------------------------------------
   reconciliationRules: ReconciliationRule[];
   addReconciliationRule: (r: ReconciliationRule) => void;
   deleteReconciliationRule: (id: string) => void;
-  /** Learn (or reinforce) a description→account rule from a confirmed match. */
+  /** Learn (or reinforce) a description?account rule from a confirmed match. */
   recordReconciliationMatch: (description: string, accountId: string) => void;
   /** Look up a learned rule whose pattern appears in this description. */
   findReconciliationRule: (description: string) => ReconciliationRule | undefined;
 
-  // ── Engine: workspace-scoped workflows ────────────────────────────────────
+  // -- Engine: workspace-scoped workflows ------------------------------------
   addWorkflow: (w: WorkflowType) => void;
   deleteWorkflow: (id: string) => void;
 
-  // ── Book closure ──────────────────────────────────────────────────────────
+  // -- Book closure ----------------------------------------------------------
   closures: BookClosure[];
   addClosure: (c: BookClosure) => void;
   updateClosure: (id: string, patch: Partial<BookClosure>) => void;
   deleteClosure: (id: string) => void;
 
-  // ── Budgeting & forecasting ────────────────────────────────────────────────
+  // -- Budgeting & forecasting ------------------------------------------------
   budgets: Budget[];
   addBudget: (b: Budget) => void;
   updateBudget: (id: string, patch: Partial<Budget>) => void;
@@ -628,7 +667,7 @@ interface BorgaStore {
   /** Merges CRM records (from the Company Engine) into customers and deals. Idempotent. */
   importCrmRecords: (customers: CrmCustomer[] | null, leads: CrmLead[] | null) => { customers?: MergeSummary; leads?: MergeSummary };
 
-  // ── Fixed asset register (see lib/borga/fixed-assets.ts) ──
+  // -- Fixed asset register (see lib/borga/fixed-assets.ts) --
   fixedAssets: FixedAssetsState;
   addFixedAsset: (a: FixedAsset) => void;
   updateFixedAsset: (id: string, patch: Partial<FixedAsset>) => void;
@@ -647,7 +686,7 @@ interface BorgaStore {
   /** Reverses the most recent run (a linked reversing entry for each, so the audit trail stays whole). */
   reverseLastAssetRun: () => boolean;
 
-  // ── Tax and statutory filings (the company's filing setup, and which returns are filed) ──
+  // -- Tax and statutory filings (the company's filing setup, and which returns are filed) --
   filings: FilingsState;
   setFilingProfile: (patch: Partial<FilingProfile>) => void;
   /** Marks one filing filed or not required, or edits that record. */
@@ -655,23 +694,26 @@ interface BorgaStore {
   /** Removes the record, so the filing goes back to open. */
   clearFilingRecord: (key: string) => void;
 
-  // ── Recurring vendor bills (templates that record an unpaid bill on schedule; never pay) ──
+  // -- Recurring vendor bills (templates that record an unpaid bill on schedule; never pay) --
   recurringBills: RecurringBill[];
   addRecurringBill: (r: RecurringBill) => void;
   updateRecurringBill: (id: string, patch: Partial<RecurringBill>) => void;
   deleteRecurringBill: (id: string) => void;
-  /** Records every due, not-yet-generated bill. Idempotent. Returns how many were created. */
-  runRecurringBills: (todayIso?: string) => { created: number; bills: string[] };
 
-  // ── Recurring sales invoices (templates that generate draft invoices on schedule) ──
+  // -- Recurring sales invoices (templates that generate draft invoices on schedule) --
   recurringInvoices: RecurringInvoice[];
   addRecurringInvoice: (r: RecurringInvoice) => void;
   updateRecurringInvoice: (id: string, patch: Partial<RecurringInvoice>) => void;
   deleteRecurringInvoice: (id: string) => void;
-  /** Creates every due, not-yet-generated draft invoice. Idempotent. Returns how many were created. */
-  runRecurringInvoices: (todayIso?: string) => { created: number; invoices: string[] };
+  /**
+   * Generates due drafts and bills on the server (the heartbeat tick does this
+   * on its own every beat; this is the manual "run now"). Single ownership:
+   * the dashboard never generates them itself, so one occurrence is never
+   * built twice. Reloads afterwards so the new documents appear at once.
+   */
+  runRecurringServer: () => Promise<{ ok: boolean; invoices: string[]; bills: string[] }>;
 
-  // ── Revenue tracker (targets vs actuals) ────────────────────────────────
+  // -- Revenue tracker (targets vs actuals) --------------------------------
   revenueTracks: RevenueTrack[];
   addRevenueTrack: (t: RevenueTrack) => void;
   updateRevenueTrack: (id: string, patch: Partial<RevenueTrack>) => void;
@@ -679,13 +721,13 @@ interface BorgaStore {
   setRevenueActual: (trackId: string, lineId: string, monthIdx: number, amount: number) => void;
   setRevenueActualTotal: (trackId: string, monthIdx: number, amount: number) => void;
 
-  // ── Project management ─────────────────────────────────────────────────────
+  // -- Project management -----------------------------------------------------
   projects: Project[];
   addProject: (p: Project) => void;
   updateProject: (id: string, patch: Partial<Project>) => void;
   deleteProject: (id: string) => void;
 
-  // ── HR time clock & invites ───────────────────────────────────────────────
+  // -- HR time clock & invites -----------------------------------------------
   timeEntries: TimeEntry[];
   clockIn: (employeeId: string, employeeName: string) => void;
   clockOut: (entryId: string) => void;
@@ -707,6 +749,33 @@ interface BorgaStore {
   updateFundingStage: (id: string, stage: FundingStage) => void;
   updateFunding: (id: string, patch: Partial<FundingOpportunity>) => void;
   deleteFunding: (id: string) => void;
+
+  capTable: CapTableState;
+  setCapTable: (s: CapTableState) => void;
+  quotes: Quote[];
+  setQuotes: (q: Quote[]) => void;
+  upsertQuote: (q: Quote) => void;
+  deleteQuote: (id: string) => void;
+  purchaseOrders: PurchaseOrder[];
+  setPurchaseOrders: (p: PurchaseOrder[]) => void;
+  upsertPurchaseOrder: (p: PurchaseOrder) => void;
+  deletePurchaseOrder: (id: string) => void;
+  valuationSnapshots: ValuationSnapshot[];
+  setValuationSnapshots: (s: ValuationSnapshot[]) => void;
+  valuationPeers: ValuationPeer[];
+  setValuationPeers: (p: ValuationPeer[]) => void;
+  upsertValuationPeer: (p: ValuationPeer) => void;
+  deleteValuationPeer: (id: string) => void;
+  payrollSettings: PayrollSettings | null;
+  setPayrollSettings: (s: PayrollSettings | null) => void;
+  fxRates: FxRates;
+  setFxRates: (r: FxRates) => void;
+  tillSessions: TillSession[];
+  setTillSessions: (s: TillSession[]) => void;
+  /** Opens a till session (one at a time per workspace — opening another refuses). */
+  openTillSession: (openedBy: string, openingFloat: number) => TillSession | null;
+  /** Closes the open session with the counted cash; records expected + variance. */
+  closeTillSession: (closedBy: string, counted: number, cashSales: number) => TillSession | null;
 
   browses: BrowseResult[];
   browse: (url: string, browsedBy: string) => void;
@@ -747,8 +816,12 @@ interface BorgaStore {
   deleteGoal: (id: string) => void;
 
   approvals: Approval[];
-  setApproval: (id: string, status: ApprovalStatus) => void;
+  setApproval: (id: string, status: ApprovalStatus, opts?: { by?: string; note?: string }) => boolean;
   addApproval: (a: Approval) => void;
+  /** Hands a pending approval over (owner override recorded). Null on success, error message otherwise. */
+  delegateApproval: (id: string, to: string, note?: string) => string | null;
+  /** Edits routing fields (assignee, due date, escalation target) without deciding. */
+  updateApproval: (id: string, patch: Partial<Pick<Approval, 'assignee' | 'dueAt' | 'escalateTo'>>) => void;
 
   finance: FinanceEntry[];
 
@@ -795,7 +868,7 @@ interface BorgaStore {
   toggleWebhook: (id: string) => void;
   deleteWebhook: (id: string) => void;
 
-  /** Generic MCP server connections agents can call tools on (Integrations → MCP Servers). */
+  /** Generic MCP server connections agents can call tools on (Integrations ? MCP Servers). */
   mcpServers: McpServer[];
   addMcpServer: (s: McpServer) => void;
   updateMcpServer: (id: string, patch: Partial<McpServer>) => void;
@@ -826,6 +899,9 @@ interface BorgaStore {
   hydrate: () => Promise<void>;
   /** Entities whose last save was refused because they were changed elsewhere (another tab, device or an agent). Cleared by loadLatest. */
   saveConflicts: string[];
+  /** Merges that kept the server on some fields. Dismiss-only: the united data is already saved. */
+  mergeNotices: Array<{ entity: string; records: Array<{ label: string; fields: string[] }> }>;
+  dismissMergeNotice: (entity: string) => void;
   /** Discards this tab's unsaved edits to the conflicted entities and loads the latest data from the server. */
   loadLatest: () => Promise<void>;
   /** Overwrites the server copy with this tab's latest edit, then reloads. Returns false when it failed. */
@@ -852,9 +928,17 @@ interface BorgaStore {
 
   leads: Lead[];
   addLead: (l: Lead) => void;
-  moveLeadStage: (id: string, stage: LeadStage) => void;
+  moveLeadStage: (id: string, stage: LeadStage, outcomeNote?: string) => void;
   updateLead: (id: string, patch: Partial<Lead>) => void;
   deleteLead: (id: string) => void;
+  /** Routes open default-owned leads through the assignment rules. Returns how many changed owner. */
+  applyAssignmentRules: () => { assigned: number };
+  /** Starts a draft quote from a lead (lead → quote → invoice chain). Null when the lead is missing. */
+  quoteFromLead: (leadId: string) => Quote | null;
+  /** Merges a duplicate lead into its winner (fields fill in, quotes move). False when unusable. */
+  mergeLeads: (winnerId: string, loserId: string) => boolean;
+  /** Merges a duplicate account (deals, quotes, invoices, projects, contacts move). False when unusable. */
+  mergeCustomers: (winnerId: string, loserId: string) => boolean;
 
   workflows: Workflow[];
   setWorkflow: (id: string, patch: Partial<Workflow>) => void;
@@ -896,7 +980,7 @@ interface BorgaStore {
   updateWarehouse: (id: string, patch: Partial<Warehouse>) => void;
   deleteWarehouse: (id: string) => void;
   stockMovements: StockMovement[];
-  /** Appends to the stock ledger (costing recomputes from it — the ledger is the truth). */
+  /** Appends to the stock ledger (costing recomputes from it � the ledger is the truth). */
   recordStockMovement: (m: StockMovement) => void;
   posSales: PosSale[];
   addPosSale: (sale: PosSale) => void;
@@ -907,7 +991,7 @@ interface BorgaStore {
 let logSeq = 0;
 
 // Intelligent task distribution based on workflow type. Returns one follow-up
-// task spec per relevant agent — the caller creates them with addTask, so a
+// task spec per relevant agent � the caller creates them with addTask, so a
 // finished workflow visibly fans out instead of vanishing into a dead event.
 interface DistributedTask { agentId: string; agentName: string; task: string; priority: Priority; }
 
@@ -1020,7 +1104,7 @@ function distributeWorkflowTasks(workflowName: string, agents: Agent[]): Distrib
   // Fleet/briefing workflows
   if (/fleet|brief|morning|daily|standup/.test(wf)) {
     // No agent carries a 'Leadership' skill, so without a fallback this whole
-    // branch silently produced nothing — the orchestrator owns the briefing.
+    // branch silently produced nothing � the orchestrator owns the briefing.
     const departmentLeads = agents.filter(a => a.status === 'active' && a.skills.includes('Leadership'));
     const targets = departmentLeads.length ? departmentLeads : agents.filter(a => a.status === 'active' && a.id === 'a-borga');
 
@@ -1033,7 +1117,7 @@ function distributeWorkflowTasks(workflowName: string, agents: Agent[]): Distrib
     });
   }
 
-  // Resolve agent names and clamp priorities, then hand the specs back — the
+  // Resolve agent names and clamp priorities, then hand the specs back � the
   // caller persists them as real tasks.
   return tasksToDistribute.map((t) => {
     const agent = agents.find((a) => a.id === t.agentId);
@@ -1121,7 +1205,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       if (emp) {
         const { remaining } = computeLeaveBalance(emp, get().leaveRequests);
         if (req.days > remaining) {
-          get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Leave blocked — ${emp.name} has ${remaining}d remaining but requested ${req.days}d. Offer unpaid leave or split the request.` });
+          get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Leave blocked � ${emp.name} has ${remaining}d remaining but requested ${req.days}d. Offer unpaid leave or split the request.` });
           return;
         }
       }
@@ -1131,7 +1215,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     const emp = get().employees.find((e) => e.id === req.employeeId);
     if (status === 'approved' && emp && req.kind !== 'unpaid') {
       const { remaining } = computeLeaveBalance(emp, get().leaveRequests);
-      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `Leave approved for ${emp.name} (${req.days}d ${LEAVE_KIND_LABEL[req.kind]}) — balance now ${remaining}d.` });
+      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'task', message: `Leave approved for ${emp.name} (${req.days}d ${LEAVE_KIND_LABEL[req.kind]}) � balance now ${remaining}d.` });
     } else if (status === 'rejected') {
       get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'user', kind: 'system', message: `Leave request rejected for ${req.employeeName}.` });
     }
@@ -1149,7 +1233,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) return null;
     const released = get().payrollRuns.find((r) => r.monthKey === monthKey && r.status === 'released');
     if (released) {
-      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Payroll for ${released.periodLabel} is already released — a month is paid exactly once. See payroll history.` });
+      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Payroll for ${released.periodLabel} is already released � a month is paid exactly once. See payroll history.` });
       return null;
     }
     const draft = get().payrollRuns.find((r) => r.monthKey === monthKey && r.status === 'draft');
@@ -1158,7 +1242,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     const lines = active.map((e) => ({ employeeId: e.id, name: e.name, amount: Math.round((e.salary / 12) * 100) / 100 }));
     const total = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
     if (!active.length || total <= 0) {
-      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: 'Payroll batch skipped — no active employees to pay.' });
+      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: 'Payroll batch skipped � no active employees to pay.' });
       return null;
     }
     const run: PayrollRun = {
@@ -1178,15 +1262,15 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     const run = get().payrollRuns.find((r) => r.id === id);
     if (!run || run.status !== 'draft') return false;
     if (get().payrollRuns.some((r) => r.id !== id && r.monthKey === run.monthKey && r.status === 'released')) {
-      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Payroll for ${run.periodLabel} is already released — refusing a second release.` });
+      get().log({ agentId: 'a-people', agentName: 'Rigby', actor: 'system', kind: 'system', message: `Payroll for ${run.periodLabel} is already released � refusing a second release.` });
       return false;
     }
     const dateIso = new Date().toISOString().slice(0, 10);
     const today = new Date();
-    // Ledger: one consolidated payroll expense entry (locked — auto-posted).
+    // Ledger: one consolidated payroll expense entry (locked � auto-posted).
     const entry: FinanceEntry = {
       id: `f-payroll-${Date.now().toString(36)}`,
-      label: `Payroll — ${run.periodLabel}`,
+      label: `Payroll � ${run.periodLabel}`,
       amount: run.total,
       category: 'People',
       kind: 'expense',
@@ -1207,7 +1291,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         id: `je-payroll-${Date.now().toString(36)}`,
         date: today.toLocaleDateString([], { month: 'short', day: 'numeric' }),
         dateIso,
-        memo: `Payroll run — ${run.periodLabel}`,
+        memo: `Payroll run � ${run.periodLabel}`,
         description: `Monthly payroll for ${run.lines.length} active employees (${run.periodLabel}).`,
         reference: `PAY-${run.monthKey}`,
         paymentMethod: 'bank-transfer',
@@ -1248,7 +1332,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set((s) => ({ invoices: s.invoices.map((i) => (i.id === id ? { ...i, ...patch } : i)) }));
     persist('invoices', get().invoices);
   },
-  /** Quote→cash: turns a won lead into a draft invoice (idempotent via externalRef). */
+  /** Quote?cash: turns a won lead into a draft invoice (idempotent via externalRef). */
   convertLeadToInvoice: (leadId) => {
     const lead = get().leads.find((l) => l.id === leadId);
     if (!lead || lead.stage !== 'won' || lead.value <= 0) return null;
@@ -1264,25 +1348,38 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       status: 'draft',
       issued: today.toLocaleDateString([], { month: 'short', day: '2-digit' }),
       due: new Date(today.getTime() + 30 * 86400000).toLocaleDateString([], { month: 'short', day: '2-digit' }),
-      lines: [{ id: `il-${Date.now().toString(36)}`, description: `Engagement — ${lead.name} (closed-won via ${lead.source})`, qty: 1, unitPrice: lead.value }],
+      lines: [{ id: `il-${Date.now().toString(36)}`, description: `Engagement � ${lead.name} (closed-won via ${lead.source})`, qty: 1, unitPrice: lead.value }],
       externalRef: ref,
       paymentMethod: 'bank-transfer',
     };
     set((s) => ({ invoices: [inv, ...s.invoices] }));
     persist('invoices', get().invoices);
-    get().log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'agent', kind: 'handoff', message: `Won deal converted — draft invoice ${inv.number} for ${inv.client} (${inv.amount.toLocaleString()}) handed to Ledger for issuance.` });
+    get().log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'agent', kind: 'handoff', message: `Won deal converted � draft invoice ${inv.number} for ${inv.client} (${inv.amount.toLocaleString()}) handed to Ledger for issuance.` });
     return inv;
   },
   setInvoiceStatus: (id, status) => {
-    // Lock rule: paid invoices are approved history — no manual status flips.
+    // Lock rule: paid invoices are approved history � no manual status flips.
     const current = get().invoices.find((i) => i.id === id);
     if (!current || current.status === 'paid' || current.voidedAt) return;
     set((s) => ({ invoices: s.invoices.map((i) => (i.id === id ? { ...i, status } : i)) }));
     persist('invoices', get().invoices);
+    // Issuing books the accrual (DR AR / CR Revenue / CR Tax): skipped for
+    // drafts and for invoices that already carry one (idempotent by externalRef).
+    if ((status === 'sent' || status === 'overdue') && !current.voidedAt) {
+      const ref = `invoice:${id}:accrual`;
+      if (!get().journals.some((j) => j.externalRef === ref)) {
+        const je = accrueInvoice({ id: current.id, number: current.number, client: current.client, amount: current.amount, issued: current.issued, taxRate: current.taxRate }, get().coa);
+        if (je) {
+          set((s) => ({ journals: [je, ...s.journals] }));
+          persist('journals', get().journals);
+          get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Invoice ${current.number} issued � revenue accrued (AR ${fmtMoneyFull(current.amount, get().activeWorkspace()?.currency ?? 'USD')}).` });
+        }
+      }
+    }
   },
   deleteInvoice: (id) => {
     const inv = get().invoices.find((i) => i.id === id);
-    if (!inv || inv.status !== 'draft') return false; // issued/paid → void instead
+    if (!inv || inv.status !== 'draft') return false; // issued/paid ? void instead
     set((s) => ({ invoices: s.invoices.filter((i) => i.id !== id) }));
     persist('invoices', get().invoices);
     get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Draft invoice ${inv.number} deleted.` });
@@ -1300,10 +1397,10 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('invoices', get().invoices);
 
     if (wasPaid) {
-      // Reversal ledger entry — the original payment entry stays for the audit trail.
+      // Reversal ledger entry � the original payment entry stays for the audit trail.
       const reversal: FinanceEntry = {
         id: `f-void-${Date.now().toString(36)}`,
-        label: `VOID ${inv.number} — ${inv.client} (reversal)`,
+        label: `VOID ${inv.number} � ${inv.client} (reversal)`,
         amount: inv.amount,
         category: 'Sales',
         kind: 'revenue',
@@ -1314,7 +1411,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         externalRef: inv.externalRef || undefined,
       };
       // A void of received revenue reduces revenue again.
-      const negative: FinanceEntry = { ...reversal, amount: -Math.abs(inv.amount), label: `Reversal — ${reversal.label}` };
+      const negative: FinanceEntry = { ...reversal, amount: -Math.abs(inv.amount), label: `Reversal � ${reversal.label}` };
       set((s) => ({ finance: [...s.finance, negative] }));
       persist('finance', get().finance);
 
@@ -1325,7 +1422,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
           id: `je-void-${Date.now().toString(36)}`,
           date: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }),
           dateIso: new Date().toISOString().slice(0, 10),
-          memo: `Reversal — invoice ${inv.number} voided${reason ? ` (${reason.trim()})` : ''}`,
+          memo: `Reversal � invoice ${inv.number} voided${reason ? ` (${reason.trim()})` : ''}`,
           description: `Automatic reversal of settlement for voided invoice ${inv.number}.`,
           reference: inv.number,
           status: 'posted',
@@ -1340,7 +1437,9 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         persist('journals', get().journals);
       }
     }
-    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Invoice ${inv.number} voided${wasPaid ? ' with full reversal posted' : ''}${reason ? ` — reason: ${reason.trim()}` : ''}.` });
+    // A void before payment reverses the issuance accrual (if one was posted).
+    get().reverseAccrualIfPosted('invoice', id, inv.number, inv.amount);
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Invoice ${inv.number} voided${wasPaid ? ' with full reversal posted' : ''}${reason ? ` � reason: ${reason.trim()}` : ''}.` });
   },
   payInvoice: (id, method, paidOnIso, externalRef?) => {
     const inv = get().invoices.find((i) => i.id === id);
@@ -1360,7 +1459,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     const ws = get().activeWorkspace();
     const entry: FinanceEntry = {
       id: `f-pay-${Date.now().toString(36)}`,
-      label: `Payment received — ${inv.client} (${inv.number})`,
+      label: `Payment received � ${inv.client} (${inv.number})`,
       amount: inv.amount,
       category: 'Sales',
       kind: 'revenue',
@@ -1385,7 +1484,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         id: `je-pay-${Date.now().toString(36)}`,
         date: new Date(paidOnIso).toLocaleDateString([], { month: 'short', day: 'numeric' }),
         dateIso: paidOnIso,
-        memo: `Invoice ${inv.number} settled — ${inv.client}${taxProfileName ? ` (${taxProfileName})` : ''}`,
+        memo: `Invoice ${inv.number} settled � ${inv.client}${taxProfileName ? ` (${taxProfileName})` : ''}`,
         description: `Payment received from ${inv.client} via ${method.replace('-', ' ')} for invoice ${inv.number}.`,
         reference: inv.number,
         dueDateIso: undefined,
@@ -1405,7 +1504,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
 
     get().log({
       agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task',
-      message: `Invoice ${inv.number} marked paid via ${method.replace('-', ' ')} — ${fmtMoneyFull(inv.amount, ws?.currency ?? 'USD')} posted to the ledger and journal.`,
+      message: `Invoice ${inv.number} marked paid via ${method.replace('-', ' ')} � ${fmtMoneyFull(inv.amount, ws?.currency ?? 'USD')} posted to the ledger and journal.`,
     });
   },
   runDunningSweep: () => {
@@ -1413,13 +1512,13 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     if (!overdue.length) return 0;
     const existing = new Set(get().tasks.map((t) => t.title));
     const fresh = overdue
-      .filter((i) => !existing.has(`Chase ${i.number} — ${i.client}`))
+      .filter((i) => !existing.has(`Chase ${i.number} � ${i.client}`))
       .map((i) => {
         // Aging buckets drive tone and priority of the chase.
         const bucket = i.amount >= 40000 ? 'P1' : 'P2';
         return {
           id: `t-dun-${i.id}-${Date.now().toString(36)}`,
-          title: `Chase ${i.number} — ${i.client}`,
+          title: `Chase ${i.number} � ${i.client}`,
           detail: `Overdue invoice ${i.number} for ${Math.round(i.amount).toLocaleString()} (issued ${i.issued}, due ${i.due}). Send a firm-but-friendly reminder, confirm the payment method on file, and offer a payment plan if cash is tight.`,
           priority: bucket as 'P1' | 'P2',
           status: 'todo' as const,
@@ -1447,7 +1546,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   deleteFinanceEntry: (id) => {
     const entry = get().finance.find((f) => f.id === id);
     if (!entry) return false;
-    // Lock rule: system-posted entries are immutable — void instead.
+    // Lock rule: system-posted entries are immutable � void instead.
     if (entry.source === 'auto' || entry.voidedAt) return false;
     set((s) => ({ finance: s.finance.filter((f) => f.id !== id) }));
     persist('finance', get().finance);
@@ -1471,7 +1570,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       ),
     }));
     persist('finance', get().finance);
-    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Ledger entry "${entry.label}" voided${reason ? ` — reason: ${reason.trim()}` : ''} (kept for audit).` });
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Ledger entry "${entry.label}" voided${reason ? ` � reason: ${reason.trim()}` : ''} (kept for audit).` });
   },
 
   messagingChannels: DEFAULT_MESSAGING_CHANNELS,
@@ -1510,7 +1609,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
   deleteCustomer: (id) => {
     // Contacts belong to the account and are removed with it; deals, invoices,
-    // tasks and projects are independent records — they're unlinked, not deleted.
+    // tasks and projects are independent records � they're unlinked, not deleted.
     set((s) => ({
       customers: s.customers.filter((c) => c.id !== id),
       contacts: s.contacts.filter((c) => c.customerId !== id),
@@ -1557,13 +1656,22 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   addBill: (b) => {
     set((s) => ({ bills: [b, ...s.bills] }));
     persist('bills', get().bills);
+    // Recording books the obligation (DR Expense / CR AP) unless one is already posted.
+    const ref = `bill:${b.id}:accrual`;
+    if (!b.voidedAt && (b.status === 'unpaid' || b.status === 'scheduled') && !get().journals.some((j) => j.externalRef === ref)) {
+      const je = accrueBill({ id: b.id, number: b.number, vendorName: b.vendorName, amount: b.amount, accountId: b.accountId, received: b.received }, get().coa);
+      if (je) {
+        set((s) => ({ journals: [je, ...s.journals] }));
+        persist('journals', get().journals);
+      }
+    }
   },
   updateBill: (id, patch) => {
     set((s) => ({ bills: s.bills.map((b) => (b.id === id ? { ...b, ...patch } : b)) }));
     persist('bills', get().bills);
   },
   setBillStatus: (id, status) => {
-    // Lock rule: paid bills are approved history — no manual status flips.
+    // Lock rule: paid bills are approved history � no manual status flips.
     const current = get().bills.find((b) => b.id === id);
     if (!current || current.status === 'paid' || current.voidedAt) return;
     set((s) => ({ bills: s.bills.map((b) => (b.id === id ? { ...b, status } : b)) }));
@@ -1571,9 +1679,11 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
   deleteBill: (id) => {
     const bill = get().bills.find((b) => b.id === id);
-    if (!bill || bill.status !== 'unpaid') return false; // scheduled/paid → void instead
+    if (!bill || bill.status !== 'unpaid') return false; // scheduled/paid ? void instead
     set((s) => ({ bills: s.bills.filter((b) => b.id !== id) }));
     persist('bills', get().bills);
+    // An unpaid bill carried an accrual from recording � reverse it so the tie-out stays clean.
+    get().reverseAccrualIfPosted('bill', id, bill.number, bill.amount);
     get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Draft bill ${bill.number} deleted.` });
     return true;
   },
@@ -1589,10 +1699,10 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('bills', get().bills);
 
     if (wasPaid) {
-      // Reversal ledger entry — the original payment stays for the audit trail.
+      // Reversal ledger entry � the original payment stays for the audit trail.
       const negative: FinanceEntry = {
         id: `f-voidbill-${Date.now().toString(36)}`,
-        label: `Reversal — VOID ${bill.number} — ${bill.vendorName}`,
+        label: `Reversal � VOID ${bill.number} � ${bill.vendorName}`,
         amount: -Math.abs(bill.amount),
         category: bill.vendorName,
         kind: 'expense',
@@ -1612,7 +1722,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
           id: `je-voidbill-${Date.now().toString(36)}`,
           date: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }),
           dateIso: new Date().toISOString().slice(0, 10),
-          memo: `Reversal — bill ${bill.number} voided${reason ? ` (${reason.trim()})` : ''}`,
+          memo: `Reversal � bill ${bill.number} voided${reason ? ` (${reason.trim()})` : ''}`,
           description: `Automatic reversal of settlement for voided bill ${bill.number}.`,
           reference: bill.number,
           status: 'posted',
@@ -1627,7 +1737,9 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         persist('journals', get().journals);
       }
     }
-    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${bill.number} voided${wasPaid ? ' with full reversal posted' : ''}${reason ? ` — reason: ${reason.trim()}` : ''}.` });
+    // A void before payment reverses the recording accrual (if one was posted).
+    get().reverseAccrualIfPosted('bill', id, bill.number, bill.amount);
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${bill.number} voided${wasPaid ? ' with full reversal posted' : ''}${reason ? ` � reason: ${reason.trim()}` : ''}.` });
   },
   payBill: (id, method, paidOnIso, externalRef?) => {
     const bill = get().bills.find((b) => b.id === id);
@@ -1672,7 +1784,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         id: `je-paybill-${Date.now().toString(36)}`,
         date: new Date(paidOnIso).toLocaleDateString([], { month: 'short', day: 'numeric' }),
         dateIso: paidOnIso,
-        memo: `Bill ${bill.number} settled — ${bill.vendorName}${taxProfileName ? ` (${taxProfileName})` : ''}`,
+        memo: `Bill ${bill.number} settled � ${bill.vendorName}${taxProfileName ? ` (${taxProfileName})` : ''}`,
         description: `Payment to ${bill.vendorName} via ${method.replace('-', ' ')} for bill ${bill.number}.`,
         reference: bill.number,
         dueDateIso: undefined,
@@ -1692,7 +1804,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
 
     get().log({
       agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task',
-      message: `Bill ${bill.number} paid to ${bill.vendorName} via ${method.replace('-', ' ')} — ${fmtMoneyFull(bill.amount, ws?.currency ?? 'USD')} posted to the ledger and journal.`,
+      message: `Bill ${bill.number} paid to ${bill.vendorName} via ${method.replace('-', ' ')} � ${fmtMoneyFull(bill.amount, ws?.currency ?? 'USD')} posted to the ledger and journal.`,
     });
   },
 
@@ -1714,9 +1826,58 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set((s) => ({ journals: [j, ...s.journals] }));
     persist('journals', get().journals);
   },
+  /**
+   * Reverses a posted issuance accrual (`invoice:<id>:accrual` /
+   * `bill:<id>:accrual`) when the document is voided or deleted before
+   * payment. No-op when no accrual was posted (idempotent by externalRef).
+   */
+  reverseAccrualIfPosted: (kind: 'invoice' | 'bill', id: string, number: string, amount: number) => {
+    const ref = `${kind}:${id}:accrual`;
+    const original = get().journals.find((j) => j.externalRef === ref && j.status === 'posted');
+    if (!original) return false;
+    if (get().journals.some((j) => j.externalRef === `${ref}:reversed`)) return false;
+    const je = reverseAccrual(kind, `${ref}:reversed`, number, amount, original.lines);
+    set((s) => ({ journals: [je, ...s.journals] }));
+    persist('journals', get().journals);
+    return true;
+  },
+  /**
+   * One-click repair for books that predate automatic accruals (or had them
+   * deleted): posts every missing issuance accrual. Reports counts; the
+   * tie-out card verifies the result.
+   */
+  postMissingAccruals: () => {
+    let invoices = 0;
+    let bills = 0;
+    for (const inv of get().invoices) {
+      if (inv.voidedAt || (inv.status !== 'sent' && inv.status !== 'overdue')) continue;
+      const ref = `invoice:${inv.id}:accrual`;
+      if (get().journals.some((j) => j.externalRef === ref)) continue;
+      const je = accrueInvoice(inv, get().coa);
+      if (je) {
+        set((s) => ({ journals: [je, ...s.journals] }));
+        invoices += 1;
+      }
+    }
+    for (const b of get().bills) {
+      if (b.voidedAt || (b.status !== 'unpaid' && b.status !== 'scheduled')) continue;
+      const ref = `bill:${b.id}:accrual`;
+      if (get().journals.some((j) => j.externalRef === ref)) continue;
+      const je = accrueBill({ id: b.id, number: b.number, vendorName: b.vendorName, amount: b.amount, accountId: b.accountId, received: b.received }, get().coa);
+      if (je) {
+        set((s) => ({ journals: [je, ...s.journals] }));
+        bills += 1;
+      }
+    }
+    if (invoices || bills) {
+      persist('journals', get().journals);
+      get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Accrual repair posted ${invoices} invoice and ${bills} bill accruals � the tie-out below should now agree.` });
+    }
+    return { invoices, bills };
+  },
   updateJournalEntry: (id, patch) => {
     const entry = get().journals.find((j) => j.id === id);
-    // Lock rule: only draft entries are editable — posted/voided are immutable.
+    // Lock rule: only draft entries are editable � posted/voided are immutable.
     if (!entry || entry.status !== 'draft') return false;
     set((s) => ({ journals: s.journals.map((j) => (j.id === id ? { ...j, ...patch } : j)) }));
     persist('journals', get().journals);
@@ -1728,7 +1889,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     // Closed-period guard: a backdated draft inside a closed period cannot post.
     const closed = get().closures.find((c) => entry.dateIso >= c.startDate && entry.dateIso <= c.endDate);
     if (closed) {
-      get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `Posting blocked — ${entry.memo} is dated inside closed period ${closed.label}. Reopen it in Book Closure first.` });
+      get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `Posting blocked � ${entry.memo} is dated inside closed period ${closed.label}. Reopen it in Book Closure first.` });
       return;
     }
     // Approval gate: large postings require sign-off before hitting the GL.
@@ -1738,7 +1899,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       if (!pending) {
         const approval: Approval = {
           id: `ap-${Date.now().toString(36)}`,
-          title: `Posting approval — ${entry.memo}`,
+          title: `Posting approval � ${entry.memo}`,
           description: `Journal entry dated ${entry.dateIso} (${entry.reference ?? 'no ref'}) totals ${Math.round(amount).toLocaleString()} and needs sign-off before posting to the GL.`,
           category: 'spend',
           amount,
@@ -1749,7 +1910,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         };
         set((s) => ({ approvals: [approval, ...s.approvals] }));
         persist('approvals', get().approvals);
-        get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `${entry.memo} needs approval (${Math.round(amount).toLocaleString()} ≥ threshold) — routed to the approval queue.` });
+        get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `${entry.memo} needs approval (${Math.round(amount).toLocaleString()} = threshold) � routed to the approval queue.` });
       }
       return; // stays a draft until approved
     }
@@ -1764,7 +1925,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
   deleteJournalEntry: (id) => {
     const entry = get().journals.find((j) => j.id === id);
-    if (!entry || entry.status !== 'draft') return false; // posted → void instead
+    if (!entry || entry.status !== 'draft') return false; // posted ? void instead
     set((s) => ({ journals: s.journals.filter((j) => j.id !== id) }));
     persist('journals', get().journals);
     return true;
@@ -1773,7 +1934,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     const entry = get().journals.find((j) => j.id === id);
     if (!entry || entry.status === 'voided') return;
     const now = new Date();
-    // 1) Mark the original voided — it stays on the books forever.
+    // 1) Mark the original voided � it stays on the books forever.
     set((s) => ({
       journals: s.journals.map((j) =>
         j.id === id
@@ -1789,7 +1950,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       id: `je-rev-${Date.now().toString(36)}`,
       date: now.toLocaleDateString([], { month: 'short', day: 'numeric' }),
       dateIso: now.toISOString().slice(0, 10),
-      memo: `Reversal — ${entry.memo}${reason ? ` (${reason.trim()})` : ''}`,
+      memo: `Reversal � ${entry.memo}${reason ? ` (${reason.trim()})` : ''}`,
       description: `Automatic reversal of journal entry ${entry.reference ?? entry.id}.`,
       reference: entry.reference,
       status: 'posted',
@@ -1800,7 +1961,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     };
     set((s) => ({ journals: [je, ...s.journals] }));
     persist('journals', get().journals);
-    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Journal entry "${entry.memo}" voided with linked reversal posted${reason ? ` — reason: ${reason.trim()}` : ''}.` });
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Journal entry "${entry.memo}" voided with linked reversal posted${reason ? ` � reason: ${reason.trim()}` : ''}.` });
   },
 
   taxProfiles: INITIAL_TAX_PROFILES,
@@ -1874,6 +2035,54 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   matchBankTxn: (id, matchedRef, accountId) => {
     set((s) => ({ bankTxns: s.bankTxns.map((t) => (t.id === id ? { ...t, status: 'matched', matchedRef, accountId: accountId ?? t.accountId } : t)) }));
     persist('bankTxns', get().bankTxns);
+  },
+  /**
+   * Books an unmatched bank line straight into the books: a finance entry plus
+   * a balanced journal (money in: DR Cash / CR income; money out: DR expense /
+   * CR Cash), both carrying `bank:<txnId>` so the link is auditable. Idempotent
+   * by externalRef — booking twice posts nothing the second time.
+   */
+  bookBankLine: (txnId, incomeOrExpenseAccountId) => {
+    const txn = get().bankTxns.find((t) => t.id === txnId);
+    const account = get().coa.find((a) => a.id === incomeOrExpenseAccountId);
+    const cash = get().coa.find((a) => a.isCash);
+    if (!txn || txn.status === 'matched' || !account || !cash || !(Math.abs(txn.amount) > 0)) return false;
+    const ref = `bank:${txnId}`;
+    if (get().finance.some((f) => f.externalRef === ref) || get().journals.some((j) => j.externalRef === ref)) return false;
+    const dateIso = txn.dateIso ?? new Date().toISOString().slice(0, 10);
+    const inflow = txn.amount > 0;
+    const entry: FinanceEntry = {
+      id: `f-bank-${Date.now().toString(36)}`,
+      label: `${inflow ? 'Receipt' : 'Payment'} — ${txn.description}`,
+      amount: Math.abs(txn.amount),
+      category: inflow ? 'Sales' : account.name,
+      kind: inflow ? 'revenue' : 'expense',
+      dateIso,
+      paymentMethod: txn.method ?? 'bank-transfer',
+      createdAt: new Date().toISOString(),
+      externalRef: ref,
+      source: 'auto',
+    };
+    set((s) => ({ finance: [...s.finance, entry] }));
+    persist('finance', get().finance);
+    const je: JournalEntry = {
+      id: `je-bank-${Date.now().toString(36)}`,
+      date: txn.date, dateIso,
+      memo: `Bank ${inflow ? 'receipt' : 'payment'} — ${txn.description}`,
+      description: `Booked from the bank statement (${txn.description}).`,
+      reference: txn.externalId,
+      status: 'posted', createdAt: new Date().toISOString(),
+      externalRef: ref, auto: 'bank',
+      lines: inflow
+        ? [{ accountId: cash.id, debit: Math.abs(txn.amount), credit: 0 }, { accountId: account.id, debit: 0, credit: Math.abs(txn.amount) }]
+        : [{ accountId: account.id, debit: Math.abs(txn.amount), credit: 0 }, { accountId: cash.id, debit: 0, credit: Math.abs(txn.amount) }],
+    };
+    set((s) => ({ journals: [je, ...s.journals] }));
+    persist('journals', get().journals);
+    set((s) => ({ bankTxns: s.bankTxns.map((t) => (t.id === txnId ? { ...t, status: 'matched' as const, matchedRef: `Banked — ${account.name}`, accountId: account.id } : t)) }));
+    persist('bankTxns', get().bankTxns);
+    get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bank line booked to ${account.name}: ${txn.description} (${fmtMoneyFull(Math.abs(txn.amount), get().activeWorkspace()?.currency ?? 'USD')}).` });
+    return true;
   },
   setBankTxnAccount: (id, accountId) => {
     const txn = get().bankTxns.find((t) => t.id === id);
@@ -2184,34 +2393,20 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set((s) => ({ recurringBills: s.recurringBills.filter((r) => r.id !== id) }));
     persist('recurringBills', get().recurringBills);
   },
-  runRecurringBills: (todayIso) => {
-    const today = todayIso ?? new Date().toISOString().slice(0, 10);
-    const st = get();
-    let bills = st.bills;
-    const created: Bill[] = [];
-    const nextRecs = st.recurringBills.map((rec) => {
-      const runs = dueRuns(rec, today);
-      if (runs.length === 0) return rec;
-      let cur = rec;
-      for (const run of runs) {
-        if (!bills.some((b) => b.externalRef === recurringBillRef(rec.id, run.index))) {
-          const seed = Date.now().toString(36) + '-' + created.length;
-          const bill = buildBill(rec, run, nextBillNumber(bills), st.taxProfiles, seed);
-          bills = [bill, ...bills];
-          created.push(bill);
-        }
-        cur = { ...cur, generatedCount: run.index + 1, lastGeneratedIso: run.dateIso };
-      }
-      return { ...cur, status: isFinished(cur) ? ('ended' as const) : cur.status };
-    });
-    if (created.length === 0 && nextRecs.every((r, i) => r === st.recurringBills[i])) return { created: 0, bills: [] };
-    set({ bills, recurringBills: nextRecs });
-    persist('bills', get().bills);
-    persist('recurringBills', get().recurringBills);
-    if (created.length) {
-      get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'task', message: 'Recurring billing recorded ' + created.length + ' unpaid bill(s): ' + created.map((b) => b.number + ' ' + b.vendorName).join(', ') + '. Nothing was paid; review them under Finance → Vendors & AP.' });
+  runRecurringServer: async () => {
+    const ws = ACTIVE_WS ?? get().activeWorkspaceId;
+    try {
+      const res = await fetch('/api/borga/scheduler', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({ action: 'recurring', ws }),
+      });
+      const j = (await res.json().catch(() => null)) as { ok?: boolean; invoices?: string[]; bills?: string[] } | null;
+      if (j?.ok) await get().hydrate();
+      return { ok: !!j?.ok, invoices: j?.invoices ?? [], bills: j?.bills ?? [] };
+    } catch {
+      return { ok: false, invoices: [], bills: [] };
     }
-    return { created: created.length, bills: created.map((b) => b.number) };
   },
 
   recurringInvoices: [],
@@ -2227,36 +2422,6 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     // Generated invoices stay: they are real documents. Only the schedule goes away.
     set((s) => ({ recurringInvoices: s.recurringInvoices.filter((r) => r.id !== id) }));
     persist('recurringInvoices', get().recurringInvoices);
-  },
-  runRecurringInvoices: (todayIso) => {
-    const today = todayIso ?? new Date().toISOString().slice(0, 10);
-    const st = get();
-    let invoices = st.invoices;
-    const created: Invoice[] = [];
-    const nextRecs = st.recurringInvoices.map((rec) => {
-      const runs = dueRuns(rec, today);
-      if (runs.length === 0) return rec;
-      let cur = rec;
-      for (const run of runs) {
-        // Idempotency: an occurrence already present (e.g. the template was re-imported) is skipped, not duplicated.
-        if (!invoices.some((i) => i.externalRef === recurringRef(rec.id, run.index))) {
-          const seed = Date.now().toString(36) + '-' + created.length;
-          const inv = buildInvoice(rec, run, nextInvoiceNumber(invoices), st.taxProfiles, seed);
-          invoices = [inv, ...invoices];
-          created.push(inv);
-        }
-        cur = { ...cur, generatedCount: run.index + 1, lastGeneratedIso: run.dateIso };
-      }
-      return { ...cur, status: isFinished(cur) ? ('ended' as const) : cur.status };
-    });
-    if (created.length === 0 && nextRecs.every((r, i) => r === st.recurringInvoices[i])) return { created: 0, invoices: [] };
-    set({ invoices, recurringInvoices: nextRecs });
-    persist('invoices', get().invoices);
-    persist('recurringInvoices', get().recurringInvoices);
-    if (created.length) {
-      get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'task', message: 'Recurring billing created ' + created.length + ' draft invoice(s): ' + created.map((i) => i.number + ' ' + i.client).join(', ') + '. Review and send them from Sales → Invoicing.' });
-    }
-    return { created: created.length, invoices: created.map((i) => i.number) };
   },
 
   revenueTracks: INITIAL_REVENUE_TRACKS,
@@ -2317,7 +2482,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('projects', get().projects);
   },
   deleteProject: (id) => {
-    // Unlink (don't delete) tasks/finance entries — they keep standing on their own.
+    // Unlink (don't delete) tasks/finance entries � they keep standing on their own.
     set((s) => ({
       projects: s.projects.filter((p) => p.id !== id),
       tasks: s.tasks.map((t) => (t.projectId === id ? { ...t, projectId: undefined } : t)),
@@ -2403,7 +2568,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('agents', get().agents);
   },
   addAgent: (a) => {
-    // Soft-start: even a hand-authored agent is added wired to the defaults — model follows the workspace and it is orchestrated.
+    // Soft-start: even a hand-authored agent is added wired to the defaults � model follows the workspace and it is orchestrated.
     set((s) => ({ agents: [...s.agents, withBrainDefaults(a)] }));
     persist('agents', get().agents);
   },
@@ -2431,6 +2596,99 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('fundraising', get().fundraising);
   },
 
+  capTable: EMPTY_CAP_TABLE,
+  setCapTable: (s) => {
+    set({ capTable: s });
+    persist('capTable', s);
+  },
+  quotes: EMPTY_QUOTES,
+  setQuotes: (q) => {
+    set({ quotes: q });
+    persist('quotes', q);
+  },
+  upsertQuote: (q) => {
+    set((s) => ({ quotes: [q, ...s.quotes.filter((x) => x.id !== q.id)] }));
+    persist('quotes', get().quotes);
+  },
+  deleteQuote: (id) => {
+    set((s) => ({ quotes: s.quotes.filter((x) => x.id !== id) }));
+    persist('quotes', get().quotes);
+  },
+  purchaseOrders: EMPTY_POS,
+  setPurchaseOrders: (p) => {
+    set({ purchaseOrders: p });
+    persist('purchaseOrders', p);
+  },
+  upsertPurchaseOrder: (p) => {
+    set((s) => ({ purchaseOrders: [p, ...s.purchaseOrders.filter((x) => x.id !== p.id)] }));
+    persist('purchaseOrders', get().purchaseOrders);
+  },
+  deletePurchaseOrder: (id) => {
+    set((s) => ({ purchaseOrders: s.purchaseOrders.filter((x) => x.id !== id) }));
+    persist('purchaseOrders', get().purchaseOrders);
+  },
+  valuationSnapshots: EMPTY_SNAPSHOTS,
+  setValuationSnapshots: (s) => {
+    set({ valuationSnapshots: s });
+    persist('valuationSnapshots', s);
+  },
+  valuationPeers: EMPTY_PEERS,
+  setValuationPeers: (p) => {
+    set({ valuationPeers: p });
+    persist('valuationPeers', p);
+  },
+  upsertValuationPeer: (p) => {
+    set((s) => ({ valuationPeers: [p, ...s.valuationPeers.filter((x) => x.id !== p.id)] }));
+    persist('valuationPeers', get().valuationPeers);
+  },
+  deleteValuationPeer: (id) => {
+    set((s) => ({ valuationPeers: s.valuationPeers.filter((x) => x.id !== id) }));
+    persist('valuationPeers', get().valuationPeers);
+  },
+  payrollSettings: null,
+  setPayrollSettings: (s) => {
+    set({ payrollSettings: s });
+    persist('payrollSettings', s);
+  },
+  fxRates: EMPTY_FX,
+  setFxRates: (r) => {
+    set({ fxRates: r });
+    persist('fxRates', r);
+  },
+  tillSessions: EMPTY_TILL_SESSIONS,
+  setTillSessions: (s) => {
+    set({ tillSessions: s });
+    persist('tillSessions', s);
+  },
+  openTillSession: (openedBy, openingFloat) => {
+    if (get().tillSessions.some((s) => !s.closedAt)) return null; // one open till at a time
+    const session: TillSession = {
+      id: `till-${Date.now().toString(36)}`,
+      openedAt: new Date().toISOString(),
+      openedBy: openedBy || 'Register',
+      openingFloat: Math.max(0, openingFloat),
+    };
+    set((s) => ({ tillSessions: [session, ...s.tillSessions].slice(0, 200) }));
+    persist('tillSessions', get().tillSessions);
+    get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'task', message: `Till opened with float ${fmtMoneyFull(session.openingFloat, get().activeWorkspace()?.currency ?? 'USD')}.` });
+    return session;
+  },
+  closeTillSession: (closedBy, counted, cashSales) => {
+    const open = get().tillSessions.find((s) => !s.closedAt);
+    if (!open) return null;
+    const { expected, variance } = tillVariance(open.openingFloat, cashSales, counted);
+    const closed: TillSession = {
+      ...open,
+      closedAt: new Date().toISOString(),
+      closedBy: closedBy || 'Register',
+      expected, counted, variance,
+    };
+    set((s) => ({ tillSessions: s.tillSessions.map((x) => (x.id === open.id ? closed : x)) }));
+    persist('tillSessions', get().tillSessions);
+    get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'task', message: `Till closed — expected ${fmtMoneyFull(expected, get().activeWorkspace()?.currency ?? 'USD')}, counted ${fmtMoneyFull(counted, get().activeWorkspace()?.currency ?? 'USD')}, variance ${fmtMoneyFull(variance, get().activeWorkspace()?.currency ?? 'USD')}${Math.abs(variance) < 0.005 ? '' : variance < 0 ? ' (short)' : ' (over)'}.` });
+    return closed;
+  },
+
   browses: INITIAL_BROWSES,
   browse: (url, browsedBy) => {
     const host = (() => {
@@ -2446,7 +2704,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       url: url.includes('://') ? url : `https://${url}`,
       title: host,
       browsedBy,
-      summary: `Fetching ${host}…`,
+      summary: `Fetching ${host}�`,
       links: [],
       at: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
     };
@@ -2538,7 +2796,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     };
     set((s) => ({ calls: [rec, ...s.calls].slice(0, 50) }));
     persist('calls', get().calls);
-    get().log({ agentId: a.agentId, agentName: a.agentName, actor: 'agent', kind: 'voice', message: `${a.agentName} placing outbound call to ${a.leadName} (${a.contact})…` });
+    get().log({ agentId: a.agentId, agentName: a.agentName, actor: 'agent', kind: 'voice', message: `${a.agentName} placing outbound call to ${a.leadName} (${a.contact})�` });
 
     const patchCall = (patch: Partial<CallRecord>) => {
       set((s) => ({ calls: s.calls.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
@@ -2552,7 +2810,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     const looksDialable = /^\+[1-9]\d{7,14}$/.test(normalizedTo);
 
     // No real telephony configured (or the contact isn't a dialable E.164
-    // number) — honestly labeled "simulated": generates the real ElevenLabs
+    // number) � honestly labeled "simulated": generates the real ElevenLabs
     // audio and plays it locally, measuring its ACTUAL playback duration
     // rather than fabricating one.
     const playSimulated = () => {
@@ -2569,12 +2827,12 @@ export const useBorga = create<BorgaStore>((set, get) => ({
           const finish = (ok: boolean) => {
             if (!ok) {
               patchCall({ status: 'failed' });
-              logCall(`${a.agentName} could not speak the call script — no speech output was available.`);
+              logCall(`${a.agentName} could not speak the call script � no speech output was available.`);
               return;
             }
             const durationSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
             patchCall({ status: 'completed', durationSec });
-            logCall(`${a.agentName} completed a simulated call with ${a.leadName} (${durationSec}s — played locally; connect Twilio in Integrations to place a real call).`);
+            logCall(`${a.agentName} completed a simulated call with ${a.leadName} (${durationSec}s � played locally; connect Twilio in Integrations to place a real call).`);
           };
           if (d.ok && d.audio && d.mimeType && typeof window !== 'undefined') {
             const blob = new Blob([Uint8Array.from(atob(d.audio), (c) => c.charCodeAt(0))], { type: d.mimeType });
@@ -2585,7 +2843,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
             audio.play().catch(() => finish(false));
           } else if (d.script && typeof window !== 'undefined' && 'speechSynthesis' in window) {
             // Fall back to browser speech even when ElevenLabs itself failed
-            // (no key, quota, network) — the server still returns the script
+            // (no key, quota, network) � the server still returns the script
             // text in that case, so the call can still say something real.
             const utt = new SpeechSynthesisUtterance(d.script);
             utt.rate = 0.95;
@@ -2598,11 +2856,11 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         })
         .catch(() => {
           patchCall({ status: 'failed' });
-          logCall(`${a.agentName}'s call to ${a.leadName} failed — could not reach the speech service.`);
+          logCall(`${a.agentName}'s call to ${a.leadName} failed � could not reach the speech service.`);
         });
     };
 
-    // Real Twilio call already dialed — poll Twilio's own status API so the
+    // Real Twilio call already dialed � poll Twilio's own status API so the
     // record reflects the actual call state and duration, not a fake timer.
     const pollRealStatus = (callSid: string) => {
       const startedAt = Date.now();
@@ -2625,7 +2883,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
             }
           }
         } catch {
-          // transient — keep polling within the budget below
+          // transient � keep polling within the budget below
         }
         if (Date.now() - startedAt < 5 * 60_000) setTimeout(tick, 3000);
       };
@@ -2650,7 +2908,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
           logCall(`${a.agentName} dialed a real outbound call to ${a.leadName} via Twilio (${d.callSid}).`);
           pollRealStatus(d.callSid);
         } else {
-          if (d.message || d.error) logCall(`Real call not placed (${d.message ?? d.error}) — playing the script locally instead.`);
+          if (d.message || d.error) logCall(`Real call not placed (${d.message ?? d.error}) � playing the script locally instead.`);
           playSimulated();
         }
       })
@@ -2684,7 +2942,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         id: `kb-${Date.now()}`,
         category: q.category,
         title: q.question,
-        answer: answer.trim() || 'Collected — pending full answer.',
+        answer: answer.trim() || 'Collected � pending full answer.',
         source: source.trim() || q.source,
         updatedAt: new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
       };
@@ -2727,9 +2985,17 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
 
   approvals: INITIAL_APPROVALS,
-  setApproval: (id, status) => {
+  setApproval: (id, status, opts) => {
     const approval = get().approvals.find((a) => a.id === id);
-    set((s) => ({ approvals: s.approvals.map((a) => (a.id === id ? { ...a, status } : a)) }));
+    if (!approval) return false;
+    if (status !== 'approved' && status !== 'rejected') return false;
+    // The dashboard owner decides (override recorded when someone else holds it).
+    const r = decide(approval, opts?.by ?? get().userName ?? 'Owner', status, opts?.note, { ownerOverride: true });
+    if (!r.approval) {
+      toast({ title: 'Could not decide', description: r.error, variant: 'error' });
+      return false;
+    }
+    set((s) => ({ approvals: s.approvals.map((a) => (a.id === id ? r.approval! : a)) }));
     persist('approvals', get().approvals);
     // Approval-gated posting: approving a posting request pushes the linked
     // journal entry straight to the GL; rejecting leaves it as a draft.
@@ -2749,10 +3015,31 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       const entry = get().journals.find((j) => j.id === approval.journalId);
       get().log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'agent', kind: 'system', message: `Posting rejected — ${entry?.memo ?? 'journal entry'} stays as an editable draft.` });
     }
+    return true;
   },
   addApproval: (a) => {
-    set((s) => ({ approvals: [a, ...s.approvals] }));
+    const withHistory = { ...a, history: [...(a.history ?? []), { at: new Date().toISOString(), by: a.submittedBy, action: 'created' as const }] };
+    set((s) => ({ approvals: [withHistory, ...s.approvals] }));
     if (a.status === 'pending') notifyEmail(get().activeWorkspaceId, 'approval_requested', { id: a.id, title: a.title, description: a.description, amount: a.amount, submittedBy: a.submittedBy });
+    persist('approvals', get().approvals);
+  },
+  /**
+   * Hands a pending approval to someone else (owner override recorded).
+   * Returns an error message, or null on success.
+   */
+  delegateApproval: (id, to, note) => {
+    const approval = get().approvals.find((a) => a.id === id);
+    if (!approval) return 'Approval not found.';
+    const r = delegate(approval, get().userName ?? 'Owner', to, note, { ownerOverride: true });
+    if (!r.approval) return r.error ?? 'Could not delegate.';
+    set((s) => ({ approvals: s.approvals.map((a) => (a.id === id ? r.approval! : a)) }));
+    persist('approvals', get().approvals);
+    get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'system', message: `Approval "${approval.title}" delegated to ${to.trim()}.` });
+    return null;
+  },
+  /** Edits routing fields (assignee, due date, escalation target) without deciding. */
+  updateApproval: (id, patch) => {
+    set((s) => ({ approvals: s.approvals.map((a) => (a.id === id && a.status === 'pending' ? { ...a, ...patch } : a)) }));
     persist('approvals', get().approvals);
   },
 
@@ -2779,7 +3066,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       return {
         connections: exists
           ? s.connections.map((c) => (c.id === id ? { ...c, ...patch } : c))
-          : [...s.connections, { id, type: 'tool', provider: id.replace('cn-', ''), label: id.replace('cn-', ''), status: 'off', lastSync: '…', ...patch }],
+          : [...s.connections, { id, type: 'tool', provider: id.replace('cn-', ''), label: id.replace('cn-', ''), status: 'off', lastSync: '�', ...patch }],
       };
     });
     persist('connections', get().connections);
@@ -2807,7 +3094,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   composio: DEFAULT_COMPOSIO,
   setComposio: (patch) => {
     set((s) => ({ composio: { ...s.composio, ...patch, configured: true } }));
-    // Never persist the API key in plaintext — store only a mask.
+    // Never persist the API key in plaintext � store only a mask.
     const clean = { ...get().composio };
     if ('apiKey' in clean && clean.apiKey) clean.apiKey = '[stored server-side]';
     persist('composio', clean);
@@ -3053,8 +3340,13 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   },
 
   saveConflicts: [],
+  /** Merges that overrode this tab's edits on some fields (server won those fields; everything else united). Dismiss-only. */
+  mergeNotices: [] as Array<{ entity: string; records: Array<{ label: string; fields: string[] }> }>,
+  dismissMergeNotice: (entity: string) => {
+    set((s) => ({ mergeNotices: s.mergeNotices.filter((m) => m.entity !== entity) }));
+  },
   loadLatest: async () => {
-    set({ saveConflicts: [] });
+    set({ saveConflicts: [], mergeNotices: [] });
     await get().hydrate();
   },
   /**
@@ -3104,10 +3396,13 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       const reg = await regRes.json() as { workspaces?: Workspace[]; persisted?: boolean; versions?: Record<string, number> };
       if (seq !== hydrateSeq) return; // superseded by a newer hydrate
       if (regRes.status === 503) failServerLoad();
-      else SAVES.setVersions('global|', reg.versions ?? {});
+      else {
+        SAVES.setVersions('global|', reg.versions ?? {});
+        if (reg.workspaces !== undefined) SAVES.setBase('global|workspaces', reg.workspaces);
+      }
       const dbAvailable = reg.persisted === true;
       // When the database is available, the workspace registry is fully
-      // server-authoritative (per-user) — do not merge in the global seed
+      // server-authoritative (per-user) � do not merge in the global seed
       // companies. In local/offline mode we fall back to any locally cached
       // companies so a newly created workspace survives a reload.
       let workspaces: Workspace[] = Array.isArray(reg.workspaces) ? reg.workspaces : [];
@@ -3122,7 +3417,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       if (!workspaces.some((w) => w.id === wsId)) wsId = workspaces[0]?.id ?? '';
       set({ workspaces, activeWorkspaceId: wsId, synced: true, dbAvailable });
       ACTIVE_WS = wsId || null;
-      if (!wsId) return; // no company yet — wait for the user to create one
+      if (!wsId) return; // no company yet � wait for the user to create one
 
       // 2) Load everything scoped to the active workspace in one bulk fetch.
       const res = await fetch(`/api/borga/data?ws=${encodeURIComponent(wsId)}`, {
@@ -3140,6 +3435,10 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       SERVER_LOAD_FAILED = false;
       // Remember which version of every entity this tab now holds; saves are refused if it has moved on by then.
       SAVES.setVersions(`${wsId}|`, (d.versions ?? {}) as Record<string, number>);
+      // …and the values they hold, so a refused save can merge record-by-record instead of blocking.
+      for (const [, entity] of LS_FALLBACK_FIELDS) {
+        if ((d as Record<string, unknown>)[entity] !== undefined) SAVES.setBase(`${wsId}|${entity}`, (d as Record<string, unknown>)[entity]);
+      }
       const dbAgents = Array.isArray(d.agents) && d.agents.length ? (d.agents as Agent[]) : null;
       const agents = dbAgents ? ensureNadia(dbAgents).map(withBrainDefaults).map(withPersonaInstructions) : AGENTS;
       // saved back only when something was actually added (a missing agent, or a role's default instructions)
@@ -3178,6 +3477,14 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         llmCatalog: Array.isArray(d.llmCatalog) && d.llmCatalog.length ? repairCatalog(d.llmCatalog, LLM_PROVIDERS) : LLM_PROVIDERS,
         valuation: d.valuation ?? VALUATION_CONFIG_SEED,
         fundraising: d.fundraising ?? INITIAL_FUNDRAISING,
+        capTable: d.capTable ?? EMPTY_CAP_TABLE,
+        quotes: Array.isArray(d.quotes) ? d.quotes : EMPTY_QUOTES,
+        purchaseOrders: Array.isArray(d.purchaseOrders) ? d.purchaseOrders : EMPTY_POS,
+        valuationSnapshots: Array.isArray(d.valuationSnapshots) ? d.valuationSnapshots : EMPTY_SNAPSHOTS,
+        valuationPeers: Array.isArray(d.valuationPeers) ? d.valuationPeers : EMPTY_PEERS,
+        payrollSettings: (d.payrollSettings as PayrollSettings | null) ?? null,
+        fxRates: (d.fxRates as FxRates | undefined) ?? EMPTY_FX,
+        tillSessions: Array.isArray(d.tillSessions) ? d.tillSessions : EMPTY_TILL_SESSIONS,
         browses: d.browses ?? INITIAL_BROWSES,
         whatsapp: d.whatsapp ?? DEFAULT_WHATSAPP,
         chats: d.chats ?? INITIAL_CHATS,
@@ -3228,7 +3535,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
         reconciliationRules: Array.isArray(d.reconciliationRules) ? d.reconciliationRules : INITIAL_RECONCILIATION_RULES,
         // Inventory: a saved catalog is trusted as-is; a fresh workspace starts with
         // its onboarding-captured services as service items (a services company is
-        // aligned from the start — products can be added alongside them).
+        // aligned from the start � products can be added alongside them).
         inventoryItems: Array.isArray(d.inventoryItems) && d.inventoryItems.length > 0
           ? d.inventoryItems
           : serviceItemsFromTracks((d.revenueTracks ?? []) as Array<{ lines?: Array<{ name?: string; service?: string }> }>),
@@ -3279,7 +3586,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   activity: [
     {
       id: 'e-init',
-      time: '…',
+      time: '�',
       agentId: 'a-borga',
       agentName: 'Borga',
       actor: 'system',
@@ -3302,7 +3609,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     } else if (e.kind === 'sync') {
       toast({ title: e.actor === 'system' ? 'Workflow notice' : 'Workflow update', description: e.message, variant: 'info' });
     } else if (e.kind === 'voice') {
-      toast({ title: `${e.agentName} — voice`, description: e.message, variant: 'info', duration: 2600 });
+      toast({ title: `${e.agentName} � voice`, description: e.message, variant: 'info', duration: 2600 });
     } else if (e.kind === 'system' && e.actor === 'system' && /(blocked|error|unreachable|rejected|denied|skipped)/i.test(e.message)) {
       toast({ title: 'System notice', description: e.message, variant: 'error' });
     }
@@ -3338,12 +3645,25 @@ export const useBorga = create<BorgaStore>((set, get) => ({
 
   leads: INITIAL_LEADS,
   addLead: (l) => {
-    const stamped = { ...l, createdAt: l.createdAt ?? new Date().toISOString() };
+    // Assignment rules own the default owner: a lead captured without a deliberate owner is routed on the way in.
+    const rules = get().settings.leadAssignmentRules ?? [];
+    const ownerId = !l.ownerId || l.ownerId === 'a-sales' ? (assignOwner(rules, l, get().leads) ?? l.ownerId) : l.ownerId;
+    const stamped = { ...l, ownerId, createdAt: l.createdAt ?? new Date().toISOString() };
     set((s) => ({ leads: [stamped, ...s.leads] }));
     persist('leads', get().leads);
   },
-  moveLeadStage: (id, stage) => {
-    set((s) => ({ leads: s.leads.map((l) => (l.id === id ? { ...l, stage, lastContactAt: new Date().toISOString() } : l)) }));
+  moveLeadStage: (id, stage, outcomeNote) => {
+    set((s) => ({
+      leads: s.leads.map((l) => (l.id === id
+        ? {
+            ...l, stage, lastContactAt: new Date().toISOString(),
+            // Closing a deal records why, so the win/loss report is real. Cleared if the deal ever reopens.
+            ...(stage === 'won' || stage === 'lost'
+              ? { outcomeNote: outcomeNote ?? l.outcomeNote, outcomeAt: new Date().toISOString() }
+              : { outcomeNote: undefined, outcomeAt: undefined }),
+          }
+        : l)),
+    }));
     persist('leads', get().leads);
   },
   updateLead: (id, patch) => {
@@ -3353,6 +3673,92 @@ export const useBorga = create<BorgaStore>((set, get) => ({
   deleteLead: (id) => {
     set((s) => ({ leads: s.leads.filter((l) => l.id !== id) }));
     persist('leads', get().leads);
+  },
+  /**
+   * Routes every open default-owned lead through the assignment rules (the
+   * same routing capture applies). Returns how many leads changed owner.
+   */
+  applyAssignmentRules: () => {
+    const rules = get().settings.leadAssignmentRules ?? [];
+    if (!rules.length) return { assigned: 0 };
+    const leads = get().leads;
+    let assigned = 0;
+    const next = leads.map((l) => {
+      if (l.stage === 'won' || l.stage === 'lost' || (l.ownerId && l.ownerId !== 'a-sales')) return l;
+      const owner = assignOwner(rules, l, leads);
+      if (!owner || owner === l.ownerId) return l;
+      assigned++;
+      return { ...l, ownerId: owner };
+    });
+    if (assigned) {
+      set({ leads: next });
+      persist('leads', next);
+      get().log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'system', kind: 'system', message: `Assignment rules routed ${assigned} open lead${assigned === 1 ? '' : 's'}.` });
+    }
+    return { assigned };
+  },
+  /**
+   * Starts a draft quote from a lead (lead → quote → invoice chain). The quote
+   * carries the lead id so the timeline and the accept step can follow it.
+   */
+  quoteFromLead: (leadId) => {
+    const lead = get().leads.find((l) => l.id === leadId);
+    if (!lead) return null;
+    const q: Quote = {
+      id: `q-${Date.now().toString(36)}`,
+      number: `Q-${get().quotes.length + 1}`,
+      customerId: lead.customerId ?? '',
+      customerName: lead.company || lead.name,
+      customerEmail: lead.email || undefined,
+      leadId: lead.id,
+      lines: [{ label: lead.name, qty: 1, unitPrice: lead.value }],
+      status: 'draft',
+      version: 1,
+      issued: new Date().toISOString().slice(0, 10),
+      validUntil: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10),
+    };
+    get().upsertQuote(q);
+    get().log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'task', message: `Quote ${q.number} started from lead ${lead.name}.`, ref: { kind: 'lead', id: lead.id, label: lead.name } });
+    return q;
+  },
+  /**
+   * Merges two duplicate leads: the winner keeps its identity and stage, gains
+   * anything the loser had that it lacks, inherits the loser's quotes, and the
+   * loser is deleted. Returns false when the pair is unusable.
+   */
+  mergeLeads: (winnerId, loserId) => {
+    const s = get();
+    const winner = s.leads.find((l) => l.id === winnerId);
+    const next = applyLeadMerge({ leads: s.leads, quotes: s.quotes }, winnerId, loserId);
+    if (!next || !winner) return false;
+    set({ leads: next.leads, quotes: next.quotes });
+    persist('leads', next.leads);
+    persist('quotes', next.quotes);
+    get().log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: `Merged duplicate lead into ${winner.name}.`, ref: { kind: 'lead', id: winnerId, label: winner.name } });
+    return true;
+  },
+  /**
+   * Merges two duplicate customer accounts: open deals, quotes, invoices,
+   * projects and contacts move to the winner, blanks fill in, loser deleted.
+   */
+  mergeCustomers: (winnerId, loserId) => {
+    const s = get();
+    const winner = s.customers.find((c) => c.id === winnerId);
+    const next = applyCustomerMerge(
+      { customers: s.customers, leads: s.leads, quotes: s.quotes, invoices: s.invoices, projects: s.projects, contacts: s.contacts },
+      winnerId,
+      loserId,
+    );
+    if (!next || !winner) return false;
+    set({ customers: next.customers, leads: next.leads, quotes: next.quotes, invoices: next.invoices, projects: next.projects, contacts: next.contacts });
+    persist('customers', next.customers);
+    persist('leads', next.leads);
+    persist('quotes', next.quotes);
+    persist('invoices', next.invoices);
+    persist('projects', next.projects);
+    persist('contacts', next.contacts);
+    get().log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: `Merged duplicate account into ${winner.name}.`, ref: { kind: 'customer', id: winnerId, label: winner.name } });
+    return true;
   },
 
   workflows: INITIAL_WORKFLOWS,
@@ -3366,7 +3772,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set((s) => ({ workflows: s.workflows.map((w) => (w.id === id ? { ...w, status: 'running', progress: 4 } : w)) }));
 
     // Climb toward (but never claim) completion while the real request is in
-    // flight — an honest "still working" indicator, not a fake finish. The
+    // flight � an honest "still working" indicator, not a fake finish. The
     // fetch's own resolution is what actually marks the workflow complete/error.
     let progress = 4;
     const climber = setInterval(() => {
@@ -3401,7 +3807,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
                 agentName: 'Borga',
                 actor: 'agent',
                 kind: 'task',
-                message: `Step ${index + 1}/${steps.length}: ${step.step} — ${step.output}`
+                message: `Step ${index + 1}/${steps.length}: ${step.step} � ${step.output}`
               });
             }, (index + 1) * 1000);
           });
@@ -3431,9 +3837,9 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       })
       .catch((error) => {
         toast({ title: `Workflow "${workflowName}" failed to reach the engine`, description: (error as Error)?.message ?? 'Falling back to local task distribution.', variant: 'error' });
-        get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" failed to reach the engine — falling back to local task distribution.` });
+        get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" failed to reach the engine � falling back to local task distribution.` });
 
-        // Fallback to local task distribution — the dispatch itself still failed, so mark it accordingly.
+        // Fallback to local task distribution � the dispatch itself still failed, so mark it accordingly.
         for (const spec of distributeWorkflowTasks(workflowName, agents)) {
           get().addTask({
             id: `t-wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -3527,7 +3933,7 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     persist('notices', []);
   },
 
-  // ── Inventory ────────────────────────────────────────────────────────────
+  // -- Inventory ------------------------------------------------------------
   inventoryItems: [],
   addItem: (item) => {
     set((s) => ({ inventoryItems: [item, ...s.inventoryItems] }));
@@ -3600,3 +4006,4 @@ export function sortTasks(tasks: Task[]): Task[] {
     (a, b) => priorityRank(a.priority) - priorityRank(b.priority),
   );
 }
+

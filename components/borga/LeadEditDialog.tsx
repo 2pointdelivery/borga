@@ -11,6 +11,8 @@ import { SearchSelect } from './SearchSelect';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useBorga } from '@/lib/borga/store';
 import { STAGE_LABEL, type Lead, type LeadStage, type Priority, type Customer } from '@/lib/borga/data';
+import { scoreLead } from '@/lib/borga/lead-score';
+import { RecordTimeline } from './RecordTimeline';
 
 /**
  * The three-question need diagnosis, shared by lead capture and lead editing.
@@ -37,6 +39,23 @@ export function LeadDiagnosisInputs({ value, onChange }: { value: Lead['diagnosi
         <label className="text-xs font-medium text-muted-foreground">3. What have you already tried that has not worked?</label>
         <Textarea rows={2} value={d.tried ?? ''} onChange={(e) => set('tried')(e.target.value)} placeholder="Competitors, workarounds, nothing yet…" className="mt-1" />
       </div>
+    </div>
+  );
+}
+
+/**
+ * The score, explained: what earns points and what would earn more. Updates live as the rep edits.
+ */
+function LeadScoreBlock({ lead }: { lead: Lead }) {
+  const s = scoreLead(lead);
+  return (
+    <div className="rounded-lg border bg-muted/20 p-3">
+      <p className="text-xs font-medium">Lead score <span className="font-bold">{s.score}/100</span> <span className="font-normal text-muted-foreground">({s.band})</span></p>
+      <ul className="mt-1 space-y-0.5">
+        {s.factors.map((f) => (
+          <li key={f.key} className="text-[11px] text-muted-foreground">+{f.points}/{f.max} {f.key} — {f.why}</li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -80,7 +99,7 @@ export function LeadEditDialog({
     addCustomer(c);
     updateLead(editing.id, { customerId: c.id });
     setForm((f) => ({ ...(f ?? editing), customerId: c.id }));
-    log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: `Converted lead "${editing.name}" into customer account "${c.name}".` });
+    log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'system', message: `Converted lead "${editing.name}" into customer account "${c.name}".`, ref: { kind: 'customer', id: c.id, label: c.name } });
     setConfirmConvert(false);
   };
 
@@ -190,6 +209,7 @@ export function LeadEditDialog({
                 <Input className="mt-1" value={editing.source} onChange={(e) => patch({ source: e.target.value })} placeholder="Where this lead came from" />
               </div>
               <LeadDiagnosisInputs value={editing.diagnosis} onChange={(d) => patch({ diagnosis: d })} />
+              <LeadScoreBlock lead={editing} />
               <div className="flex items-center gap-2 pt-1">
                 <Button variant="outline" size="icon" className="h-9 w-9" onClick={remove} title="Delete lead">
                   <Trash2 className="h-4 w-4 text-rose-500" />
@@ -197,6 +217,9 @@ export function LeadEditDialog({
                 <Button className="flex-1 gap-1.5" onClick={save}>
                   <Save className="h-4 w-4" /> Save changes
                 </Button>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <RecordTimeline target={{ kind: 'lead', id: editing.id }} />
               </div>
             </div>
             </>

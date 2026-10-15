@@ -131,8 +131,116 @@ function NeedsYouFace({
   );
 }
 
-export function CommandCenter() {
-  const {
+import { currentHolder } from '@/lib/borga/approval-chain';
+import { toast } from '@/lib/toast-bus';
+import type { Approval } from '@/lib/borga/data';
+
+/** One pending approval: who holds it, when it is due, delegate / route it, then decide. */
+function ApprovalCard({ approval: a, onApprove, onReject }: {
+  approval: Approval;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const delegateApproval = useBorga((s) => s.delegateApproval);
+  const updateApproval = useBorga((s) => s.updateApproval);
+  const [delegating, setDelegating] = useState(false);
+  const [to, setTo] = useState('');
+  const [routing, setRouting] = useState(false);
+  const [assignee, setAssignee] = useState(a.assignee ?? '');
+  const [dueAt, setDueAt] = useState((a.dueAt ?? '').slice(0, 10));
+  const [escalateTo, setEscalateTo] = useState(a.escalateTo ?? '');
+  const holder = currentHolder(a);
+  const [overdue, setOverdue] = useState(false);
+  useEffect(() => {
+    setOverdue(a.dueAt ? Date.parse(a.dueAt) < Date.now() : false);
+  }, [a.dueAt]);
+
+  const saveRouting = () => {
+    updateApproval(a.id, {
+      assignee: assignee.trim() || undefined,
+      dueAt: dueAt ? new Date(`${dueAt}T23:59:59`).toISOString() : undefined,
+      escalateTo: escalateTo.trim() || undefined,
+    });
+    setRouting(false);
+  };
+
+  const send = () => {
+    const err = delegateApproval(a.id, to);
+    if (err) toast({ title: 'Could not delegate', description: err, variant: 'error' });
+    else {
+      toast({ title: `Delegated to ${to.trim()}`, variant: 'success' });
+      setTo('');
+      setDelegating(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border bg-muted/20 p-3">
+      <div className="flex items-center justify-between">
+        <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1', APPROVAL_LABEL[a.category] ? 'bg-primary/10 text-primary ring-primary/30' : '')}>
+          {APPROVAL_LABEL[a.category]}
+        </span>
+        <span className="text-[11px] text-muted-foreground">{a.submittedBy} — {a.createdAt}</span>
+      </div>
+      <p className="mt-2 text-sm font-medium">{a.title}</p>
+      {a.amount > 0 && <p className="text-xs font-semibold text-primary">{fmtMoney(a.amount)}</p>}
+      <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{a.description}</p>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        Waiting on <strong className="text-foreground">{holder ?? 'you'}</strong>
+        {a.dueAt && <> · due {new Date(a.dueAt).toLocaleDateString()}{overdue && <span className="font-semibold text-rose-600"> (overdue)</span>}</>}
+        {a.escalatedAt && <span className="font-semibold text-amber-600"> · escalated</span>}
+        {(a.history?.length ?? 0) > 0 && <span title={a.history!.map((h) => `${h.action} by ${h.by}`).join(' → ')}> · {a.history!.length} hand{a.history!.length === 1 ? '' : 's'}</span>}
+      </p>
+      {!delegating && !routing && (
+        <div className="mt-2 flex gap-2">
+          <Button size="sm" className="flex-1 gap-1" onClick={onApprove}>
+            <Check className="h-3.5 w-3.5" /> Approve
+          </Button>
+          <Button size="sm" variant="outline" className="flex-1 gap-1" onClick={onReject}>
+            <X className="h-3.5 w-3.5" /> Reject
+          </Button>
+          <Button size="sm" variant="ghost" className="gap-1" onClick={() => setDelegating(true)} title="Hand to someone else">
+            Delegate
+          </Button>
+          <Button size="sm" variant="ghost" className="gap-1" onClick={() => setRouting(true)} title="Assign, set a due date and escalation">
+            Route
+          </Button>
+        </div>
+      )}
+      {delegating && (
+        <div className="mt-2 flex gap-2">
+          <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="Hand to…" className="h-8 flex-1" />
+          <Button size="sm" onClick={send} disabled={!to.trim()}>Hand over</Button>
+          <Button size="sm" variant="ghost" onClick={() => setDelegating(false)}>Cancel</Button>
+        </div>
+      )}
+      {routing && (
+        <div className="mt-2 space-y-2 rounded-lg border p-2.5">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] text-muted-foreground">Assign to</label>
+              <Input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Name" className="mt-0.5 h-8" />
+            </div>
+            <div>
+              <label className="text-[11px] text-muted-foreground">Decide by</label>
+              <Input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} className="mt-0.5 h-8" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] text-muted-foreground">Escalate to when overdue</label>
+            <Input value={escalateTo} onChange={(e) => setEscalateTo(e.target.value)} placeholder="Name" className="mt-0.5 h-8" />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={saveRouting}>Save routing</Button>
+            <Button size="sm" variant="ghost" onClick={() => setRouting(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CommandCenter() {  const {
     userName,
     tasks,
     agents,
@@ -429,7 +537,7 @@ export function CommandCenter() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {[
           { detail: { page: 'ai', tab: 'agents' }, label: 'Agents', icon: Users },
-          { detail: { page: 'communications', tab: 'calls' }, label: 'Calls', icon: Phone },
+          { detail: { page: 'communications', tab: 'inbox' }, label: 'Calls', icon: Phone },
           { detail: { page: 'company', tab: 'knowledge' }, label: 'Knowledge Base', icon: BookOpen },
           { detail: { page: 'company', tab: 'valuation' }, label: 'Valuation', icon: BarChart3 },
           { detail: { page: 'sales', tab: 'pipeline' }, label: 'Sales Pipeline', icon: HandCoins },
@@ -603,25 +711,12 @@ export function CommandCenter() {
               <p className="text-sm text-muted-foreground">No approvals waiting. All clear ✅</p>
             )}
             {pendingApprovals.map((a) => (
-              <div key={a.id} className="rounded-lg border bg-muted/20 p-3">
-                <div className="flex items-center justify-between">
-                  <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1', APPROVAL_LABEL[a.category] ? 'bg-primary/10 text-primary ring-primary/30' : '')}>
-                    {APPROVAL_LABEL[a.category]}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">{a.submittedBy} — {a.createdAt}</span>
-                </div>
-                <p className="mt-2 text-sm font-medium">{a.title}</p>
-                {a.amount > 0 && <p className="text-xs font-semibold text-primary">{fmtMoney(a.amount)}</p>}
-                <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{a.description}</p>
-                <div className="mt-2 flex gap-2">
-                  <Button size="sm" className="flex-1 gap-1" onClick={() => actOnApproval(a.id, 'approved')}>
-                    <Check className="h-3.5 w-3.5" /> Approve
-                  </Button>
-                  <Button size="sm" variant="outline" className="flex-1 gap-1" onClick={() => actOnApproval(a.id, 'rejected')}>
-                    <X className="h-3.5 w-3.5" /> Reject
-                  </Button>
-                </div>
-              </div>
+              <ApprovalCard
+                key={a.id}
+                approval={a}
+                onApprove={() => actOnApproval(a.id, 'approved')}
+                onReject={() => actOnApproval(a.id, 'rejected')}
+              />
             ))}
           </div>
         </Card>

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findBillDuplicates, findFinanceRefDuplicates, findInvoiceDuplicates, payrollReleasedForMonth } from './borga/duplicates';
+import { findBillDuplicates, findCustomerDuplicates, findFinanceRefDuplicates, findInvoiceDuplicates, findLeadDuplicates, payrollReleasedForMonth } from './borga/duplicates';
 
 test('same invoice number is an exact duplicate, voided and self are ignored', () => {
   const all = [
@@ -57,3 +57,32 @@ test('a released payroll month blocks further releases', () => {
   assert.equal(payrollReleasedForMonth(runs, '2026-11'), false);
   assert.equal(payrollReleasedForMonth([], '2026-09'), false);
 });
+
+test('open leads pair on email, phone, or person+company; closed leads never pair', () => {
+  const leads = [
+    { id: 'a', name: 'Ama Serwaa', company: 'Accra Foods', email: 'ama@accra.test', phone: '+233 20 111 2222', stage: 'new' },
+    { id: 'b', name: 'A. Serwaa', company: 'Accra Foods Ltd', email: 'AMA@accra.test', phone: '', stage: 'qualified' },
+    { id: 'c', name: 'Kwame M', company: 'Kumasi Retail', email: 'k@kumasi.test', phone: '+233201112222', stage: 'proposal' },
+    { id: 'd', name: 'Ama Serwaa', company: 'Accra Foods', email: 'other@x.test', phone: '', stage: 'won' },
+    { id: 'e', name: 'Someone Else', company: 'Other Co', email: 's@other.test', phone: '', stage: 'new' },
+  ];
+  const pairs = findLeadDuplicates(leads);
+  assert.ok(pairs.some((p) => p.aId === 'a' && p.bId === 'b' && p.reason.includes('email')), JSON.stringify(pairs));
+  assert.ok(pairs.some((p) => p.aId === 'a' && p.bId === 'c' && p.reason.includes('phone')), JSON.stringify(pairs));
+  assert.ok(!pairs.some((p) => p.aId === 'd' || p.bId === 'd'), 'won lead excluded');
+  assert.ok(!pairs.some((p) => p.aId === 'e' || p.bId === 'e'), 'unrelated excluded');
+});
+
+test('customers pair on name, email, or phone', () => {
+  const customers = [
+    { id: 'a', name: 'Acme Trading', email: 'ops@acme.test', phone: '' },
+    { id: 'b', name: 'acme trading ltd', email: '', phone: '' },
+    { id: 'c', name: 'Different', email: 'ops@acme.test', phone: '' },
+    { id: 'd', name: 'Unrelated Co', email: 'u@unrelated.test', phone: '' },
+  ];
+  const pairs = findCustomerDuplicates(customers);
+  assert.ok(pairs.some((p) => p.aId === 'a' && p.bId === 'b'), JSON.stringify(pairs));
+  assert.ok(pairs.some((p) => p.aId === 'a' && p.bId === 'c'), JSON.stringify(pairs));
+  assert.ok(!pairs.some((p) => p.aId === 'd' || p.bId === 'd'));
+});
+
