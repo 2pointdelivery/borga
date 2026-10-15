@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+dist/
+.eas/
+*.log
+# Managed workflow: EAS runs prebuild in cloud. Regenerate locally with:
+# npx expo prebuild --platform android
+android/
+ios/

@@ -22,14 +22,8 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { ACCOUNT_TYPE_STYLE, type GlAccount } from '@/lib/borga/data';
+import { buildProfitAndLoss } from '@/lib/borga/financial-reports';
 import { ACCOUNT_SIDE_HINT, DR_CR_LEGEND, NORMAL_SIDE_SHORT, isDebitNormal, splitDrCr } from '@/lib/borga/accounting-labels';
 import { computeAccountMonthlyActuals, getAccountingStandard, computeProjectActualSpend, PROJECT_STATUS_LABEL, deriveValuation } from '@/lib/borga/data';
 import { deriveBusinessInsights } from '@/lib/borga/insights';
@@ -38,6 +32,8 @@ import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { AccountSelect } from '../form-widgets';
 import { SearchSelect } from '../SearchSelect';
+import { ReportScheduleCard } from './ReportScheduleCard';
+import { CustomReportsCard } from './CustomReportsCard';
 import { cn } from '@/lib/utils';
 
 type ReportId = 'pl' | 'bs' | 'cf' | 'equity' | 'ratios' | 'tb' | 'acct-txn' | 'acct-bal' | 'budget-actual';
@@ -148,16 +144,12 @@ export function ReportsCenter() {
 
   // ── P&L ────────────────────────────────────────────────────────────────────
   const pl = useMemo(() => {
-    const revenueRows = coa.filter((a) => a.type === 'revenue').map((a) => ({ account: a, amount: bal(a.id, periodDeltas) })).filter((r) => r.amount !== 0);
-    const costRows = coa.filter((a) => a.type === 'cost').map((a) => ({ account: a, amount: bal(a.id, periodDeltas) })).filter((r) => r.amount !== 0);
-    const expenseRows = coa.filter((a) => a.type === 'expense').map((a) => ({ account: a, amount: bal(a.id, periodDeltas) })).filter((r) => r.amount !== 0);
-    const totalRevenue = revenueRows.reduce((s, r) => s + r.amount, 0);
-    const totalCost = costRows.reduce((s, r) => s + r.amount, 0);
-    const totalExpenses = expenseRows.reduce((s, r) => s + r.amount, 0);
-    const grossProfit = totalRevenue - totalCost;
+    // One source of truth with the scheduled report email (lib/borga/financial-reports.ts).
+    const core = buildProfitAndLoss(coa, posted, effFrom, effTo);
+    const shape = (rows: typeof core.revenueRows) => rows.map((r) => ({ account: accountById.get(r.accountId) ?? { code: r.code, name: r.name } as GlAccount, amount: r.amount }));
     return {
-      revenueRows, costRows, expenseRows, totalRevenue, totalCost, totalExpenses,
-      grossProfit, netIncome: grossProfit - totalExpenses,
+      ...core,
+      revenueRows: shape(core.revenueRows), costRows: shape(core.costRows), expenseRows: shape(core.expenseRows),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coa, periodDeltas]);
@@ -864,6 +856,8 @@ export function ReportsCenter() {
           Reporting under <span className="font-medium text-foreground">{standard.label}</span>
         </p>
         <Badge variant="outline" className="text-[10px]">{standard.framework}</Badge>
+        <ReportScheduleCard visible={report === 'pl'} />
+        <CustomReportsCard />
       </Card>
 
       {/* Agent variance commentary */}
