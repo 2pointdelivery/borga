@@ -109,8 +109,16 @@ import {
   type McpServer,
 } from '@/lib/borga/data';
 import { getBorgaRowsByPrefixOrThrow, setBorgaState, setBorgaStateIfVersion } from '@/lib/borga/persistence';
+import { ownsWorkspace } from '@/lib/borga/workspace-access';
 import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
 import { EMPTY_FILINGS, type FilingsState } from '@/lib/borga/filing-catalog';
+import { EMPTY_CAP_TABLE, type CapTableState } from '@/lib/borga/cap-table';
+import { EMPTY_QUOTES, type Quote } from '@/lib/borga/quotes';
+import { EMPTY_POS, type PurchaseOrder } from '@/lib/borga/procurement';
+import { EMPTY_SNAPSHOTS, EMPTY_PEERS, type ValuationSnapshot, type ValuationPeer } from '@/lib/borga/valuation-history';
+import type { PayrollSettings } from '@/lib/borga/payroll-engine';
+import { EMPTY_FX, type FxRates } from '@/lib/borga/fx';
+import { EMPTY_TILL_SESSIONS, type TillSession } from '@/lib/borga/inventory';
 import { billingInfo, paymentRequired } from '@/lib/borga/billing-server';
 import { EMPTY_FIXED_ASSETS, type FixedAssetsState } from '@/lib/borga/fixed-asset-journals';
 import { INITIAL_WAREHOUSES, type InventoryItem, type StockMovement, type PosSale, type Warehouse } from '@/lib/borga/inventory';
@@ -130,6 +138,7 @@ export const WORKSPACE_ENTITIES = [
   'workflows', 'closures', 'timeEntries', 'payrollRuns', 'invites', 'taxProfiles', 'budgets', 'revenueTracks', 'projects', 'reconciliationRules',
   'mcpServers', 'recurringInvoices', 'recurringBills', 'filings', 'fixedAssets',
   'inventoryItems', 'warehouses', 'stockMovements', 'posSales',
+  'capTable', 'quotes', 'purchaseOrders', 'valuationSnapshots', 'valuationPeers', 'payrollSettings', 'fxRates', 'tillSessions',
 ] as const;
 
 const GLOBAL_ENTITIES = ['workspaces'] as const;
@@ -201,6 +210,14 @@ const DEFAULT_STATE = {
   warehouses: INITIAL_WAREHOUSES,
   stockMovements: [] as StockMovement[],
   posSales: [] as PosSale[],
+  capTable: EMPTY_CAP_TABLE as CapTableState,
+  quotes: EMPTY_QUOTES as Quote[],
+  purchaseOrders: EMPTY_POS as PurchaseOrder[],
+  valuationSnapshots: EMPTY_SNAPSHOTS as ValuationSnapshot[],
+  valuationPeers: EMPTY_PEERS as ValuationPeer[],
+  payrollSettings: null as PayrollSettings | null,
+  fxRates: EMPTY_FX as FxRates,
+  tillSessions: EMPTY_TILL_SESSIONS as TillSession[],
 };
 
 /** Resolve the authenticated user id from the session cookie. */
@@ -208,6 +225,11 @@ async function getUserId(req: NextRequest): Promise<string | null> {
   const c = req.cookies.get(sessionCookieName());
   const token = typeof c === 'string' ? c : c?.value;
   return verifySessionToken(token);
+}
+
+/** 403 response when ws is not in the caller's registry (a foreign or deleted workspace). */
+function forbiddenWorkspace() {
+  return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
 }
 
 export async function GET(req: NextRequest) {
@@ -219,6 +241,12 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const wsParam = url.searchParams.get('ws');
   const ws = isValidWsId(wsParam) ? wsParam : null;
+
+  // A workspace id that is not in the caller's registry is foreign (or
+  // deleted): refuse instead of reading a shadow key that can never be real.
+  if (ws && !(await ownsWorkspace(userId, ws))) {
+    return NextResponse.json({ error: 'forbidden_workspace' }, { status: 403 });
+  }
 
   // Single bulk fetch — one DB query instead of dozens of parallel ones.
   // The ping write runs concurrently to stamp the sentinel key.
@@ -333,6 +361,14 @@ export async function GET(req: NextRequest) {
     warehouses: get<Warehouse[]>('warehouses') ?? DEFAULT_STATE.warehouses,
     stockMovements: get<StockMovement[]>('stockMovements') ?? DEFAULT_STATE.stockMovements,
     posSales: get<PosSale[]>('posSales') ?? DEFAULT_STATE.posSales,
+    capTable: get<CapTableState>('capTable') ?? DEFAULT_STATE.capTable,
+    quotes: get<Quote[]>('quotes') ?? DEFAULT_STATE.quotes,
+    purchaseOrders: get<PurchaseOrder[]>('purchaseOrders') ?? DEFAULT_STATE.purchaseOrders,
+    valuationSnapshots: get<ValuationSnapshot[]>('valuationSnapshots') ?? DEFAULT_STATE.valuationSnapshots,
+    valuationPeers: get<ValuationPeer[]>('valuationPeers') ?? DEFAULT_STATE.valuationPeers,
+    payrollSettings: get<PayrollSettings>('payrollSettings') ?? DEFAULT_STATE.payrollSettings,
+    fxRates: get<FxRates>('fxRates') ?? DEFAULT_STATE.fxRates,
+    tillSessions: get<TillSession[]>('tillSessions') ?? DEFAULT_STATE.tillSessions,
   });
 }
 
@@ -376,6 +412,10 @@ export async function POST(req: NextRequest) {
       if (!isValidWsId(body.ws)) {
         return NextResponse.json({ ok: false, error: 'Workspace id required for this entity' }, { status: 400 });
       }
+      // Refuse writes to a workspace outside the caller's registry: without
+      // this the write lands in an unreachable shadow key (writes that look
+      // accepted but are never readable again).
+      if (!(await ownsWorkspace(userId, body.ws as string))) return forbiddenWorkspace();
       key = userWsKey(userId, body.ws as string, entity);
       // A workspace that has not paid cannot be set up or used: nothing of its own is saved (see lib/borga/billing.ts).
       const unpaid = await paymentRequired(userId, body.ws as string);
@@ -399,11 +439,19 @@ export async function POST(req: NextRequest) {
       }
       if (!r.ok) return NextResponse.json({ ok: false, saved: false, error: 'conflict', current: r.current }, { status: 409 });
       handOffSoon(userId, body.ws, entity);
+      if (typeof body.ws === 'string') {
+        const ws = body.ws;
+        void import('@/lib/borga/audit').then((m) => m.appendAudit(userId, ws, entity, r.version)).catch(() => undefined);
+      }
       return NextResponse.json({ ok: true, saved: true, version: r.version });
     }
     const ok = await setBorgaState(key, body.value ?? null);
     if (!ok) return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
     handOffSoon(userId, body.ws, entity);
+    if (entity !== 'workspaces' && typeof body.ws === 'string') {
+      const ws = body.ws;
+      void import('@/lib/borga/audit').then((m) => m.appendAudit(userId, ws, entity, null)).catch(() => undefined);
+    }
     return NextResponse.json({ ok: true, saved: true });
   } catch {
     return NextResponse.json({ ok: false, error: 'Invalid body' }, { status: 400 });

@@ -49,13 +49,17 @@ test('every session-less public endpoint is exempt, and only those', async () =>
     ['/api/borga/hooks/twilio', 'POST'],
     ['/api/borga/tickets/inbound', 'POST'],
     ['/api/borga/webhooks/inbound', 'POST'],
+    ['/api/borga/webhooks/postmark', 'POST'],
+    ['/api/borga/portal/bpt_faketoken12345678901234567890', 'GET'],
+    ['/api/borga/portal/bpt_faketoken12345678901234567890', 'POST'],
+    ['/api/borga/share/bst_faketoken12345678901234567890', 'GET'],
     ['/api/borga/email/unsubscribe', 'GET'],
     ['/api/borga/voice/call/twiml', 'POST'],
     ['/api/borga/voice/call/audio', 'GET'],
   ];
   for (const [path, method] of open) assert.equal(passedThrough(await proxy(req(path, { method }))), true, `${method} ${path}`);
   // same family of paths, wrong verb or sibling, stays closed
-  for (const [path, method] of [['/api/borga/tickets/inbound', 'GET'], ['/api/borga/webhooks/inbound', 'DELETE'], ['/api/borga/webhooks/dispatch', 'POST'], ['/api/borga/voice/call', 'POST']] as const) {
+  for (const [path, method] of [['/api/borga/tickets/inbound', 'GET'], ['/api/borga/webhooks/inbound', 'DELETE'], ['/api/borga/webhooks/postmark', 'GET'], ['/api/borga/portal/bpt_faketoken12345678901234567890', 'DELETE'], ['/api/borga/share/bst_faketoken12345678901234567890', 'POST'], ['/api/borga/webhooks/dispatch', 'POST'], ['/api/borga/voice/call', 'POST']] as const) {
     assert.equal((await proxy(req(path, { method }))).status, 401, `${method} ${path}`);
   }
 });

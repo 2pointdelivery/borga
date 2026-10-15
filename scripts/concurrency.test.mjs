@@ -136,8 +136,9 @@ test("another user's data and versions are separate", async () => {
   const { A, B } = users;
   assert.deepEqual(Object.keys(await versions(B)), [], "B has stored nothing, and A's versions are not visible");
   const r = await save({ ...B, ws: A.ws }, 'goals', [{ id: 'b' }], 0);
-  assert.equal(r.status, 200, "B's first save into A's workspace id lands in B's own space");
+  assert.equal(r.status, 403, 'a save naming another workspace id is refused, not shadow-written');
   assert.notEqual((await stored(A)).goals?.[0]?.id, 'b');
+  assert.deepEqual(Object.keys(await versions(B)), [], 'the refused save stored nothing under B either');
 });
 
 test('a malformed baseVersion is rejected (400), never treated as "no check"', async () => {

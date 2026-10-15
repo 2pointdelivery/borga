@@ -185,6 +185,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, taskId: id, jobId: result.jobId });
   }
 
+  // escalations — move undecided past-due approvals to their escalation targets now.
+  if (action === 'escalations') {
+    if (!ws) return NextResponse.json({ ok: false, error: 'ws required' }, { status: 400 });
+    const { ownsWorkspace } = await import('@/lib/borga/workspace-access');
+    if (!(await ownsWorkspace(userId, ws))) return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
+    const { sweepApprovalEscalations } = await import('@/lib/borga/approvals-server');
+    return NextResponse.json({ ok: true, ...(await sweepApprovalEscalations(userId, ws)) });
+  }
+
+  // recurring — generate due draft invoices and unpaid bills now (the "Run due now" buttons).
+  if (action === 'recurring') {    if (!ws) return NextResponse.json({ ok: false, error: 'ws required' }, { status: 400 });
+    const { ownsWorkspace } = await import('@/lib/borga/workspace-access');
+    if (!(await ownsWorkspace(userId, ws))) return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
+    const unpaid = await paymentRequired(userId, ws);
+    if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
+    const { runRecurringDocs } = await import('@/lib/borga/recurring-server');
+    const r = await runRecurringDocs(userId, ws);
+    return NextResponse.json({ ok: true, ...r });
+  }
+
   return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });
 }
 

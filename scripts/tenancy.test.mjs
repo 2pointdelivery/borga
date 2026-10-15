@@ -90,6 +90,21 @@ before(async () => {
 
   const conn = await call(A, 'POST', `/api/borga/connections?ws=${A.ws}`, { action: 'save', provider: 'supermemory', values: { apiKey: `sm_${MARK_A}` } });
   assert.equal(conn.status, 200, `A saves a connection: ${conn.text.slice(0, 200)}`);
+
+  // ── A seeds the newer entities (quotes, procurement, equity, valuation, payroll, billing) ──
+  for (const [entity, value] of [
+    ['quotes', [{ id: 'q-a', number: 'Q-A', customerId: 'c', customerName: MARK_A, lines: [], status: 'draft', version: 1, issued: '2026-01-01', validUntil: '2026-02-01' }]],
+    ['purchaseOrders', [{ id: 'po-a', number: 'PO-A', vendorId: 'v', vendorName: MARK_A, lines: [], status: 'draft', orderedAt: '2026-01-01' }]],
+    ['capTable', { stakeholders: [{ id: 'st-a', name: MARK_A, kind: 'founder' }], classes: [], holdings: [], safes: [], options: [], optionPoolAuthorized: 0 }],
+    ['valuationSnapshots', [{ at: '2026-01-01T00:00:00.000Z', fmv: 1, revenue: 1, multiple: 1, ev: 1, source: 'manual' }]],
+    ['valuationPeers', [{ id: 'peer-a', ticker: MARK_A, name: MARK_A, evRev: 2, updatedAt: '2026-01-01T00:00:00.000Z' }]],
+    ['payrollSettings', { country: 'GH', mapping: { salaryExpense: 'x', clearing: 'x', netPayable: 'x', employerExpense: 'x', taxPayables: {}, employerPayables: {} } }],
+    ['bills', [{ id: 'b-a', vendorId: 'v', vendorName: MARK_A, number: 'B-A', amount: 1, received: '2026-01-01', due: '2026-02-01', status: 'unpaid' }]],
+    ['invoices', [{ id: 'in-a', number: 'INV-A', client: MARK_A, amount: 1, status: 'draft', issued: '2026-01-01', due: '2026-02-01' }]],
+  ]) {
+    const r = await call(A, 'POST', '/api/borga/data', { entity, ws: A.ws, value });
+    assert.equal(r.status, 200, `A seeds ${entity}: ${r.text.slice(0, 160)}`);
+  }
 });
 
 after(async () => {
@@ -108,8 +123,7 @@ after(async () => {
 test('control: A can read back everything A seeded', async () => {
   const { A } = users;
   const data = await call(A, 'GET', `/api/borga/data?ws=${A.ws}`);
-  assert.ok(seen(data, MARK_A).length, 'A sees own goals/knowledge');
-  const tickets = await call(A, 'GET', `/api/borga/tickets?ws=${A.ws}`);
+  assert.ok(seen(data, MARK_A).length, 'A sees own goals/knowledge');  const tickets = await call(A, 'GET', `/api/borga/tickets?ws=${A.ws}`);
   assert.ok(seen(tickets, MARK_A).length, 'A sees own ticket');
   const mem = await call(A, 'GET', `/api/borga/memory?ws=${A.ws}`);
   assert.ok(seen(mem, MARK_A).length, 'A sees own memory');
@@ -247,4 +261,76 @@ test('requests without a session see nothing on any of these routes', async () =
     const r = await call(null, 'GET', path(A.ws));
     assert.equal(r.status, 401, `${name} without a session`);
   }
+});
+
+test("B's writes to the newer entities land in B's space; A's copies survive", async () => {
+  const { A, B } = users;
+  for (const [entity, value] of [
+    ['quotes', [{ id: 'q-b', number: 'Q-B', customerId: 'c', customerName: MARK_B, lines: [], status: 'draft', version: 1, issued: '2026-01-01', validUntil: '2026-02-01' }]],
+    ['purchaseOrders', [{ id: 'po-b', number: 'PO-B', vendorId: 'v', vendorName: MARK_B, lines: [], status: 'draft', orderedAt: '2026-01-01' }]],
+    ['payrollSettings', { country: 'US', mapping: { salaryExpense: 'x', clearing: 'x', netPayable: 'x', employerExpense: 'x', taxPayables: {}, employerPayables: {} } }],
+    ['bills', [{ id: 'b-b', vendorId: 'v', vendorName: MARK_B, number: 'B-B', amount: 1, received: '2026-01-01', due: '2026-02-01', status: 'unpaid' }]],
+  ]) {
+    const r = await call(B, 'POST', '/api/borga/data', { entity, ws: B.ws, value });
+    assert.equal(r.status, 200, `${entity}: B saves in own space: ${r.text.slice(0, 160)}`);
+  }
+  const data = await call(A, 'GET', `/api/borga/data?ws=${A.ws}`);
+  assert.ok(seen(data, MARK_A).length, "A keeps own new-entity data");
+  assert.deepEqual(seen(data, MARK_B), [], "B's new-entity writes reached A");
+  const own = await call(B, 'GET', `/api/borga/data?ws=${B.ws}`);
+  assert.ok(seen(own, MARK_B).length, "B's writes landed in B's own space");
+});
+
+test('reads and writes naming a foreign workspace are refused, never shadow-written', async () => {
+  const { A, B } = users;
+  for (const [entity, value] of [
+    ['quotes', [{ id: 'q-x', number: 'Q-X', customerId: 'c', customerName: MARK_B, lines: [], status: 'draft', version: 1, issued: '2026-01-01', validUntil: '2026-02-01' }]],
+    ['bills', [{ id: 'b-x', vendorId: 'v', vendorName: MARK_B, number: 'B-X', amount: 1, received: '2026-01-01', due: '2026-02-01', status: 'unpaid' }]],
+  ]) {
+    const r = await call(B, 'POST', '/api/borga/data', { entity, ws: A.ws, value });
+    assert.equal(r.status, 403, `${entity}: cross-workspace write must be refused, got ${r.status}`);
+  }
+  const g = await call(B, 'GET', `/api/borga/data?ws=${A.ws}`);
+  assert.equal(g.status, 403, `cross-workspace read must be refused, got ${g.status}`);
+  const data = await call(A, 'GET', `/api/borga/data?ws=${A.ws}`);
+  assert.deepEqual(seen(data, MARK_B), [], 'no cross-tenant write leaked into A');
+  const own = await call(B, 'GET', `/api/borga/data?ws=${B.ws}`);
+  assert.deepEqual(seen(own, 'Q-X'), [], 'refused writes left no shadow keys in B either');
+});
+
+test('dedicated new-entity routes refuse cross-tenant access', async () => {
+  const { A, B } = users;
+  // B accepts A's quote id in A's workspace: must 404 (quote lookup is scoped to B's own list).
+  const acc = await call(B, 'POST', '/api/borga/quotes/accept', { ws: A.ws, quoteId: 'q-a', target: 'invoice' });
+  assert.ok([400, 404].includes(acc.status), `cross-tenant accept must fail, got ${acc.status}`);
+  // B releases payroll in A's workspace: no employees in B's view of that id → 400, nothing written.
+  const pay = await call(B, 'POST', '/api/borga/payroll/post', { ws: A.ws, monthKey: '2026-01' });
+  assert.ok([400, 404].includes(pay.status), `cross-tenant payroll must fail, got ${pay.status}`);
+  // B receives A's PO: 404, no stock moves.
+  const recv = await call(B, 'POST', '/api/borga/purchase-orders/receive', { ws: A.ws, poId: 'po-a', lines: [] });
+  assert.equal(recv.status, 404, `cross-tenant receive must 404, got ${recv.status}`);
+  // A's data untouched afterwards.
+  const data = await call(A, 'GET', `/api/borga/data?ws=${A.ws}`);
+  assert.deepEqual(seen(data, MARK_B), [], 'no cross-tenant write leaked into A');
+});
+
+test('public v1 API scopes keys to their workspaces', async () => {
+  const { A, B } = users;
+  const made = await call(B, 'POST', '/api/borga/api-keys', { action: 'create', name: `tenancy-${tag}`, wsIds: [B.ws] });
+  assert.equal(made.status, 200, `B mints a key: ${made.text.slice(0, 160)}`);
+  const secret = made.json?.secret;
+  assert.ok(secret, 'secret returned once');
+  const v1 = (method, path, auth) => call(null, method, path, undefined, auth ? { Authorization: `Bearer ${auth}` } : {});
+  // No credential → 401; A's workspace under B's key → 400; B's own → 200.
+  assert.equal((await v1('GET', `/api/v1/quotes?ws=${A.ws}`)).status, 401, 'v1 without credential');
+  assert.equal((await v1('GET', `/api/v1/quotes?ws=${A.ws}`, secret)).status, 400, "B's key on A's workspace");
+  const own = await v1('GET', `/api/v1/quotes?ws=${B.ws}`, secret);
+  assert.equal(own.status, 200, "B's key on B's workspace");
+  assert.deepEqual(seen(own, MARK_A), [], "v1 leaked A's data");
+  // Missing ?ws= → 400 even with a valid key.
+  assert.equal((await v1('GET', '/api/v1/quotes', secret)).status, 400, 'v1 without ?ws=');
+  // Revoked key stops working.
+  const rev = await call(B, 'POST', '/api/borga/api-keys', { action: 'revoke', id: made.json?.key?.id });
+  assert.equal(rev.status, 200, 'revoke');
+  assert.equal((await v1('GET', `/api/v1/quotes?ws=${B.ws}`, secret)).status, 401, 'revoked key refused');
 });

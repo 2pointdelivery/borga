@@ -59,19 +59,60 @@ function rateLimited(req: NextRequest, max: number = MAX_REQUESTS): boolean {
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  const isDev = process.env.NODE_ENV === 'development';
 
-  // Security headers on every response this proxy touches. No CSP script-src:
-  // Next.js emits inline scripts that a strict policy would break (that needs
-  // per-request nonce plumbing); the rest of the headers below are safe to
-  // enforce. Revisit CSP once nonce support lands server-wide.
+  // Per-request CSP nonce (vibe-check #8). Next.js picks up the `x-nonce`
+  // request header and applies it to its own inline scripts plus
+  // <Script> components, so `script-src` needs no 'unsafe-inline' in
+  // production. Static assets (/_next/*) are outside the matcher and keep the
+  // static policy from next.config.ts (which deliberately has no script-src).
+  // Escape hatch: CSP_NONCE=off restores 'unsafe-inline' without a redeploy.
+  const nonce = crypto.randomUUID().replace(/-/g, '');
+  const nonceOn = !isDev && process.env.CSP_NONCE !== 'off';
+  const reqHeaders = new Headers(req.headers);
+  reqHeaders.set('x-nonce', nonce);
+
+  // Host allow-lists mirror next.config.ts (kept in sync by hand; both read
+  // the same env vars). Blank means self-only.
+  let extraHosts = '';
+  try {
+    const u = process.env.NEXT_PUBLIC_UMAMI_SCRIPT_URL;
+    if (u && u.startsWith('http') && !u.includes('your-umami-domain')) extraHosts += ` https://${new URL(u).host}`;
+  } catch { /* ignore */ }
+  if (process.env.VERCEL) extraHosts += ' https://va.vercel-analytics.com https://*.vercel-insights.com';
+  let engineOrigin = '';
+  try {
+    const raw = process.env.BORGA_ENGINE_URL;
+    if (raw && raw.startsWith('http')) engineOrigin = new URL(raw).origin;
+  } catch { /* ignore */ }
+  const scriptSrc = nonceOn
+    ? `script-src 'self' 'nonce-${nonce}'${extraHosts}`
+    : `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}${extraHosts}`;
+  const csp = [
+    "default-src 'self'",
+    scriptSrc,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https://happyseeds.ai https://*.happyseeds.ai",
+    "font-src 'self' data:",
+    `connect-src 'self' https://*.happyseeds.ai${extraHosts}${engineOrigin ? ` ${engineOrigin}` : ''}`,
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    ...(isDev ? [] : ['upgrade-insecure-requests']),
+  ].join('; ');
+
+  // Security headers on every response this proxy touches.
   const hardened = (res: NextResponse) => {
     res.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     res.headers.set('X-Frame-Options', 'DENY');
     res.headers.set('X-Content-Type-Options', 'nosniff');
     res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.headers.set('Permissions-Policy', 'camera=(), geolocation=()');
+    if (!pathname.startsWith('/api/')) res.headers.set('Content-Security-Policy', csp);
     return res;
   };
+  const nextWithNonce = () => hardened(NextResponse.next({ request: { headers: reqHeaders } }));
 
   // Sign-in, sign-up, password reset and the client error sink are reachable without a session,
   // so they get a much tighter per-IP limit (brute force, signup/email spam, log flooding).
@@ -79,7 +120,7 @@ export async function proxy(req: NextRequest) {
     if (req.method === 'POST' && rateLimited(req, pathname === '/api/diag' ? 30 : AUTH_MAX_REQUESTS)) {
       return hardened(NextResponse.json({ ok: false, error: 'Too many requests. Wait a minute and try again.' }, { status: 429 }));
     }
-    return hardened(NextResponse.next());
+    return nextWithNonce();
   }
 
   // Public API: Bearer-key (or session) auth happens inside each route — the
@@ -88,7 +129,7 @@ export async function proxy(req: NextRequest) {
     if (rateLimited(req)) {
       return hardened(NextResponse.json({ ok: false, error: 'Too many requests' }, { status: 429 }));
     }
-    return hardened(NextResponse.next());
+    return nextWithNonce();
   }
 
   // --- Page-level auth gating ---
@@ -102,19 +143,19 @@ export async function proxy(req: NextRequest) {
         url.searchParams.set('next', pathname + req.nextUrl.search);
         return hardened(NextResponse.redirect(url));
       }
-      return hardened(NextResponse.next());
+      return nextWithNonce();
     }
 
     if (pathname === '/') {
       if (authed) return hardened(NextResponse.redirect(new URL('/app', req.url)));
-      return hardened(NextResponse.next());
+      return nextWithNonce();
     }
 
-    return hardened(NextResponse.next());
+    return nextWithNonce();
   }
 
   // --- API surface (/api/borga) ---
-  const res = hardened(NextResponse.next());
+  const res = nextWithNonce();
 
   // Rate limit all Borga API traffic.
   if (rateLimited(req)) {
@@ -150,6 +191,12 @@ export async function proxy(req: NextRequest) {
     return res;
   }
 
+  // Postmark deliverability webhooks (bounce / complaint / delivery / open / click):
+  // authenticated inside the route by HTTP Basic Auth against the deployment's webhook credentials.
+  if (pathname === '/api/borga/webhooks/postmark' && req.method === 'POST') {
+    return res;
+  }
+
   // Provider webhooks (Meta, Twilio): authenticated inside the route by the provider's
   // HMAC signature against the tenant's stored credentials; rate limited above.
   if (pathname.startsWith('/api/borga/hooks/') && (req.method === 'POST' || req.method === 'GET')) {
@@ -159,6 +206,19 @@ export async function proxy(req: NextRequest) {
   // External business events (GitHub, Stripe, bookings): bearer token or webhook HMAC,
   // checked inside the route. The same path's token-management action checks the session itself.
   if (pathname === '/api/borga/webhooks/inbound' && req.method === 'POST') {
+    return res;
+  }
+
+  // Shared report API: the token in the path is the whole credential
+  // (hash-verified in the route; revoked/expired rejected there).
+  if (pathname.startsWith('/api/borga/share/') && req.method === 'GET') {
+    return res;
+  }
+
+  // Customer portal API: the token in the path is the whole credential
+  // (constant-time verified in the route; revoked/expired rejected there).
+  // Stays rate limited above like all Borga traffic.
+  if (pathname.startsWith('/api/borga/portal/') && (req.method === 'GET' || req.method === 'POST')) {
     return res;
   }
 
@@ -203,5 +263,9 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/', '/app/:path*', '/api/borga/:path*', '/api/v1/:path*', '/api/auth/:path*', '/api/diag'],
+  // Every HTML page must pass through here (CSP nonce + headers). When adding
+  // a top-level page, add its path — otherwise it serves with the static
+  // policy only (fail-open, reported in the security audit).
+  matcher: ['/', '/app/:path*', '/portal/:path*', '/share/:path*', '/login', '/signup', '/forgot', '/reset', '/developers', '/api/borga/:path*', '/api/v1/:path*', '/api/auth/:path*', '/api/diag'],
 };
+

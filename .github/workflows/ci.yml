@@ -25,3 +25,44 @@ jobs:
         env:
           SESSION_SECRET: ci-only-not-a-secret-0123456789abcdef
           DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/ci
+
+  # Live isolation suites (T12 tenancy, T21 concurrency) plus the migration
+  # scenarios. Needs a real MySQL + running server, so it is a separate job
+  # with a MySQL service. Fails the build if any tenant can see another's data.
+  isolation:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-pass-123
+          MYSQL_DATABASE: ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    env:
+      DATABASE_URL: mysql://root:ci-root-pass-123@127.0.0.1:3306/ci
+      SESSION_SECRET: ci-only-not-a-secret-0123456789abcdef
+      BORGA_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      CRON_SECRET: ci-cron-secret-0123456789abcdef
+      SIGNUP_MODE: open
+      BORGA_OPERATOR_EMAILS: nobody@example.test
+      BASE_URL: http://localhost:13000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:migrate
+      - run: pnpm db:migrate
+      - run: pnpm build
+      # next start -p 13000 (see the start script); backgrounded for the live suites below.
+      - run: nohup pnpm start > /tmp/borga-ci.log 2>&1 &
+      - run: for i in $(seq 1 45); do curl -fsS http://localhost:13000/api/health && break || sleep 2; done
+      - run: pnpm test:tenancy
+      - run: pnpm test:concurrency

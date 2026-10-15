@@ -4,8 +4,13 @@ import { paymentRequired } from '@/lib/borga/billing-server';
 import { tickWorkspace, listScheduledWorkspaces } from '@/lib/borga/heartbeat';
 import { loadFeatures } from '@/lib/borga/features-server';
 import { listTicketWorkspaces, pollMailbox, sweepSla } from '@/lib/borga/tickets-server';
+import { listApprovalWorkspaces, sweepApprovalEscalations } from '@/lib/borga/approvals-server';
+import { listReportScheduleWorkspaces, sweepReportSchedules } from '@/lib/borga/report-schedules-server';
 import { listFilingWorkspaces, sweepFilings } from '@/lib/borga/filings-server';
 import { listConnectionWorkspaces } from '@/lib/borga/connections-server';
+import { sweepValuationSnapshots } from '@/lib/borga/valuation-snapshots-server';
+import { sweepFxRates } from '@/lib/borga/fx-server';
+import { sweepFundingDeadlines, sweepScheduledPosts } from '@/lib/borga/sweeps-server';
 import { runDueSyncJobs } from '@/lib/borga/sync-jobs';
 import '@/lib/borga/sync-registry';
 import { processAllPendingDeliveries } from '@/lib/borga/webhook-queue';
@@ -81,6 +86,33 @@ export async function POST(req: NextRequest) {
       filings[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
     }
   }
+  // Monthly valuation snapshots (real FMV history) for companies using Valuation.
+  let snapshots: Record<string, unknown> = {};
+  try {
+    snapshots = await sweepValuationSnapshots();
+  } catch (e) {
+    snapshots = { ok: false, error: (e as Error).message };
+  }
+  // Daily exchange-rate refresh for workspaces holding foreign balances.
+  let fx: Record<string, unknown> = {};
+  try {
+    fx = await sweepFxRates();
+  } catch (e) {
+    fx = { ok: false, error: (e as Error).message };
+  }
+  // Funding deadline reminders + due scheduled-post notices (deduped per threshold).
+  let funding: Record<string, unknown> = {};
+  try {
+    funding = await sweepFundingDeadlines();
+  } catch (e) {
+    funding = { ok: false, error: (e as Error).message };
+  }
+  let postsDue: Record<string, unknown> = {};
+  try {
+    postsDue = await sweepScheduledPosts();
+  } catch (e) {
+    postsDue = { ok: false, error: (e as Error).message };
+  }
   // Integration sync jobs (ads, comps, scheduled posts ...) for every workspace with a connection.
   const sync: Record<string, unknown> = {};
   for (const t of await listConnectionWorkspaces()) {
@@ -91,7 +123,25 @@ export async function POST(req: NextRequest) {
     }
   }
   const webhooksPending = await processAllPendingDeliveries().catch(() => -1);
-  return NextResponse.json({ ok: true, workspaces: targets.length, results, tickets, filings, sync, webhooksPending });
+  // Approval escalations: undecided past due moves to its escalation target, once each.
+  const escalations: Record<string, unknown> = {};
+  for (const t of await listApprovalWorkspaces()) {
+    try {
+      escalations[`${t.userId}/${t.ws}`] = await sweepApprovalEscalations(t.userId, t.ws);
+    } catch (e) {
+      escalations[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
+    }
+  }
+  // Scheduled P&L emails: due schedules render and send (deduped per period window).
+  const reports: Record<string, unknown> = {};
+  for (const t of await listReportScheduleWorkspaces()) {
+    try {
+      reports[`${t.userId}/${t.ws}`] = await sweepReportSchedules(t.userId, t.ws);
+    } catch (e) {
+      reports[`${t.userId}/${t.ws}`] = { ok: false, error: (e as Error).message };
+    }
+  }
+  return NextResponse.json({ ok: true, workspaces: targets.length, results, tickets, filings, snapshots, fx, funding, postsDue, sync, webhooksPending, escalations, reports });
 }
 
 export async function GET(req: NextRequest) {
