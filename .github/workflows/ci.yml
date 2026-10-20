@@ -63,6 +63,14 @@ jobs:
       - run: pnpm build
       # next start -p 13000 (see the start script); backgrounded for the live suites below.
       - run: nohup pnpm start > /tmp/borga-ci.log 2>&1 &
-      - run: for i in $(seq 1 45); do curl -fsS http://localhost:13000/api/health && break || sleep 2; done
+      - name: Wait for the server
+        run: |
+          for i in $(seq 1 45); do
+            curl -fsS http://localhost:13000/api/health && exit 0
+            sleep 2
+          done
+          echo "server did not become healthy; its log:"
+          cat /tmp/borga-ci.log
+          exit 1
       - run: pnpm test:tenancy
       - run: pnpm test:concurrency
