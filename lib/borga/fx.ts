@@ -5,16 +5,61 @@
 import type { JournalEntry } from './data';
 
 export interface FxRates {
-  /** Always EUR for ECB feeds (rates are per 1 EUR); manual tables keep their own base. */
+  /** Base currency for the table (CAD for Bank of Canada Valet API, EUR for ECB, or custom for manual). */
   base: string;
-  /** ECB publication date (YYYY-MM-DD). */
+  /** Publication date (YYYY-MM-DD). */
   date: string;
   /** ISO code → units per 1 base. */
   rates: Record<string, number>;
-  source: 'ecb' | 'manual';
+  source: 'boc' | 'ecb' | 'manual';
 }
 
-export const EMPTY_FX: FxRates = { base: 'EUR', date: '', rates: {}, source: 'manual' };
+export const EMPTY_FX: FxRates = { base: 'CAD', date: '', rates: {}, source: 'manual' };
+
+/**
+ * Parses the Bank of Canada Valet API `FX_RATES_DAILY` JSON response
+ * (`https://www.bankofcanada.ca/valet/observations/group/FX_RATES_DAILY/json?recent=1`).
+ *
+ * Each `FX{CCY}CAD` series reports Canadian dollars per 1 unit of foreign currency (`v`).
+ * We invert `1 / v` so `rates[CCY]` is units of `CCY` per `1 CAD` (`base: 'CAD'`).
+ */
+export function parseBocValetJson(input: string | Record<string, unknown>): FxRates {
+  const data = (typeof input === 'string' ? JSON.parse(input) : input) as {
+    observations?: Array<Record<string, unknown>>;
+  };
+  const observations = Array.isArray(data?.observations) ? data.observations : [];
+  if (!observations.length) throw new Error('Not a usable Bank of Canada Valet FX feed.');
+
+  const rates: Record<string, number> = { CAD: 1 };
+  let latestDate = '';
+
+  // Observations are ordered chronologically; later rows override earlier ones for each series
+  for (const obs of observations) {
+    const d = typeof obs.d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(obs.d) ? obs.d : '';
+    if (d && d > latestDate) latestDate = d;
+    for (const [key, val] of Object.entries(obs)) {
+      const m = /^FX([A-Z]{3})CAD$/.exec(key);
+      if (!m || !val || typeof val !== 'object') continue;
+      const vStr = (val as { v?: unknown }).v;
+      const cadPerForeign = Number(vStr);
+      if (Number.isFinite(cadPerForeign) && cadPerForeign > 0) {
+        const ccy = m[1];
+        rates[ccy] = Math.round((1 / cadPerForeign) * 1_000_000) / 1_000_000;
+      }
+    }
+  }
+
+  if (Object.keys(rates).length < 5 || !latestDate) {
+    throw new Error('Not a usable Bank of Canada Valet FX feed.');
+  }
+
+  return {
+    base: 'CAD',
+    date: latestDate,
+    rates,
+    source: 'boc',
+  };
+}
 
 /** Parses the ECB eurofxref XML (currency + rate Cube elements only — no XML parser dependency). */
 export function parseEcbXml(xml: string): FxRates {

@@ -25,6 +25,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Field } from './form-widgets';
 import { PriorityPill, SlaPanel, StatusPill, TicketInsightBox } from './ticket-bits';
+import { ConfigDeepLinkButton } from './ConfigDeepLink';
 
 const NONE = '__none__';
 
@@ -44,10 +45,13 @@ function CommentView({ c }: { c: TicketComment }) {
       </div>
       <p className="whitespace-pre-wrap break-words">{c.body}</p>
       {c.kind === 'public' && c.delivery && c.delivery !== 'sent' && (
-        <p className="mt-2 flex items-center gap-1 text-[11px] text-amber-600">
-          <AlertTriangle className="h-3 w-3" />
-          {c.delivery === 'not-configured' ? 'Saved, but not emailed — SMTP is not configured.' : 'Saved, but the email failed to send.'}
-        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-amber-600">
+          <span className="flex items-center gap-1">
+            <AlertTriangle className="h-3 w-3" />
+            {c.delivery === 'not-configured' ? 'Saved, but not emailed — SMTP is not configured.' : 'Saved, but the email failed to send.'}
+          </span>
+          {c.delivery === 'not-configured' && <ConfigDeepLinkButton target="smtp" label="Configure SMTP" />}
+        </div>
       )}
     </div>
   );

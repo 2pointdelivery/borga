@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, BarChart3 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -404,13 +404,13 @@ function SnapshotCard({ wsId }: { wsId?: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [cmpA, setCmpA] = useState('');
   const [cmpB, setCmpB] = useState('');
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!wsId) return;
     const r = await fetch(`/api/borga/valuation/snapshots?ws=${encodeURIComponent(wsId)}`);
     const d = await r.json() as { snapshots?: Array<{ at: string; fmv: number; revenue: number; multiple: number; ev: number; source: string }> };
     setSnaps(d.snapshots ?? []);
-  };
-  useEffect(() => { void load(); }, [wsId]);
+  }, [wsId]);
+  useEffect(() => { void load(); }, [load]);
   const save = async () => {
     setMsg(null);
     const r = await fetch('/api/borga/valuation/snapshots', {

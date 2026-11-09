@@ -151,32 +151,52 @@ function layout(ctx: MailContext, title: string, intro: string, blocks: Block[],
   const body = blocks
     .map((b) => {
       const parts: string[] = [];
-      if (b.heading) parts.push(`<h2 style="margin:22px 0 8px;font-size:15px;color:#111827;">${esc(b.heading)}</h2>`);
-      for (const l of b.lines ?? []) parts.push(`<p style="margin:6px 0;font-size:14px;line-height:1.55;color:#374151;">${esc(l)}</p>`);
+      if (b.heading) {
+        parts.push(
+          `<h2 style="margin:22px 0 8px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">${esc(b.heading)}</h2>`,
+        );
+      }
+      for (const l of b.lines ?? []) {
+        parts.push(`<p style="margin:6px 0;font-size:14px;line-height:1.6;color:#334155;">${esc(l)}</p>`);
+      }
       if (b.rows?.length) {
         parts.push(
-          `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:6px 0;">${b.rows
-            .map((r) => `<tr><td style="padding:7px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;">${esc(r.left)}</td>${r.right !== undefined ? `<td align="right" style="padding:7px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#374151;white-space:nowrap;">${esc(r.right)}</td>` : ''}</tr>`)
+          `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:8px 0;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">${b.rows
+            .map(
+              (r) =>
+                `<tr><td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#0f172a;">${esc(r.left)}</td>${
+                  r.right !== undefined
+                    ? `<td align="right" style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;font-weight:600;color:#0f172a;white-space:nowrap;">${esc(r.right)}</td>`
+                    : ''
+                }</tr>`,
+            )
             .join('')}</table>`,
         );
       }
       return parts.join('');
     })
     .join('');
-  const button = link ? `<p style="margin:24px 0 6px;"><a href="${esc(link)}" style="display:inline-block;background:${accent};color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 20px;border-radius:8px;">${esc(cta!.label)}</a></p>` : '';
-  const unsub = ctx.unsubscribeUrl ? ` <a href="${esc(ctx.unsubscribeUrl)}" style="color:#6b7280;">Unsubscribe</a>.` : '';
+  const button = link
+    ? `<p style="margin:24px 0 6px;"><a href="${esc(link)}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;padding:10px 18px;border-radius:6px;">${esc(cta!.label)} &rarr;</a></p>`
+    : '';
+  const unsub = ctx.unsubscribeUrl ? ` <a href="${esc(ctx.unsubscribeUrl)}" style="color:#64748b;text-decoration:underline;">Unsubscribe</a>.` : '';
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title></head>
-<body style="margin:0;background:#f3f4f6;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+<body style="margin:0;background:#f8fafc;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
 <span style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(intro)}</span>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;overflow:hidden;">
-<tr><td style="background:${accent};padding:16px 24px;color:#ffffff;font-size:15px;font-weight:700;">${esc(ctx.workspaceName)}</td></tr>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #e2e8f0;border-top:3px solid ${accent};border-radius:10px;overflow:hidden;">
+<tr><td style="padding:18px 24px;border-bottom:1px solid #f1f5f9;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td style="font-size:14px;font-weight:700;letter-spacing:-0.01em;color:#0f172a;">${esc(ctx.workspaceName)}</td>
+    <td align="right" style="font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#64748b;">NOTIFICATION</td>
+  </tr></table>
+</td></tr>
 <tr><td style="padding:24px;">
-<h1 style="margin:0 0 6px;font-size:20px;line-height:1.3;color:#111827;">${esc(title)}</h1>
-<p style="margin:0 0 4px;font-size:14px;line-height:1.55;color:#374151;">${esc(intro)}</p>
+<h1 style="margin:0 0 8px;font-size:18px;font-weight:600;letter-spacing:-0.015em;line-height:1.35;color:#0f172a;">${esc(title)}</h1>
+<p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:#475569;">${esc(intro)}</p>
 ${body}${button}
 </td></tr>
-<tr><td style="padding:16px 24px;border-top:1px solid #e5e7eb;font-size:12px;line-height:1.5;color:#6b7280;">You get this because email updates are on for <strong>${esc(ctx.workspaceName)}</strong> in Borga (Settings → Email updates).${unsub}</td></tr>
+<tr><td style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.5;color:#64748b;">You get this because email updates are on for <strong>${esc(ctx.workspaceName)}</strong> in Borga (Settings → Email updates).${unsub}</td></tr>
 </table></td></tr></table></body></html>`;
   const text = [
     `${ctx.workspaceName}`,
@@ -213,24 +233,24 @@ export interface TransactionalMail {
 const safeHref = (u: string) => (/^https?:\/\/[^\s"'<>]+$/i.test(u) ? u : '');
 
 export function renderTransactional(m: TransactionalMail): { html: string; text: string } {
-  const accent = safeColor(m.accent ?? '#6366f1');
+  const accent = safeColor(m.accent ?? '#0f172a');
   const href = m.cta ? safeHref(m.cta.url) : '';
-  const paras = m.paragraphs.map((p) => `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#374151;">${esc(p)}</p>`).join('');
+  const paras = m.paragraphs.map((p) => `<p style="margin:0 0 14px;font-size:14px;line-height:1.65;color:#334155;">${esc(p)}</p>`).join('');
   const button = href
-    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 8px;"><tr><td style="background:${accent};border-radius:8px;"><a href="${esc(href)}" style="display:inline-block;padding:12px 24px;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;">${esc(m.cta!.label)}</a></td></tr></table><p style="margin:0 0 6px;font-size:12px;line-height:1.5;color:#6b7280;">If the button does not work, copy this address into your browser:<br><a href="${esc(href)}" style="color:${accent};word-break:break-all;">${esc(href)}</a></p>`
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 10px;"><tr><td style="background:#0f172a;border-radius:6px;"><a href="${esc(href)}" style="display:inline-block;padding:11px 20px;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;">${esc(m.cta!.label)} &rarr;</a></td></tr></table><p style="margin:0 0 6px;font-size:11px;line-height:1.5;color:#64748b;">Or copy this link into your browser:<br><a href="${esc(href)}" style="color:#0f172a;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;">${esc(href)}</a></p>`
     : '';
-  const note = m.note ? `<p style="margin:18px 0 0;font-size:13px;line-height:1.55;color:#6b7280;">${esc(m.note)}</p>` : '';
+  const note = m.note ? `<p style="margin:18px 0 0;font-size:12px;line-height:1.55;color:#64748b;">${esc(m.note)}</p>` : '';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>${esc(m.title)}</title></head>
-<body style="margin:0;background:#f3f4f6;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<body style="margin:0;background:#f8fafc;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
 <span style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(m.preheader)}</span>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 12px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:12px;overflow:hidden;">
-<tr><td style="background:${accent};padding:16px 24px;color:#ffffff;font-size:16px;font-weight:700;">${esc(m.brand)}</td></tr>
-<tr><td style="padding:28px 24px 24px;">
-<h1 style="margin:0 0 14px;font-size:21px;line-height:1.3;color:#111827;">${esc(m.title)}</h1>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-top:3px solid ${accent};border-radius:10px;overflow:hidden;">
+<tr><td style="padding:18px 24px;border-bottom:1px solid #f1f5f9;font-size:14px;font-weight:700;letter-spacing:-0.01em;color:#0f172a;">${esc(m.brand)}</td></tr>
+<tr><td style="padding:26px 24px 24px;">
+<h1 style="margin:0 0 14px;font-size:19px;font-weight:600;letter-spacing:-0.015em;line-height:1.3;color:#0f172a;">${esc(m.title)}</h1>
 ${paras}${button}${note}
 </td></tr>
-<tr><td style="padding:16px 24px;border-top:1px solid #e5e7eb;font-size:12px;line-height:1.5;color:#6b7280;">${esc(m.reason)}</td></tr>
+<tr><td style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.5;color:#64748b;">${esc(m.reason)}</td></tr>
 </table></td></tr></table></body></html>`;
   const text = [
     m.brand, '', m.title, '', ...m.paragraphs.flatMap((p) => [p, '']),
@@ -239,6 +259,164 @@ ${paras}${button}${note}
     '--', m.reason,
   ].join('\n');
   return { html, text };
+}
+
+export type BusinessDocumentKind = 'invoice' | 'quote' | 'bill' | 'purchase_order';
+
+export interface BusinessDocumentLine {
+  label: string;
+  qty: number;
+  unitPrice: number;
+  amount?: number;
+}
+
+export interface BusinessDocumentEmailInput {
+  kind: BusinessDocumentKind;
+  workspaceName: string;
+  documentNumber: string;
+  recipientName: string;
+  currency: string;
+  totalAmount: number;
+  issuedDate?: string;
+  dueOrValidDate?: string;
+  statusLabel?: string;
+  message?: string;
+  lines?: BusinessDocumentLine[];
+  subtotalAmount?: number;
+  discountAmount?: number;
+  taxAmount?: number;
+  ctaUrl?: string;
+  ctaLabel?: string;
+}
+
+const DOC_KIND_BADGE: Record<BusinessDocumentKind, { badge: string; dateLabel: string; accent: string }> = {
+  invoice: { badge: 'INVOICE', dateLabel: 'Due date', accent: '#0f172a' },
+  quote: { badge: 'QUOTE / PROPOSAL', dateLabel: 'Valid until', accent: '#0284c7' },
+  bill: { badge: 'REMITTANCE / BILL', dateLabel: 'Scheduled / Due', accent: '#059669' },
+  purchase_order: { badge: 'PURCHASE ORDER', dateLabel: 'Expected delivery', accent: '#4f46e5' },
+};
+
+/**
+ * Stripe / Resend / Hemrock-inspired HTML + plain-text email renderer for
+ * Invoices, Quotes, Vendor Bills / Remittances, and Purchase Orders.
+ */
+export function renderBusinessDocumentEmail(doc: BusinessDocumentEmailInput): RenderedMail {
+  const meta = DOC_KIND_BADGE[doc.kind] ?? DOC_KIND_BADGE.invoice;
+  const cur = /^[A-Z]{3}$/i.test(doc.currency) ? doc.currency.toUpperCase() : 'USD';
+  const money = (n: number) => fmtMoney(n, cur);
+  const totalFormatted = money(doc.totalAmount);
+  const cleanNumber = clip(doc.documentNumber, 40);
+  const cleanWorkspace = clip(doc.workspaceName, 60);
+  const cleanRecipient = clip(doc.recipientName, 80);
+
+  const subject = `${meta.badge === 'QUOTE / PROPOSAL' ? 'Quote' : meta.badge === 'PURCHASE ORDER' ? 'Purchase Order' : meta.badge === 'REMITTANCE / BILL' ? 'Remittance' : 'Invoice'} ${cleanNumber} from ${cleanWorkspace} (${totalFormatted})`;
+
+  const messageHtml = doc.message?.trim()
+    ? `<p style="margin:0 0 18px;font-size:14px;line-height:1.65;color:#334155;white-space:pre-line;">${esc(doc.message.trim())}</p>`
+    : '';
+
+  const lines = (doc.lines ?? []).filter((l) => l.label.trim() && l.qty > 0);
+  const lineTableHtml = lines.length
+    ? `<h2 style="margin:22px 0 8px;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">Line Items</h2>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+        <thead>
+          <tr style="background:#f8fafc;">
+            <th align="left" style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Item</th>
+            <th align="right" style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Qty</th>
+            <th align="right" style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Unit</th>
+            <th align="right" style="padding:8px 12px;border-bottom:1px solid #e2e8f0;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${lines
+            .map((l) => {
+              const lineTotal = l.amount ?? l.qty * l.unitPrice;
+              return `<tr>
+                <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;color:#0f172a;">${esc(l.label)}</td>
+                <td align="right" style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#475569;">${esc(l.qty)}</td>
+                <td align="right" style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#475569;">${esc(money(l.unitPrice))}</td>
+                <td align="right" style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;color:#0f172a;">${esc(money(lineTotal))}</td>
+              </tr>`;
+            })
+            .join('')}
+        </tbody>
+      </table>`
+    : '';
+
+  const summaryRows: Array<{ label: string; val: string; bold?: boolean }> = [];
+  if (typeof doc.subtotalAmount === 'number') summaryRows.push({ label: 'Subtotal', val: money(doc.subtotalAmount) });
+  if (typeof doc.discountAmount === 'number' && doc.discountAmount > 0) summaryRows.push({ label: 'Discount', val: `-${money(doc.discountAmount)}` });
+  if (typeof doc.taxAmount === 'number' && doc.taxAmount > 0) summaryRows.push({ label: 'Tax', val: money(doc.taxAmount) });
+  summaryRows.push({ label: 'Total', val: totalFormatted, bold: true });
+
+  const summaryHtml = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;border-collapse:collapse;">
+    ${summaryRows
+      .map(
+        (r) => `<tr>
+          <td style="padding:5px 0;font-size:13px;${r.bold ? 'font-weight:700;color:#0f172a;border-top:1px solid #e2e8f0;padding-top:10px;' : 'color:#64748b;'}">${esc(r.label)}</td>
+          <td align="right" style="padding:5px 0;font-size:${r.bold ? '15px' : '13px'};font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;${r.bold ? 'font-weight:700;color:#0f172a;border-top:1px solid #e2e8f0;padding-top:10px;' : 'color:#334155;'}">${esc(r.val)}</td>
+        </tr>`,
+      )
+      .join('')}
+  </table>`;
+
+  const ctaHref = doc.ctaUrl ? safeHref(doc.ctaUrl) : '';
+  const ctaHtml = ctaHref
+    ? `<p style="margin:22px 0 4px;"><a href="${esc(ctaHref)}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;padding:10px 18px;border-radius:6px;">${esc(doc.ctaLabel || 'View Document')} &rarr;</a></p>`
+    : '';
+
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(subject)}</title></head>
+<body style="margin:0;background:#f8fafc;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+<span style="display:none;max-height:0;overflow:hidden;opacity:0;">${esc(subject)}</span>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #e2e8f0;border-top:3px solid ${meta.accent};border-radius:10px;overflow:hidden;">
+<tr><td style="padding:18px 24px;border-bottom:1px solid #f1f5f9;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td style="font-size:14px;font-weight:700;color:#0f172a;">${esc(cleanWorkspace)}</td>
+    <td align="right"><span style="display:inline-block;padding:3px 8px;border-radius:4px;background:#f1f5f9;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;font-weight:600;color:#334155;">${esc(meta.badge)} &middot; ${esc(cleanNumber)}</span></td>
+  </tr></table>
+</td></tr>
+<tr><td style="padding:24px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:18px;padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+    <tr>
+      <td>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Prepared for</div>
+        <div style="margin-top:2px;font-size:14px;font-weight:600;color:#0f172a;">${esc(cleanRecipient)}</div>
+        ${doc.dueOrValidDate ? `<div style="margin-top:4px;font-size:12px;color:#64748b;">${esc(meta.dateLabel)}: <strong style="color:#334155;">${esc(doc.dueOrValidDate)}</strong></div>` : ''}
+      </td>
+      <td align="right" valign="top">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;">Total (${esc(cur)})</div>
+        <div style="margin-top:2px;font-size:20px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;font-weight:700;color:#0f172a;">${esc(totalFormatted)}</div>
+      </td>
+    </tr>
+  </table>
+  ${messageHtml}
+  ${lineTableHtml}
+  ${summaryHtml}
+  ${ctaHtml}
+</td></tr>
+<tr><td style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.5;color:#64748b;">Sent by <strong>${esc(cleanWorkspace)}</strong>. Reply directly to this email if you have any questions regarding ${esc(cleanNumber)}.</td></tr>
+</table></td></tr></table></body></html>`;
+
+  const text = [
+    `${cleanWorkspace} — ${meta.badge} ${cleanNumber}`,
+    `Prepared for: ${cleanRecipient}`,
+    ...(doc.dueOrValidDate ? [`${meta.dateLabel}: ${doc.dueOrValidDate}`] : []),
+    `Total: ${totalFormatted}`,
+    '',
+    ...(doc.message?.trim() ? [doc.message.trim(), ''] : []),
+    ...(lines.length
+      ? [
+          'Line Items:',
+          ...lines.map((l) => `- ${l.label}: ${l.qty} × ${money(l.unitPrice)} = ${money(l.amount ?? l.qty * l.unitPrice)}`),
+          '',
+        ]
+      : []),
+    ...summaryRows.map((r) => `${r.label}: ${r.val}`),
+    ...(ctaHref ? ['', `${doc.ctaLabel || 'View Document'}: ${ctaHref}`] : []),
+  ].join('\n');
+
+  return { subject, html, text };
 }
 
 /**

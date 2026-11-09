@@ -1,7 +1,8 @@
 import 'server-only';
 import { randomBytes } from 'crypto';
 import { getBorgaState, listBorgaKeys, setBorgaState } from './persistence';
-import { API_KEY_PREFIX, hashApiKey, isExpiredKey, parseBearerSecret, safeEqual, toPublic, type ApiKeyPublic, type ApiKeyRecord } from './api-keys';
+import { API_KEY_PREFIX, hashApiKey, isExpiredKey, parseBearerSecret, safeEqual, toPublic, verifyApiKeyWithLookup, type ApiKeyLookup, type ApiKeyPublic, type ApiKeyRecord } from './api-keys';
+import { sessionUserGone } from '@/lib/auth/session-guard';
 
 export { API_KEY_PREFIX, hashApiKey, isExpiredKey, parseBearerSecret, safeEqual, toPublic };
 export type { ApiKeyPublic, ApiKeyRecord };
@@ -48,20 +49,25 @@ export async function revokeApiKey(userId: string, id: string): Promise<boolean>
   return true;
 }
 
+/** One owner key namespace per user; the pure loop decides whether a match is acceptable. */
+const apiKeyLookup: ApiKeyLookup = {
+  owners: async () => {
+    const owners: string[] = [];
+    for (const k of await listBorgaKeys('t::%::apikeys')) {
+      const m = /^t::([^:]+)::apikeys$/.exec(k);
+      if (m) owners.push(m[1]);
+    }
+    return owners;
+  },
+  keysOf: async (userId) => (await getBorgaState<ApiKeyRecord[]>(storeKey(userId))) ?? [],
+  // The same uncached lookup the cookie path uses, so a deleted owner's key is refused with the ordinary 401 on the next call.
+  userGone: sessionUserGone,
+};
+
 /** Finds the live key matching a presented secret. Scans owners (acceptable at this scale); compares hashes in constant time.
  *  Revoked and expired keys verify as invalid — an expiry is a silent revoke for rotation. */
 export async function verifyApiKey(secret: string, nowIso = new Date().toISOString()): Promise<{ userId: string; key: ApiKeyRecord } | null> {
-  const wanted = hashApiKey(secret);
-  for (const k of await listBorgaKeys('t::%::apikeys')) {
-    const m = /^t::([^:]+)::apikeys$/.exec(k);
-    if (!m) continue;
-    const rows = (await getBorgaState<ApiKeyRecord[]>(k)) ?? [];
-    for (const r of rows) {
-      if (r.revokedAt || isExpiredKey(r, nowIso) || !safeEqual(r.hash, wanted)) continue;
-      return { userId: m[1], key: r };
-    }
-  }
-  return null;
+  return verifyApiKeyWithLookup(secret, apiKeyLookup, nowIso);
 }
 
 export async function touchApiKey(userId: string, id: string): Promise<void> {

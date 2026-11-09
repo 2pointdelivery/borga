@@ -106,7 +106,7 @@ export function SupermemoryCard() {
   const live = s.featureOn && s.keySource !== 'none';
 
   return (
-    <Card className="space-y-4 p-5">
+    <Card id="config-supermemory" className="space-y-4 p-5 scroll-mt-20">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Brain className="h-4 w-4 text-primary" /> Long-term AI memory (Supermemory)

@@ -25,7 +25,7 @@ Adds semantic recall to Borga's agents using [Supermemory](https://supermemory.a
 ## Verification status
 - Unit tests: container tags, document shapes, redaction, ranking/dedupe, breaker and backoff (`lib/supermemory.test.ts`).
 - Run end to end against a **local fake of the documented API** (shapes from `https://api.supermemory.ai/v4/openapi`): off/on/muted sources send nothing; key and flag changes take effect immediately; memory mirror and delete; KB sync (incremental, removal); retrieval reaching the prompt; cross-agent recall; profile; ticket index/redaction/similar/reopen; outage → outbox → delivered after backoff; purge; auth.
-- **Not yet run against the real service.** Run `SUPERMEMORY_API_KEY=… node scripts/smoke-supermemory.mjs` once. It uses a throwaway container and deletes what it creates. Things only the real service can confirm: that re-adding a `customId` after delete behaves as expected, fact-extraction latency, and result ranking.
+- **Not yet run against the real service.** Things only the real service can confirm: that re-adding a `customId` after delete behaves as expected, fact-extraction latency, and result ranking.
 
 ## Self-hosting / tests
 `SUPERMEMORY_BASE_URL` overrides the API base (default `https://api.supermemory.ai`).

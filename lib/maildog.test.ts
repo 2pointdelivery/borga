@@ -43,5 +43,5 @@ test('the company mail form offers MailDog: a sign-up link and a preset that pas
   const ok = parseSmtp({ ...preset.values, user: 'me@acme.com', password: 'p', fromAddress: 'noreply@acme.com' });
   assert.equal(ok.ok, true);
   assert.ok(smtp.steps.some((s) => s.includes(MAILDOG_URL)), 'the how-to steps point to MailDog');
-  assert.equal(PROVIDERS.filter((p) => p.signup).length, 1, 'only the mail form has a sign-up box');
+  assert.deepEqual(PROVIDERS.filter((p) => p.signup).map((p) => p.id), ['smtp', 'explee'], 'sign-up boxes stay deliberate: mail (MailDog) and outreach (Explee)');
 });

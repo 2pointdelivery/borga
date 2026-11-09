@@ -5,6 +5,7 @@ import { renderInvite } from '@/lib/auth/email-templates';
 import { getUserById } from '@/lib/auth/queries';
 import { getBorgaState, setBorgaState, insertBorgaStateIfAbsent, listBorgaKeys } from '@/lib/borga/persistence';
 import { INVITE_TTL_MS, hashInviteCode, inviteKey, inviteUsedKey, newInviteCode, type InviteRecord } from '@/lib/auth/signup-policy';
+import { takeRouteLimit } from '@/lib/borga/route-limits';
 
 export const runtime = 'nodejs';
 
@@ -52,6 +53,15 @@ export async function POST(req: NextRequest) {
 
   const email = String(body?.email ?? '').trim().toLowerCase();
   if (!EMAIL_RE.test(email)) return NextResponse.json({ ok: false, error: 'A valid email address is required.' }, { status: 400 });
+
+  // Each invite can send mail on signup: cap how many one operator can mint.
+  const limit = takeRouteLimit('invite', op.userId);
+  if (limit.limited) {
+    return NextResponse.json(
+      { ok: false, error: 'Too many invites created. Try again later.' },
+      { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec) } },
+    );
+  }
 
   const code = newInviteCode();
   const now = Date.now();

@@ -11,6 +11,7 @@ import { FormDialog, Field, FieldGrid, TextField, NotesField } from '../form-kit
 import { CurrencySelect } from '../form-widgets';
 import { SearchSelect } from '../SearchSelect';
 import { FilterPills, TableSearch, TableToolbar, CrudTable, IdCell, TextCell, AmountCell, StatusBadge, EmptyRow, IconBtn, RowActions } from '../data-table';
+import { DocumentEmailDialog, type DocumentEmailTarget } from '../DocumentEmailDialog';
 import { cn } from '@/lib/utils';
 
 const STATUS_STYLE: Record<QuoteStatus, string> = {
@@ -40,6 +41,8 @@ export function QuotesTab() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [emailQuote, setEmailQuote] = useState<Quote | null>(null);
+  const [emailTarget, setEmailTarget] = useState<DocumentEmailTarget | null>(null);
 
   const openNew = () => {
     setEditing(null); setCustomerId(''); setManualCustomer(''); setCustomerEmail(''); setCurrency('');
@@ -94,9 +97,39 @@ export function QuotesTab() {
     setShowNew(false); setEditing(null);
   };
 
-  const send = (id: string) => {
+  const openQuoteEmail = (id: string) => {
     const q = quotes.find((x) => x.id === id);
-    if (q && q.status === 'draft') upsertQuote({ ...q, status: 'sent' });
+    if (!q) return;
+    const cust = customers.find((c) => c.id === q.customerId || c.name.toLowerCase() === q.customerName.toLowerCase());
+    const recipientEmail = q.customerEmail || cust?.email || '';
+    const wsName = activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? 'Our Team';
+    const cur = q.currency ?? wsCurrency;
+    const total = quoteTotal(q);
+    setEmailQuote(q);
+    setEmailTarget({
+      to: recipientEmail,
+      subject: `Quote ${q.number} from ${wsName}`,
+      body: `Hi ${q.customerName},\n\nPlease find attached our quote ${q.number} for ${cur} ${total.toFixed(2)}, valid until ${q.validUntil}.${q.paymentTerms ? `\n\nPayment terms: ${q.paymentTerms}` : ''}${q.notes ? `\n\nNotes: ${q.notes}` : ''}\n\nLet us know if you have any questions or would like to proceed.\n\nKind regards,\n${wsName}`,
+      document: {
+        kind: 'quote',
+        workspaceName: wsName,
+        documentNumber: `${q.number} (v${q.version})`,
+        recipientName: q.customerName,
+        currency: cur,
+        totalAmount: total,
+        subtotalAmount: quoteSubtotal(q),
+        discountAmount: quoteDiscount(q),
+        taxAmount: quoteTax(q),
+        issuedDate: q.issued,
+        dueOrValidDate: q.validUntil,
+        lines: q.lines.map((l) => ({
+          label: l.label,
+          qty: l.qty,
+          unitPrice: l.unitPrice,
+          amount: l.qty * l.unitPrice,
+        })),
+      },
+    });
   };
 
   const version = (id: string) => {
@@ -172,8 +205,8 @@ export function QuotesTab() {
                     <IconBtn title={expanded[q.id] ? 'Hide lines' : 'View lines'} onClick={() => setExpanded((e) => ({ ...e, [q.id]: !e[q.id] }))}>
                       <Eye className="h-3.5 w-3.5" />
                     </IconBtn>
-                    {q.status === 'draft' && (
-                      <IconBtn title="Send to customer" tone="green" onClick={() => send(q.id)}>
+                    {(q.status === 'draft' || q.status === 'sent') && (
+                      <IconBtn title="Email quote to customer" tone="green" onClick={() => openQuoteEmail(q.id)}>
                         <Send className="h-3 w-3" />
                       </IconBtn>
                     )}
@@ -307,6 +340,25 @@ export function QuotesTab() {
           <div className="flex justify-between font-semibold"><span>Total</span><span>${quoteTotal(preview).toFixed(2)}</span></div>
         </div>
       </FormDialog>
+
+      <DocumentEmailDialog
+        open={!!emailQuote}
+        onOpenChange={(o) => {
+          if (!o) {
+            setEmailQuote(null);
+            setEmailTarget(null);
+          }
+        }}
+        ws={activeWorkspaceId}
+        target={emailTarget}
+        onSent={(_via, to) => {
+          if (emailQuote) {
+            upsertQuote({ ...emailQuote, customerEmail: to || emailQuote.customerEmail, status: emailQuote.status === 'draft' ? 'sent' : emailQuote.status });
+            log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'user', kind: 'task', message: `Quote ${emailQuote.number} emailed to ${to}.` });
+            setMsg(`Quote ${emailQuote.number} sent to ${to}.`);
+          }
+        }}
+      />
     </div>
   );
 }

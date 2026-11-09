@@ -125,11 +125,15 @@ export async function proxy(req: NextRequest) {
 
   // Public API: Bearer-key (or session) auth happens inside each route — the
   // proxy only rate-limits here so keys cannot be brute-forced or abused.
-  if (pathname.startsWith('/api/v1/')) {
+  if (pathname === '/api/v1' || pathname.startsWith('/api/v1/')) {
     if (rateLimited(req)) {
-      return hardened(NextResponse.json({ ok: false, error: 'Too many requests' }, { status: 429 }));
+      const limited = hardened(NextResponse.json({ ok: false, error: 'Too many requests' }, { status: 429 }));
+      limited.headers.set('X-Borga-API-Version', 'v1 (1.4.0)');
+      return limited;
     }
-    return nextWithNonce();
+    const r = nextWithNonce();
+    r.headers.set('X-Borga-API-Version', 'v1 (1.4.0)');
+    return r;
   }
 
   // --- Page-level auth gating ---
@@ -137,10 +141,12 @@ export async function proxy(req: NextRequest) {
     const uid = await verifySessionToken(reqToken(req));
     const authed = !!uid && isValidUserId(uid);
 
-    if (pathname.startsWith('/app')) {
+    if (pathname.startsWith('/app') || pathname.startsWith('/admin') || pathname.startsWith('/services')) {
       if (!authed) {
         const url = new URL('/login', req.url);
         url.searchParams.set('next', pathname + req.nextUrl.search);
+        if (pathname.startsWith('/admin')) url.searchParams.set('role', 'admin');
+        else if (pathname.startsWith('/services')) url.searchParams.set('role', 'advisor');
         return hardened(NextResponse.redirect(url));
       }
       return nextWithNonce();
@@ -266,6 +272,6 @@ export const config = {
   // Every HTML page must pass through here (CSP nonce + headers). When adding
   // a top-level page, add its path — otherwise it serves with the static
   // policy only (fail-open, reported in the security audit).
-  matcher: ['/', '/app/:path*', '/portal/:path*', '/share/:path*', '/login', '/signup', '/forgot', '/reset', '/developers', '/api/borga/:path*', '/api/v1/:path*', '/api/auth/:path*', '/api/diag'],
+  matcher: ['/', '/app/:path*', '/admin', '/admin/:path*', '/services', '/services/:path*', '/portal/:path*', '/share/:path*', '/login', '/signup', '/forgot', '/reset', '/developers', '/api/borga/:path*', '/api/v1', '/api/v1/:path*', '/api/auth/:path*', '/api/diag'],
 };
 

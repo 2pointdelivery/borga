@@ -55,6 +55,59 @@ export function toPublic(r: ApiKeyRecord): ApiKeyPublic {
   return { id: r.id, name: r.name, prefix: r.prefix, wsIds: r.wsIds, createdAt: r.createdAt, lastUsedAt: r.lastUsedAt, revokedAt: r.revokedAt, expiresAt: r.expiresAt ?? null };
 }
 
+/**
+ * A key is only as good as the account behind it. `userGone` is injected (and uncached) so a deleted owner is refused on
+ * the very next call; a database error there fails open so an outage cannot revoke every key holder at once. Pure, so both
+ * behaviours are unit-tested.
+ */
+export async function keyOwnerAllowed<T extends { userId: string }>(
+  hit: T | null,
+  userGone: (userId: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (!hit) return false;
+  try {
+    return !(await userGone(hit.userId));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Storage for the verification loop, injected so the deleted-owner rule is
+ * tested without a database. The server module owns the real lookup.
+ */
+export interface ApiKeyLookup {
+  /** Every user id that has an API-key entry. */
+  owners(): Promise<string[]>;
+  /** Stored keys for one owner. */
+  keysOf(userId: string): Promise<ApiKeyRecord[]>;
+  /** True when the account behind the key no longer exists (must be uncached). */
+  userGone(userId: string): Promise<boolean>;
+}
+
+/**
+ * The verification loop: a matched key is only good while its owner still
+ * exists, checked immediately before it is accepted (a deleted account must
+ * not keep a working credential). A database error fails open via
+ * `keyOwnerAllowed`, so an outage cannot revoke every key holder at once.
+ */
+export async function verifyApiKeyWithLookup(
+  secret: string,
+  lookup: ApiKeyLookup,
+  nowIso = new Date().toISOString(),
+): Promise<{ userId: string; key: ApiKeyRecord } | null> {
+  const wanted = hashApiKey(secret);
+  for (const owner of await lookup.owners()) {
+    const rows = await lookup.keysOf(owner);
+    for (const r of rows) {
+      if (r.revokedAt || isExpiredKey(r, nowIso) || !safeEqual(r.hash, wanted)) continue;
+      if (!(await keyOwnerAllowed({ userId: owner }, lookup.userGone))) return null;
+      return { userId: owner, key: r };
+    }
+  }
+  return null;
+}
+
 /** The ?ws= workspace must be valid and, for API keys, inside the key's scope. */
 export function wsAllowed(wsParam: string | null, keyWsIds?: string[]): string | null {
   if (!isValidWsId(wsParam)) return null;

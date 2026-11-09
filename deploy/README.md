@@ -29,6 +29,8 @@ systemctl list-timers 'borga-*'
 ```
 The cron timer calls `POST /api/borga/cron` every 5 minutes: heartbeat, IMAP mailbox poll, SLA sweep, integration syncs. It also keeps the VM busy, which helps against Oracle's idle-reclamation of Always Free instances.
 
+**Autopilot precedence.** When `CRON_SECRET` is set, that timer owns the scheduled beats and the app's in-process autopilot stands down (Runs & Queue → Autopilot shows "external cron"); unset `CRON_SECRET` to let the app beat on its own every 60s. Either way each due occurrence is claimed with a conditional write, so overlapping triggers cannot enqueue the same run twice. The loop logs a warning when its per-beat workspace cap leaves companies unswept.
+
 ## 4. First deploy checks
 1. `curl -fsS https://$DOMAIN/api/health` → `"db":"connected"`.
 2. Sign up at `https://$DOMAIN/signup`, create the first company.
@@ -82,6 +84,6 @@ The app rate-limits sign-in and the API by client address. It reads that from `X
 2. Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `BILLING_STARTS_ON`, then `BILLING_MODE=enforce`. The server refuses to start in production if any is missing or malformed.
 3. Companies that existed before `BILLING_STARTS_ON` keep working for `BILLING_GRACE_DAYS` and see a banner; new ones are locked until paid. A failed payment keeps working for 7 days, then locks. Administrators (`BORGA_OPERATOR_EMAILS`) are never charged, and a single workspace can be exempted with `POST /api/borga/operator/billing {userId, ws, comped: true}`.
 4. Users are the owner plus each accepted Team Invite; the Stripe quantity follows the team automatically.
-Taxes (VAT, sales tax) are not handled by this app: configure them in Stripe if you must charge them. Try it without Stripe using `node scripts/fake-stripe.mjs` (see the file header; development only).
+Taxes (VAT, sales tax) are not handled by this app: configure them in Stripe if you must charge them.
 
-**Bank feeds** use Salt Edge (API v6). Either each company enters its App ID and Secret under Connections, or you set `SALTEDGE_APP_ID` and `SALTEDGE_SECRET` for everyone. A Live client also needs `SALTEDGE_PRIVATE_KEY`. Try it without Salt Edge using `node scripts/fake-saltedge.mjs` (development only).
+**Bank feeds** use Salt Edge (API v6). Either each company enters its App ID and Secret under Connections, or you set `SALTEDGE_APP_ID` and `SALTEDGE_SECRET` for everyone. A Live client also needs `SALTEDGE_PRIVATE_KEY`.

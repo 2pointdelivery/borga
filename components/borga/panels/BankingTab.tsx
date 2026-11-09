@@ -5,6 +5,7 @@ import { useFeature } from '@/lib/borga/features-client';
 import { BankFeedCard } from './BankFeedCard';
 import { FxCard } from './FxCard';
 import { PdfStatementDialog } from './PdfStatementDialog';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Landmark,
@@ -298,7 +299,6 @@ export function BankingTab() {
           action: 'connect',
           appName: 'plaid',
           entityId: `banking-${activeWorkspace()?.id ?? 'default'}`,
-          apiKey: composio.apiKey,
         }),
       });
       const d = (await res.json()) as { ok?: boolean; connection?: { redirectUrl?: string }; error?: string };
@@ -317,7 +317,7 @@ export function BankingTab() {
             const pr = await fetch('/api/borga/composio', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-              body: JSON.stringify({ action: 'accounts', apiKey: composio.apiKey }),
+              body: JSON.stringify({ action: 'accounts' }),
             });
             const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { id?: string; appName?: string; status?: string }[] };
             if (!pd.ok) {
@@ -506,9 +506,12 @@ export function BankingTab() {
         </button>
       </div>
       {!hasComposioKey && (
-        <p className="rounded-lg border border-dashed bg-muted/20 p-2.5 text-[11px] text-muted-foreground">
-          Live feed linking uses composio.dev (Plaid toolkit) — add your API key under Integrations → AI &amp; Voice to enable it. Meanwhile, statements import via CSV and reconcile fully offline.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed bg-muted/20 p-2.5 text-[11px] text-muted-foreground">
+          <span>
+            Live feed linking uses composio.dev (Plaid toolkit) — add your API key under Integrations → Composio Toolkits to enable it. Meanwhile, statements import via CSV and reconcile fully offline.
+          </span>
+          <ConfigDeepLinkButton target="composio" label="Configure Composio" />
+        </div>
       )}
 
       {/* Reconciliation summary */}

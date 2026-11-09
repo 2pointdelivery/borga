@@ -59,7 +59,7 @@ async function clientFor(u: string, ws: string, inject?: SaltEdgeClient): Promis
   if (inject) return inject;
   const c = await resolveCredentials(u, ws);
   if (!c) throw new SaltEdgeUserError('Salt Edge is not set up. Add your App ID and Secret under Connections first.');
-  // a stand-in server (scripts/fake-saltedge.mjs) for development; never honoured in production, so no setting can send real credentials elsewhere
+  // SALTEDGE_BASE_URL points at a stand-in server for development; never honoured in production, so no setting can send real credentials elsewhere
   const base = process.env.NODE_ENV !== 'production' ? (process.env.SALTEDGE_BASE_URL ?? '').trim() || undefined : undefined;
   return createSaltEdgeClient(c, { base });
 }

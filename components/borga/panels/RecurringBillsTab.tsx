@@ -18,6 +18,7 @@ import { toast } from '@/lib/toast-bus';
 import { SectionTitle } from '../bits';
 import { SearchSelect } from '../SearchSelect';
 import { AccountSelect, DateInput, Field, ProjectSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { documentTotals } from '@/lib/borga/pricing';
 
 type EndMode = 'never' | 'date' | 'count';
 const UNIT: Record<RecurringFrequency, string> = { weekly: 'week', monthly: 'month', quarterly: 'quarter', yearly: 'year' };
@@ -61,17 +62,18 @@ export function RecurringBillsTab() {
   const [confirmDelete, setConfirmDelete] = useState<RecurringBill | null>(null);
 
   const taxRate = taxProfiles.filter((t) => form.taxProfileIds.includes(t.id)).reduce((s, t) => s + t.rate, 0);
-  const subtotal = form.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-  const total = subtotal + (subtotal * taxRate) / 100;
+  // Same arithmetic the server applies when the occurrence becomes a bill.
+  const totals = documentTotals(form.lines, { taxRate, currency });
+  const subtotal = totals.subtotal;
+  const total = totals.total;
 
   const rows = useMemo(
     () => recurringBills.map((r) => {
       const generated = bills.filter((b) => b.externalRef?.startsWith(`rec:${r.id}:`));
       const rate = taxProfiles.filter((t) => r.taxProfileIds.includes(t.id)).reduce((s, t) => s + t.rate, 0);
-      const sub = r.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-      return { r, generated, amount: sub + (sub * rate) / 100 };
+      return { r, generated, amount: documentTotals(r.lines, { taxRate: rate, currency }).total };
     }),
-    [recurringBills, bills, taxProfiles],
+    [recurringBills, bills, taxProfiles, currency],
   );
 
   const openCreate = () => {

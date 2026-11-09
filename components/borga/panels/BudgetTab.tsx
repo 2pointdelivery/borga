@@ -99,8 +99,10 @@ export function BudgetTab() {
   // P&L-only totals: revenue, cost and expense. Balance-sheet movements
   // (asset/liability rows) are planned separately and never mixed into the
   // operating total, which would double-count capex as "spend".
-  const PL_TYPES: AccountType[] = ['revenue', 'cost', 'expense'];
-  const plRows = useMemo(() => rows.filter((r) => PL_TYPES.includes(r.account.type)), [rows]);
+  const plRows = useMemo(
+    () => rows.filter((r) => (['revenue', 'cost', 'expense'] as AccountType[]).includes(r.account.type)),
+    [rows],
+  );
   const plColTotals = useMemo(() => {
     const budgeted: Record<string, number> = {};
     const actual: Record<string, number> = {};

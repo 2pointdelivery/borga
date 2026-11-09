@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { answerAdvisorQuestion, detectAdvisorTopics, routeAdvisorTopic, type AdvisorContext } from './borga/advisor';
+import {
+  HOW_TO_GUIDES,
+  answerAdvisorQuestion,
+  detectAdvisorTopics,
+  guidesForPage,
+  matchHowToGuide,
+  routeAdvisorTopic,
+  searchHowToGuides,
+  type AdvisorContext,
+} from './borga/advisor';
 
 const ctx = (p: Partial<AdvisorContext> = {}): AdvisorContext => ({
   finance: [],
@@ -138,4 +147,25 @@ test('follow-ups resolve against the last topic', () => {
   assert.ok(thanks.text.includes('Anytime'), thanks.text);
   // No memory + no keywords still gets the honest pointer.
   assert.ok(answerAdvisorQuestion('tell me more', c).text.includes('morning brief'));
+});
+
+test('how-to workflow questions return step-by-step instructions and deep links', () => {
+  assert.ok(HOW_TO_GUIDES.length >= 10);
+  const waGuide = matchHowToGuide('how do I connect whatsapp qr code?');
+  assert.ok(waGuide && waGuide.id === 'whatsapp-connect');
+
+  const kbAnswer = answerAdvisorQuestion('How to build knowledge base from website URL?', ctx());
+  assert.ok(kbAnswer.steps && kbAnswer.steps.length >= 3);
+  assert.equal(kbAnswer.link?.page, 'company');
+  assert.equal(kbAnswer.link?.tab, 'knowledge');
+
+  const smtpAnswer = answerAdvisorQuestion('How do I configure email smtp?', ctx());
+  assert.ok(smtpAnswer.steps && smtpAnswer.steps.length >= 3);
+  assert.equal(smtpAnswer.steps[0].link?.sectionId, 'config-provider-smtp');
+
+  const salesGuides = guidesForPage('sales', 'quotes');
+  assert.equal(salesGuides[0].id, 'quote-to-cash');
+
+  const searched = searchHowToGuides('payroll');
+  assert.equal(searched[0].id, 'run-payroll');
 });

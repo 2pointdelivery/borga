@@ -23,9 +23,10 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { useBorga } from '@/lib/borga/store';
+import { ConfigAutoLink } from './ConfigDeepLink';
 import { toast } from '@/lib/toast-bus';
 import { COMMS_CHANNEL_LABEL, type CommsChannel, type CommsMessage, type Lead } from '@/lib/borga/data';
-import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
+import { sendCompanyEmail, sendCompanySms } from '@/lib/borga/send-mail-client';
 import {
   addressOf, buildThreads, itemMatchesFolder, threadMatchesFolder,
   type InboxChannel, type InboxFolder, type InboxItem, type InboxThread,
@@ -326,7 +327,11 @@ export function InboxWorkspace({ mode, initialContactKey }: { mode: 'full' | 'sa
                         </div>
                         {i.subject && <p className="mt-1 text-xs font-semibold">{i.subject}</p>}
                         <p className="mt-0.5 whitespace-pre-wrap text-xs text-foreground/85">{i.body}</p>
-                        {i.note && <p className="mt-1 text-[10px] text-amber-600">{i.note}</p>}
+                        {i.note && (
+                          <div className="mt-1 text-[10px] text-amber-600">
+                            <ConfigAutoLink text={i.note} />
+                          </div>
+                        )}
                         {i.status === 'failed' && (
                           <p className="mt-1.5 text-[10px] text-amber-600">Retry from the composer below with the same text.</p>
                         )}
@@ -404,8 +409,12 @@ function ConversationComposer({
 
   const deliver = async (): Promise<{ ok: boolean; note?: string }> => {
     if (channel === 'email') {
-      const r = await sendCompanyEmail({ ws: activeWorkspaceId, to: address, subject, body, composioKey: composio.apiKey });
+      const r = await sendCompanyEmail({ ws: activeWorkspaceId, to: address, subject, body });
       return r.ok ? { ok: true } : { ok: false, note: r.note ?? 'The email could not be sent.' };
+    }
+    if (channel === 'sms') {
+      const r = await sendCompanySms({ ws: activeWorkspaceId, to: address, body: body.trim() });
+      return r.ok ? { ok: true } : { ok: false, note: r.note ?? 'The SMS could not be sent.' };
     }
     if (channel === 'whatsapp') {
       try {

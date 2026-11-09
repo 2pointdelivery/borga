@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Trash2, Building2, ArrowRight, Stethoscope } from 'lucide-react';
+import { Save, Trash2, Building2, ArrowRight, Stethoscope, Flame } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -157,6 +157,32 @@ export function LeadEditDialog({
                 <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => setConfirmConvert(true)}>
                   <ArrowRight className="h-3.5 w-3.5" /> Convert to customer account
                 </Button>
+              )}
+              {editing.hotWhy && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                  <p className="flex items-center gap-1.5 text-xs font-medium">
+                    <Flame className="h-3.5 w-3.5 shrink-0 text-amber-500" /> Why this lead is hot
+                    <span className="font-normal text-muted-foreground">— their reply, word for word</span>
+                  </p>
+                  <p className="mt-1 text-xs italic leading-relaxed">&ldquo;{editing.hotWhy}&rdquo;</p>
+                  {editing.explee && (editing.explee.jobTitle || editing.explee.country || editing.explee.linkedinUrl || editing.explee.companyDomain) && (
+                    <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                      {[editing.explee.jobTitle, editing.explee.country].filter(Boolean).join(' · ')}
+                      {editing.explee.linkedinUrl && (
+                        <>
+                          {(editing.explee.jobTitle || editing.explee.country) && '·'}{' '}
+                          <a href={editing.explee.linkedinUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">LinkedIn profile</a>
+                        </>
+                      )}
+                      {editing.explee.companyDomain && (
+                        <>
+                          {(editing.explee.jobTitle || editing.explee.country || editing.explee.linkedinUrl) && '·'}{' '}
+                          <a href={`https://${editing.explee.companyDomain}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">{editing.explee.companyDomain}</a>
+                        </>
+                      )}
+                    </p>
+                  )}
+                </div>
               )}
               <div className="grid grid-cols-2 gap-3">
                 <Input placeholder="Full name" value={editing.name} onChange={(e) => patch({ name: e.target.value })} />

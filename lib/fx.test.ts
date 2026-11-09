@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseEcbXml, rateFor, convert, revalueDocs, postFxRevaluation, resolveFxAccounts } from './borga/fx';
+import { parseBocValetJson, parseEcbXml, rateFor, convert, revalueDocs, postFxRevaluation, resolveFxAccounts } from './borga/fx';
 import { dcfValue } from './borga/dcf';
 
 const XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -16,6 +16,32 @@ test('ECB xml parses to dated rates', () => {
   assert.equal(r.date, '2026-10-09');
   assert.equal(r.rates.USD, 1.1624);
   assert.throws(() => parseEcbXml('<nope/>'));
+});
+
+test('Bank of Canada Valet JSON parses FX_RATES_DAILY observations into CAD-based rates and converts accurately', () => {
+  const bocSample = {
+    observations: [
+      {
+        d: '2026-10-16',
+        FXUSDCAD: { v: '1.4154' },
+        FXEURCAD: { v: '1.5908' },
+        FXGBPCAD: { v: '1.8871' },
+        FXAUDCAD: { v: '0.9837' },
+        FXJPYCAD: { v: '0.008960' },
+      },
+    ],
+  };
+  const r = parseBocValetJson(bocSample);
+  assert.equal(r.base, 'CAD');
+  assert.equal(r.source, 'boc');
+  assert.equal(r.date, '2026-10-16');
+  assert.equal(r.rates.CAD, 1);
+  // 100 USD at 1.4154 CAD per USD = 141.54 CAD
+  assert.equal(convert(100, 'USD', 'CAD', r), 141.54);
+  // 100 EUR -> USD cross rate via CAD pivot
+  const eurToUsd = convert(100, 'EUR', 'USD', r);
+  assert.ok(eurToUsd !== null && Math.abs(eurToUsd - (100 * 1.5908) / 1.4154) < 0.02);
+  assert.throws(() => parseBocValetJson({ observations: [] }));
 });
 
 test('conversion pivots through EUR, identity is exact', () => {

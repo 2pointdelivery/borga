@@ -102,7 +102,7 @@ export function ReportsCenter() {
       .filter((c) => c.endDate <= effTo)
       .sort((a, b) => (a.endDate < b.endDate ? 1 : -1));
     return relevant[0]?.endDate ?? null;
-  }, [closures, to]);
+  }, [closures, effTo]);
 
   /** Net debit−credit delta per account for entries with from ≤ dateIso ≤ to. */
   const periodDeltas = useMemo(() => {
@@ -111,7 +111,7 @@ export function ReportsCenter() {
       .filter((j) => j.dateIso >= effFrom && j.dateIso <= effTo)
       .forEach((j) => j.lines.forEach((l) => map.set(l.accountId, (map.get(l.accountId) ?? 0) + l.debit - l.credit)));
     return map;
-  }, [posted, from, to]);
+  }, [posted, effFrom, effTo]);
 
   /** Cumulative debit−credit per account for all posted entries ≤ to. */
   const cumulativeDeltas = useMemo(() => {
@@ -120,7 +120,7 @@ export function ReportsCenter() {
       .filter((j) => j.dateIso <= effTo)
       .forEach((j) => j.lines.forEach((l) => map.set(l.accountId, (map.get(l.accountId) ?? 0) + l.debit - l.credit)));
     return map;
-  }, [posted, to]);
+  }, [posted, effTo]);
 
   /** Deltas before `from` (opening positions). */
   const openingDeltas = useMemo(() => {
@@ -129,7 +129,7 @@ export function ReportsCenter() {
       .filter((j) => j.dateIso < effFrom)
       .forEach((j) => j.lines.forEach((l) => map.set(l.accountId, (map.get(l.accountId) ?? 0) + l.debit - l.credit)));
     return map;
-  }, [posted, from]);
+  }, [posted, effFrom]);
 
   /** Normal-side balance for an account given a delta map. */
   const bal = (accountId: string, deltas: Map<string, number>): number => {

@@ -5,6 +5,7 @@ import { CheckCircle2, Loader2, Settings2, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useBorga } from '@/lib/borga/store';
 import type { ProviderDef, ProviderId } from '@/lib/borga/providers';
+import { configTargetForProvider, openConfigDeepLink } from '@/lib/borga/config-deeplink';
 
 interface Answer {
   ok?: boolean;
@@ -36,7 +37,7 @@ export function ConnectionSummary({ providerId, hint }: { providerId: ProviderId
     return () => { off = true; };
   }, [ws, providerId]);
 
-  const manage = () => window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: 'integrations', tab: 'connections' } }));
+  const manage = () => openConfigDeepLink(configTargetForProvider(providerId));
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/20 px-3 py-2.5">
       <div className="min-w-0 text-xs">

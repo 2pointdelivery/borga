@@ -4,6 +4,7 @@ import { appOrigin } from '@/lib/auth/app-url';
 import { NextResponse } from 'next/server';
 import { hashPassword, hashToken } from '@/lib/auth/password';
 import { getUserByResetToken, updatePassword } from '@/lib/auth/queries';
+import { takeRouteLimit } from '@/lib/borga/route-limits';
 
 export const runtime = 'nodejs';
 
@@ -33,9 +34,12 @@ export async function POST(req: Request) {
     await updatePassword(user.id, hashPassword(password));
     // A reset is usually done because someone else may have access: end every session that exists.
     await (await import('@/lib/auth/session-revocation')).revokeAllSessions(user.id).catch(() => undefined);
-    // Tell the owner, so a reset they did not ask for is noticed.
+    // Tell the owner, so a reset they did not ask for is noticed. Capped like
+    // every other outbound form; a repeat request still succeeds, it just skips
+    // sending another message.
     const origin = appOrigin(req);
-    if (origin) {
+    const mailLimit = takeRouteLimit('passwordReset', user.id);
+    if (origin && !mailLimit.limited) {
       void (async () => {
         if (!(await isEmailConfigured())) return;
         const mail = renderPasswordChanged({ name: user.name, signInUrl: `${origin}/login` });

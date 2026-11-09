@@ -11,8 +11,13 @@ export function featuresKey(userId: string, ws: string): string {
 }
 
 export async function loadFeatures(userId: string, ws: string): Promise<ResolvedFeatures> {
-  const stored = await getBorgaState<FeatureOverrides>(featuresKey(userId, ws));
-  return resolveFeatures(stored, parseEnvOff(process.env.BORGA_FEATURES_OFF));
+  const [stored, adminCfg] = await Promise.all([
+    getBorgaState<FeatureOverrides>(featuresKey(userId, ws)),
+    getBorgaState<{ globalFeaturesOff?: string[] }>('t::admin::config').catch(() => null),
+  ]);
+  const adminOff = Array.isArray(adminCfg?.globalFeaturesOff) ? parseEnvOff(adminCfg.globalFeaturesOff.join(',')) : [];
+  const locked = [...new Set([...parseEnvOff(process.env.BORGA_FEATURES_OFF), ...adminOff])];
+  return resolveFeatures(stored, locked);
 }
 
 export async function setFeatureOverride(userId: string, ws: string, id: FeatureId, enabled: boolean): Promise<boolean> {

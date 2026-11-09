@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import type { ReportSchedule } from '@/lib/borga/report-schedules-core';
+import { ConfigAutoLink } from '../ConfigDeepLink';
 import { cn } from '@/lib/utils';
 
 const HEADERS = { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' };
@@ -156,7 +157,16 @@ export function ReportScheduleCard({ visible }: { visible: boolean }) {
         </Button>
       </div>
       {errors.length > 0 && <ul className="mt-2 text-[11px] text-rose-600">{errors.map((e) => <li key={e}>· {e}</li>)}</ul>}
-      {msg && <p className={cn('mt-2 rounded-lg border px-3 py-2 text-[11px]', msg.includes('Nothing sent') ? 'border-amber-500/30 bg-amber-500/5 text-amber-700' : 'border-rose-500/30 text-rose-600')}>{msg}</p>}
+      {msg && (
+        <div
+          className={cn(
+            'mt-2 rounded-lg border px-3 py-2 text-[11px]',
+            msg.includes('Nothing sent') ? 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300' : 'border-rose-500/30 text-rose-600',
+          )}
+        >
+          <ConfigAutoLink text={msg} />
+        </div>
+      )}
       {schedules !== null && schedules.length === 0 && <p className="mt-2 text-[11px] text-muted-foreground">No schedules yet — the weekly P&L is the usual choice.</p>}
     </Card>
   );

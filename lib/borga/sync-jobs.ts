@@ -16,7 +16,8 @@ export interface SyncJob {
   /** Skipped while this feature flag is off. */
   feature: FeatureId;
   everyMs: number;
-  run: (ctx: { userId: string; ws: string }) => Promise<void>;
+  /** Optional result surfaced to the caller (the browser tick toasts on it). */
+  run: (ctx: { userId: string; ws: string }) => Promise<void | Record<string, unknown>>;
 }
 
 const jobs = new Map<string, SyncJob>();
@@ -33,14 +34,14 @@ export async function getSyncStates(u: string, ws: string): Promise<Array<{ id: 
   return Promise.all(listSyncJobs().map(async (j) => ({ id: j.id, feature: j.feature, everyMs: j.everyMs, state: (await getBorgaState<SyncJobState>(stateKey(u, ws, j.id))) ?? EMPTY_SYNC_STATE })));
 }
 
-export async function runSyncJob(u: string, ws: string, job: SyncJob, force = false): Promise<{ ran: boolean; ok?: boolean; error?: string }> {
+export async function runSyncJob(u: string, ws: string, job: SyncJob, force = false): Promise<{ ran: boolean; ok?: boolean; error?: string; result?: Record<string, unknown> }> {
   const prev = (await getBorgaState<SyncJobState>(stateKey(u, ws, job.id))) ?? EMPTY_SYNC_STATE;
   if (!force && !isDue(prev, Date.now())) return { ran: false };
   await setBorgaState(stateKey(u, ws, job.id), { ...prev, runningSince: new Date().toISOString() });
   try {
-    await job.run({ userId: u, ws });
+    const result = (await job.run({ userId: u, ws })) ?? undefined;
     await setBorgaState(stateKey(u, ws, job.id), afterRun(prev, true, null, job.everyMs, Date.now()));
-    return { ran: true, ok: true };
+    return { ran: true, ok: true, result };
   } catch (e) {
     const msg = (e as Error).message || 'failed';
     await setBorgaState(stateKey(u, ws, job.id), afterRun(prev, false, msg, job.everyMs, Date.now()));

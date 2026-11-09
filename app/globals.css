@@ -8,38 +8,38 @@
     'Segoe UI', sans-serif;
   --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     'Liberation Mono', 'Courier New', monospace;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --background: oklch(0.992 0.002 250);
+  --foreground: oklch(0.145 0.004 250);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.145 0.004 250);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.145 0.004 250);
+  --primary: oklch(0.195 0.006 250);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.968 0.003 250);
+  --secondary-foreground: oklch(0.205 0.006 250);
+  --muted: oklch(0.968 0.003 250);
+  --muted-foreground: oklch(0.51 0.01 250);
+  --accent: oklch(0.965 0.003 250);
+  --accent-foreground: oklch(0.205 0.006 250);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
+  --border: oklch(0.912 0.004 250);
+  --input: oklch(0.912 0.004 250);
   --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  --chart-1: oklch(0.56 0.19 255);
+  --chart-2: oklch(0.62 0.15 165);
+  --chart-3: oklch(0.68 0.16 75);
+  --chart-4: oklch(0.58 0.18 300);
+  --chart-5: oklch(0.64 0.19 25);
+  --radius: 0.5rem;
+  --sidebar: oklch(0.984 0.002 250);
+  --sidebar-foreground: oklch(0.145 0.004 250);
+  --sidebar-primary: oklch(0.195 0.006 250);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-accent: oklch(0.955 0.004 250);
+  --sidebar-accent-foreground: oklch(0.18 0.006 250);
+  --sidebar-border: oklch(0.912 0.004 250);
   --sidebar-ring: oklch(0.708 0 0);
 }
 
@@ -124,8 +124,25 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Recharts & Data Table Hemrock Polish */
+.recharts-default-tooltip {
+  border-radius: 0.5rem !important;
+  border: 1px solid var(--border) !important;
+  background-color: var(--popover) !important;
+  box-shadow: 0 4px 16px -4px rgb(0 0 0 / 0.08) !important;
+  font-variant-numeric: tabular-nums;
+}
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke-opacity: 0.55;
 }
 
 nextjs-portal {
@@ -299,13 +316,16 @@ html[data-theme='forest'] {
 .borga-glow {
   box-shadow: 0 0 40px 4px color-mix(in oklab, var(--ring) 45%, transparent);
 }
-
-/* Landing page only: the page is sized in rem, and the root font-size scales with the viewport so the layout stays proportional.
-   The class is added to <html> while the landing page is mounted (see components/landing/landing-ui.tsx), never for the dashboard. */
-html.landing-grid { scroll-behavior: smooth; }
-@media (max-width: 1920px) { html.landing-grid { font-size: 0.833333vw; } }
-@media (max-width: 1440px) { html.landing-grid { font-size: 1.111111vw; } }
-@media (max-width: 1024px) { html.landing-grid { font-size: 1.5625vw; } }
-@media (max-width: 640px) { html.landing-grid { font-size: 4.444444vw; } }
-@media (prefers-reduced-motion: reduce) { html.landing-grid { scroll-behavior: auto; } }
-@keyframes landingSwap { from { opacity: 0; transform: translateY(var(--from, 14px)); } to { opacity: 1; transform: none; } }
+@keyframes borga-config-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--primary), 0 0 24px 2px color-mix(in oklab, var(--primary) 24%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--primary), 0 0 32px 6px color-mix(in oklab, var(--primary) 34%, transparent);
+  }
+}
+.borga-config-highlight {
+  animation: borga-config-pulse 1.1s ease-in-out 2;
+  border-color: var(--primary) !important;
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}

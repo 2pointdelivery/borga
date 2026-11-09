@@ -114,9 +114,9 @@ export function TaxProfilesMultiSelect({
 export function Field({ label, children, hint, className }: { label: string; children: React.ReactNode; hint?: string; className?: string }) {
   return (
     <div className={className}>
-      <Label className="text-xs font-medium text-muted-foreground">{label}</Label>
+      <Label className="text-[11px] font-medium tracking-tight text-muted-foreground">{label}</Label>
       <div className="mt-1">{children}</div>
-      {hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
+      {hint && <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/85">{hint}</p>}
     </div>
   );
 }

@@ -108,8 +108,10 @@ import {
   type ReconciliationRule,
   type McpServer,
 } from '@/lib/borga/data';
-import { getBorgaRowsByPrefixOrThrow, setBorgaState, setBorgaStateIfVersion } from '@/lib/borga/persistence';
+import { getBorgaRowsByPrefixOrThrow, getBorgaState, setBorgaState, setBorgaStateIfVersion } from '@/lib/borga/persistence';
 import { ownsWorkspace } from '@/lib/borga/workspace-access';
+import { isMoneyEntity, prepareEntityForSave } from '@/lib/borga/save-value';
+import { invalidateTenantCache } from '@/lib/borga/tenant-guard';
 import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
 import { EMPTY_FILINGS, type FilingsState } from '@/lib/borga/filing-catalog';
 import { EMPTY_CAP_TABLE, type CapTableState } from '@/lib/borga/cap-table';
@@ -304,7 +306,13 @@ export async function GET(req: NextRequest) {
     })(),
     connections: get<AppConnection[]>('connections') ?? DEFAULT_STATE.connections,
     ops: get<OpsState>('ops') ?? DEFAULT_STATE.ops,
-    composio: get<ComposioConfig>('composio') ?? DEFAULT_STATE.composio,
+    // The Composio key lives encrypted in the connection store, never in the
+    // dashboard's bulk state: report only whether one is configured.
+    composio: (() => {
+      const c = get<ComposioConfig>('composio') ?? DEFAULT_STATE.composio;
+      const configured = c.configured || Boolean(c.apiKey && c.apiKey.length > 8);
+      return { ...c, apiKey: '', configured };
+    })(),
     messages: get<CommsMessage[]>('messages') ?? DEFAULT_STATE.messages,
     ads: get<AdCampaign[]>('ads') ?? DEFAULT_STATE.ads,
     webhooks: get<Webhook[]>('webhooks') ?? DEFAULT_STATE.webhooks,
@@ -320,7 +328,12 @@ export async function GET(req: NextRequest) {
     calls: get<CallRecord[]>('calls') ?? DEFAULT_STATE.calls,
     knowledge: get<KnowledgeEntry[]>('knowledge') ?? DEFAULT_STATE.knowledge,
     kbquestions: get<KbQuestion[]>('kbquestions') ?? DEFAULT_STATE.kbquestions,
-    settings: get<SettingsState>('settings') ?? DEFAULT_STATE.settings,
+    settings: (() => {
+      const s = get<SettingsState>('settings') ?? DEFAULT_STATE.settings;
+      const safe = { ...s };
+      delete safe.engineApiKey; // legacy plaintext key: replaced by the encrypted Company Engine connection
+      return safe;
+    })(),
     tasks: get<Task[]>('tasks') ?? DEFAULT_STATE.tasks,
     posts: get<SocialPost[]>('posts') ?? DEFAULT_STATE.posts,
     leads: get<Lead[]>('leads') ?? DEFAULT_STATE.leads,
@@ -430,14 +443,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'baseVersion must be a non-negative integer' }, { status: 400 });
     }
     const baseVersion = body.baseVersion as number | undefined;
+    // Recalculate money from the lines and drop client-supplied privilege fields.
+    // The browser's totals and role/plan claims are never what gets stored. The
+    // transform lives in lib/borga/save-value.ts so the save path itself is tested.
+    let currency = 'USD';
+    if (isMoneyEntity(entity) && isValidWsId(body.ws)) {
+      try {
+        const registry = await getBorgaState<Workspace[]>(userWorkspacesKey(userId));
+        currency = registry?.find((w) => w.id === body.ws)?.currency || 'USD';
+      } catch {
+        currency = 'USD';
+      }
+    }
+    const value = prepareEntityForSave(entity, body.value ?? null, currency);
     if (baseVersion !== undefined) {
       let r;
       try {
-        r = await setBorgaStateIfVersion(key, body.value ?? null, baseVersion);
+        r = await setBorgaStateIfVersion(key, value, baseVersion);
       } catch {
         return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
       }
       if (!r.ok) return NextResponse.json({ ok: false, saved: false, error: 'conflict', current: r.current }, { status: 409 });
+      if (entity === 'workspaces') invalidateTenantCache(userId); // a new/renamed company must be usable immediately
       handOffSoon(userId, body.ws, entity);
       if (typeof body.ws === 'string') {
         const ws = body.ws;
@@ -445,8 +472,9 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({ ok: true, saved: true, version: r.version });
     }
-    const ok = await setBorgaState(key, body.value ?? null);
+    const ok = await setBorgaState(key, value);
     if (!ok) return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
+    if (entity === 'workspaces') invalidateTenantCache(userId);
     handOffSoon(userId, body.ws, entity);
     if (entity !== 'workspaces' && typeof body.ws === 'string') {
       const ws = body.ws;

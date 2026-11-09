@@ -30,10 +30,17 @@ export function parseSmtp(v: Record<string, string | undefined>): SmtpResult {
   const port = Number((v.port ?? '').trim() || 587);
   if (!Number.isInteger(port) || !(SMTP_PORTS as readonly number[]).includes(port)) return { ok: false, error: `The port must be one of ${SMTP_PORTS.join(', ')} (587 is the usual one).` };
   const secureRaw = (v.secure ?? '').trim().toLowerCase();
-  const secure = secureRaw ? ['true', 'yes', 'ssl', '1'].includes(secureRaw) : port === 465;
+  const secure = secureRaw
+    ? ['true', 'yes', 'ssl', '1', '465'].includes(secureRaw)
+    : port === 465;
   if (port === 465 && !secure) return { ok: false, error: 'Port 465 is always encrypted: set Encrypted to yes.' };
   const user = (v.user ?? '').trim();
-  const password = v.password ?? '';
+  const rawPass = (v.password ?? '').trim();
+  // Google App Passwords are often copied as "xxxx xxxx xxxx xxxx" (16 letters + 3 spaces).
+  const password =
+    host.includes('gmail.com') && /^[a-z]{4}(\s+[a-z]{4}){3}$/i.test(rawPass)
+      ? rawPass.replace(/\s+/g, '')
+      : rawPass;
   if (user && !password) return { ok: false, error: 'A user name needs its password.' };
   const fromAddress = (v.fromAddress ?? '').trim();
   if (!EMAIL.test(fromAddress)) return { ok: false, error: 'Enter the address mail should come from, for example billing@yourcompany.com.' };

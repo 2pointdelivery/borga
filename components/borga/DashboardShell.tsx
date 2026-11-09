@@ -10,10 +10,14 @@ import {
   Moon,
   Loader2,
   Plus,
+  PanelLeftClose,
+  PanelLeft,
+  Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { toast } from '@/lib/toast-bus';
 import { useBorga } from '@/lib/borga/store';
 import { deriveBusinessInsights, insightsToMemories, syncInsightsToKnowledgeBase } from '@/lib/borga/insights';
 import { isPageId, type PageId, type NavTarget } from './nav';
@@ -45,6 +49,7 @@ import { InventoryPage } from './pages/InventoryPage';
 import { ProjectsTab } from './panels/ProjectsTab';
 import { HRPage } from './pages/HRPage';
 import { CompanyPage } from './pages/CompanyPage';
+import { SharedServicesTab } from './panels/SharedServicesTab';
 import { AIPlatformPage } from './pages/AIPlatformPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { DevelopersPage } from './pages/DevelopersPage';
@@ -84,6 +89,7 @@ function ShellInner() {
   const [inboxContactKey, setInboxContactKey] = useState<string | undefined>(undefined);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const crmAutoPull = settings.crmAutoPull === true;
   const pullCrm = useCrmPull();
   const navPages = useVisibleNav();
@@ -174,17 +180,33 @@ function ShellInner() {
   // until the next time someone opens it.
   useEffect(() => {
     if (!dataReady) return;
-    const runTick = () => {
-      fetch('/api/borga/scheduler', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ action: 'tick', ws: activeWorkspaceId }),
-      }).catch(() => {});
+    const runTick = async () => {
+      try {
+        const res = await fetch('/api/borga/scheduler', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+          body: JSON.stringify({ action: 'tick', ws: activeWorkspaceId }),
+        });
+        // Hot leads land server-side (Explee sync): when the tick reports new
+        // ones, pull them into the dashboard instead of waiting for a reload.
+        const d = (await res.json().catch(() => null)) as { sync?: { ran?: boolean; ok?: boolean; result?: { added?: number } } } | null;
+        const added = d?.sync?.ran && d.sync.ok ? d.sync.result?.added ?? 0 : 0;
+        if (added > 0) {
+          toast({
+            title: added === 1 ? 'New hot lead from Explee' : `${added} new hot leads from Explee`,
+            description: 'They are now in your sales pipeline.',
+            variant: 'success',
+          });
+          void hydrate();
+        }
+      } catch {
+        /* offline ticks are fine */
+      }
     };
-    runTick();
-    const id = window.setInterval(runTick, 5 * 60_000);
+    void runTick();
+    const id = window.setInterval(() => void runTick(), 5 * 60_000);
     return () => window.clearInterval(id);
-  }, [dataReady, activeWorkspaceId]);
+  }, [dataReady, activeWorkspaceId, hydrate]);
 
   // Hydrate DB-backed state (workspaces + the active company's entities).
   useEffect(() => {
@@ -277,64 +299,98 @@ function ShellInner() {
       <SaveConflictBanner />
       <ConsentBanner />
       {/* Sidebar */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r bg-sidebar text-sidebar-foreground lg:flex">
-        <div className="flex items-center gap-2 px-5 py-5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <Bot className="h-5 w-5" />
-          </span>
-          <div>
-            <p className="text-sm font-bold leading-none">Borga</p>
-            <p className="text-[11px] text-sidebar-foreground/60">Company OS</p>
-          </div>
-        </div>
-        <nav className="flex-1 space-y-1 px-3 pb-3">
-          {navPages.map((n) => {
-            const Icon = n.icon;
-            return (
-              <button
-                key={n.id}
-                onClick={() => setRoute({ page: n.id })}
-                className={cn(
-                  'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                  route.page === n.id
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
-                )}
-              >
-                <Icon className="h-4 w-4" /> {n.label}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="space-y-3 px-3 pb-3 2xl:hidden">
-          {widgetsEnabled && <CalendarWidget />}
-        </div>
-        <div className="border-t p-4 text-xs text-sidebar-foreground/60">
-          <div className="flex items-center gap-2">
-            <span className={cn('h-2 w-2 rounded-full', dbAvailable ? 'bg-emerald-500' : 'bg-amber-500')} />
-            <span title={dbAvailable ? 'Your data is saved to the database.' : 'The database is not reachable, so changes are only saved on this device.'}>
-              {dbAvailable ? `${agents.length} agents · AI: ${aiLabel}` : 'Offline: saved on this device only'}
+      {!sidebarHidden && (
+        <aside className="sticky top-0 hidden h-screen w-56 shrink-0 flex-col overflow-y-auto border-r border-sidebar-border/85 bg-sidebar text-sidebar-foreground lg:flex">
+          <div className="flex items-center justify-between gap-2 border-b border-sidebar-border/60 px-4 py-3.5">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-2xs">
+                <Bot className="h-4 w-4" />
+              </span>
+              <div>
+                <p className="text-xs font-semibold tracking-tight leading-none">Borga</p>
+                <p className="mt-0.5 text-[10px] text-sidebar-foreground/60">Company OS</p>
+              </div>
+            </div>
+            <span className="rounded border border-sidebar-border bg-background/60 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-sidebar-foreground/60">
+              v2.4
             </span>
           </div>
-        </div>
-      </aside>
+          <nav className="flex-1 space-y-0.5 px-2.5 py-2.5">
+            {navPages.map((n) => {
+              const Icon = n.icon;
+              const isActive = route.page === n.id;
+              return (
+                <button
+                  key={n.id}
+                  onClick={() => setRoute({ page: n.id })}
+                  className={cn(
+                    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-all',
+                    isActive
+                      ? 'bg-background text-foreground shadow-2xs ring-1 ring-sidebar-border'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground',
+                  )}
+                >
+                  <Icon className={cn('h-3.5 w-3.5 shrink-0', isActive ? 'text-foreground' : 'text-sidebar-foreground/60')} />
+                  <span className="truncate">{n.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="space-y-3 px-2.5 pb-2.5 2xl:hidden">
+            {widgetsEnabled && <CalendarWidget />}
+          </div>
+          <div className="border-t border-sidebar-border/70 p-3 text-[11px] text-sidebar-foreground/65">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dbAvailable ? 'bg-emerald-500' : 'bg-amber-500')} />
+                <span
+                  className="truncate font-mono text-[10px] tabular-nums"
+                  title={dbAvailable ? 'Your data is saved to the database.' : 'The database is not reachable, so changes are only saved on this device.'}
+                >
+                  {dbAvailable ? `${agents.length} agents · ${aiLabel}` : 'Local storage'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSidebarHidden(true)}
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                title="Hide Sidebar"
+              >
+                <PanelLeftClose className="h-3 w-3" />
+                <span>Hide</span>
+              </button>
+            </div>
+          </div>
+        </aside>
+      )}
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Topbar */}
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b bg-background/80 px-4 backdrop-blur lg:px-6">
-          <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground lg:hidden">
-              <Bot className="h-4 w-4" />
+        <header className="sticky top-0 z-30 flex h-12 items-center justify-between gap-3 border-b border-border/80 bg-background/85 px-4 backdrop-blur lg:px-6">
+          <div className="flex items-center gap-2.5">
+            {sidebarHidden && (
+              <button
+                type="button"
+                onClick={() => setSidebarHidden(false)}
+                className="hidden h-7 w-7 items-center justify-center rounded-md border border-border/80 bg-background text-muted-foreground hover:bg-accent hover:text-foreground lg:flex"
+                title="Show Sidebar"
+              >
+                <PanelLeft className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground lg:hidden">
+              <Bot className="h-3.5 w-3.5" />
             </span>
             <WorkspaceSwitcher />
-            <h1 className="hidden text-sm font-semibold md:block">
+            <span className="hidden text-border md:inline">/</span>
+            <h1 className="hidden text-xs font-semibold tracking-tight text-foreground md:block">
               {navPages.find((p) => p.id === route.page)?.label}
             </h1>
             <span
               title={dbAvailable ? 'Changes synced to the cloud database' : 'Running in local mode — cloud database unreachable'}
               className={cn(
-                'hidden items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-medium ring-1 sm:flex',
+                'hidden items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset sm:flex',
                 dbAvailable ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/25' : 'bg-amber-500/10 text-amber-600 ring-amber-500/25',
               )}
             >
@@ -343,6 +399,20 @@ function ShellInner() {
             </span>
           </div>
           <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))
+              }
+              className="hidden h-7 items-center gap-2 rounded-md border border-border/80 bg-muted/30 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
+              title="Jump to any page or action (Ctrl+K)"
+            >
+              <Search className="h-3 w-3" />
+              <span>Jump to…</span>
+              <kbd className="rounded border border-border/80 bg-background px-1 py-px font-mono text-[10px] text-muted-foreground">
+                Ctrl K
+              </kbd>
+            </button>
             {voiceEnabled && (
             <button
                 onClick={() => setVoiceOpen((v) => !v)}
@@ -404,6 +474,7 @@ function ShellInner() {
               {route.page === 'projects' && <ProjectsTab key={`pr-${route.tab ?? ''}`} initialProjectId={route.tab} />}
               {route.page === 'hr' && <HRPage key={`hr-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'company' && <CompanyPage key={`cp-${route.tab ?? ''}`} initialTab={route.tab} />}
+              {route.page === 'services' && <SharedServicesTab key={`sv-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'ai' && <AIPlatformPage key={`ai-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'integrations' && <IntegrationsPage key={`in-${route.tab ?? ''}`} initialTab={route.tab} />}
               {route.page === 'developers' && <DevelopersPage key={`dev-${route.tab ?? ''}`} initialTab={route.tab} />}

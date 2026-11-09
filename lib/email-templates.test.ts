@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderInvite, renderPasswordChanged, renderPasswordReset, renderWelcome } from './auth/email-templates';
-import { renderTicketReply, renderTransactional } from './borga/email-core';
+import { renderBusinessDocumentEmail, renderTicketReply, renderTransactional } from './borga/email-core';
 
 const URL_OK = 'https://app.example.com/reset?token=abc123';
 
@@ -58,4 +58,41 @@ test('a support reply keeps the typed text, links it, and escapes everything els
   assert.ok(m.html.includes('</a>.'), 'full stop stays outside the link');
   assert.ok(m.text.includes('TKT-12') && m.text.includes('Hi <b>Sam</b>'), 'text part is the message as typed');
   assert.ok(m.html.includes('Acme &quot;Support&quot;'));
+});
+
+test('renderBusinessDocumentEmail renders Invoices, Quotes, Bills, and Purchase Orders with line items and escapes markup', () => {
+  const quoteMail = renderBusinessDocumentEmail({
+    kind: 'quote',
+    workspaceName: 'Borga <Logistics>',
+    documentNumber: 'Q-42 (v1)',
+    recipientName: 'Acme <script>alert(1)</script>',
+    currency: 'USD',
+    totalAmount: 1250,
+    subtotalAmount: 1200,
+    taxAmount: 50,
+    dueOrValidDate: '2026-11-15',
+    message: 'Here is our quote for the Q4 freight lane.',
+    lines: [
+      { label: 'Dedicated Freight Lane', qty: 2, unitPrice: 600, amount: 1200 },
+    ],
+  });
+  assert.match(quoteMail.subject, /^Quote Q-42 \(v1\) from Borga <Logistics> \(\$1,250\.00\)$/);
+  assert.ok(!quoteMail.html.includes('<script'), 'hostile recipient name is escaped');
+  assert.ok(quoteMail.html.includes('Dedicated Freight Lane'));
+  assert.ok(quoteMail.html.includes('$1,250.00'));
+  assert.ok(quoteMail.text.includes('Dedicated Freight Lane: 2 × $600.00 = $1,200.00'));
+
+  const poMail = renderBusinessDocumentEmail({
+    kind: 'purchase_order',
+    workspaceName: 'Borga',
+    documentNumber: 'PO-19',
+    recipientName: 'Nordic Parts Co',
+    currency: 'USD',
+    totalAmount: 4800,
+    dueOrValidDate: '2026-10-30',
+    lines: [{ label: 'Pallet Racks', qty: 12, unitPrice: 400 }],
+  });
+  assert.match(poMail.subject, /^Purchase Order PO-19 from Borga \(\$4,800\.00\)$/);
+  assert.ok(poMail.html.includes('PURCHASE ORDER'));
+  assert.ok(poMail.text.includes('Pallet Racks: 12 × $400.00 = $4,800.00'));
 });

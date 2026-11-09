@@ -71,8 +71,35 @@ export async function createSessionToken(userId: string): Promise<string> {
   return `${payload}.${sig}`;
 }
 
+/**
+ * The database-backed checks that make a signed cookie revocable and make a
+ * deleted account lose access immediately. Injected so the rules are tested
+ * hermetically; production callers omit it and get the real modules.
+ */
+export interface SessionChecks {
+  /** True when the account no longer exists. Must be uncached so deletion is immediate. */
+  userGone(userId: string): Promise<boolean>;
+  /** True when the token was signed out or predates a global sign-out. */
+  revoked(userId: string, token: string, expiresAt: number, lifetimeMs: number): Promise<boolean>;
+}
+
+async function defaultSessionChecks(): Promise<SessionChecks> {
+  const { sessionUserGone } = await import('./session-guard');
+  return {
+    userGone: sessionUserGone,
+    // Loaded lazily, as before: a deleted account is refused without touching revocation storage.
+    revoked: async (userId, token, expiresAt, lifetimeMs) => {
+      const { isSessionRevoked } = await import('./session-revocation');
+      return isSessionRevoked(userId, token, expiresAt, lifetimeMs);
+    },
+  };
+}
+
 /** Verify a token's signature + expiry. Returns the userId or null. */
-export async function verifySessionToken(token: string | undefined | null): Promise<string | null> {
+export async function verifySessionToken(
+  token: string | undefined | null,
+  checks?: SessionChecks,
+): Promise<string | null> {
   if (!token) return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;
@@ -86,8 +113,11 @@ export async function verifySessionToken(token: string | undefined | null): Prom
   // where there is none; a database error never locks everyone out (the signature and expiry above already held).
   if (typeof window === 'undefined' && process.env.DATABASE_URL) {
     try {
-      const { isSessionRevoked } = await import('./session-revocation');
-      if (await isSessionRevoked(userId, token, exp, MAX_AGE_MS)) return null;
+      const resolved = checks ?? (await defaultSessionChecks());
+      // A deleted account must lose access on its next request rather than when the 30-day cookie expires. Checked first
+      // because it is a primary-key lookup and a deleted UUID can never come back.
+      if (await resolved.userGone(userId)) return null;
+      if (await resolved.revoked(userId, token, exp, MAX_AGE_MS)) return null;
     } catch {
       /* fail open on infrastructure errors */
     }

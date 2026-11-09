@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { LogOut, ShieldOff } from 'lucide-react';
+import { Briefcase, LogOut, ShieldOff, Sliders } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast-bus';
 import { useBorga } from '@/lib/borga/store';
@@ -37,6 +37,13 @@ export function UserMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuLabel className="truncate">{userName || 'Signed in'}</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => { window.location.href = '/services'; }}>
+          <Briefcase className="h-4 w-4" /> Shared Services Portal
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => { window.location.href = '/admin'; }}>
+          <Sliders className="h-4 w-4" /> Admin Portal
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={busy} onSelect={() => void signOut(false)}>
           <LogOut className="h-4 w-4" /> Sign out

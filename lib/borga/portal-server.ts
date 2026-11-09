@@ -60,13 +60,17 @@ export async function createPortalToken(
   };
   const all = (await getBorgaState<PortalToken[]>(tokensKey(userId, ws)).catch(() => null)) ?? [];
   await setBorgaState(tokensKey(userId, ws), [...all, record]);
-  const { hash: _hash, ...pub } = record;
+  const { hash, ...pub } = record;
+  void hash;
   return { record: pub, secret };
 }
 
 export async function listPortalTokens(userId: string, ws: string): Promise<PortalTokenPublic[]> {
   const all = (await getBorgaState<PortalToken[]>(tokensKey(userId, ws)).catch(() => null)) ?? [];
-  return all.map(({ hash: _hash, ...pub }) => pub);
+  return all.map(({ hash, ...pub }) => {
+    void hash;
+    return pub;
+  });
 }
 
 export async function revokePortalToken(userId: string, ws: string, id: string): Promise<boolean> {

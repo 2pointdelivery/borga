@@ -39,7 +39,7 @@ export function FeaturesCard() {
   const on = list.filter((f) => flags[f.id as FeatureId]).length;
 
   return (
-    <Card className="p-5">
+    <Card id="config-features" className="p-5 scroll-mt-20">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <ToggleRight className="h-4 w-4 text-primary" /> Features

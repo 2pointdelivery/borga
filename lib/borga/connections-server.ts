@@ -144,6 +144,25 @@ export async function testConnection(u: string, ws: string, id: ProviderId): Pro
     const { engineConfigFrom, testEngine } = await import('./engine-http');
     const cfg = engineConfigFrom(values);
     result = cfg ? await testEngine(cfg) : { ok: false, message: 'Save the API base URL first.' };
+  } else if (id === 'smtp') {
+    const { parseSmtp } = await import('./smtp-core');
+    const { verifySmtp } = await import('./smtp-transport');
+    const parsed = parseSmtp(values);
+    if (!parsed.ok) {
+      result = { ok: false, message: parsed.error };
+    } else {
+      const check = await verifySmtp(parsed.settings);
+      if (check.ok && check.refreshedValues) {
+        Object.assign(values, check.refreshedValues);
+        stored.enc = encryptSecret(JSON.stringify(values));
+        stored.updatedAt = new Date().toISOString();
+      }
+      result = {
+        ok: check.ok,
+        message: check.message,
+        details: check.ok ? ['Nothing was sent. Press Send me a test email to see a message arrive.'] : undefined,
+      };
+    }
   } else result = await runProviderTest(id, values);
   const withTime = { ...result, at: new Date().toISOString() };
   if (stored) await setBorgaState(connKey(u, ws, id), { ...stored, lastTest: withTime });

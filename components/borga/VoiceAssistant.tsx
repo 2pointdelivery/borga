@@ -100,7 +100,7 @@ export function VoiceAssistant({ expanded }: { expanded: boolean }) {
     } finally {
       setCalling(false);
     }
-  }, [callTo, callMsg]);
+  }, [callTo, callMsg, agents, storePlaceCall]);
 
   const toggle = useCallback(() => {
     if (voice.listening) {

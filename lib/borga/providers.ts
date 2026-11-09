@@ -5,7 +5,7 @@
 
 import { MAILDOG_HOST, MAILDOG_URL } from './maildog';
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram' | 'fish' | 'stripe';
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram' | 'fish' | 'stripe' | 'explee' | 'composio';
 
 export interface FieldDef {
   key: string;
@@ -37,6 +37,9 @@ export interface ProviderDef {
 }
 
 const E164 = '^\\+[1-9]\\d{6,14}$';
+
+/** The one Explee sign-up link, used by the Connections card and the sales-pipeline strip. */
+export const EXPLEE_SIGNUP_URL = 'https://explee.com/?utm_source=Lawrence+Ansah-Addo&utm_medium=affiliate&utm_campaign=Explee&ref=pointdelivery73';
 
 export const PROVIDERS: ProviderDef[] = [
   {
@@ -267,6 +270,45 @@ export const PROVIDERS: ProviderDef[] = [
     ],
     docsUrl: 'https://docs.stripe.com/',
     testable: true,
+  },
+  {
+    id: 'explee',
+    label: 'Explee (B2B outreach & hot leads)',
+    description: "Explee finds B2B leads, emails them and flags the ones who reply with real interest as hot leads. Each new hot lead lands in this company's sales pipeline on its own — no copy-pasting. Optional: a deployment-wide EXPLEE_API_KEY also works, so each company does not need its own.",
+    fields: [
+      { key: 'apiKey', label: 'API key', secret: true, required: true, placeholder: 'sk_explee_…', hint: 'Stored encrypted; never shown again.', pattern: '^sk_explee_[A-Za-z0-9]{16,}$' },
+      { key: 'projectId', label: 'Project ID', secret: false, required: false, placeholder: '42836', hint: 'Optional — shown in Explee under Auto-GTM → Projects. Checked when you press Test connection.' },
+    ],
+    steps: [
+      'Create an Explee account with the button above — it finds the leads and emails them for you.',
+      'In Explee, open Settings → API keys (explee.com/app-auto-gtm/api-keys) and create a key.',
+      'Paste the key here and press Test connection.',
+      'New hot leads appear under Sales → Leads about every 10 minutes — while the app is open, or on a schedule when the server cron runs.',
+    ],
+    docsUrl: 'https://api.explee.com/public/api/docs',
+    testable: true,
+    signup: {
+      title: 'Find and close customers with Explee',
+      text: 'Explee finds B2B leads for your product, emails them, and flags the ones who reply with real interest as hot leads. Create an account, copy its API key, and every new hot lead lands in your sales pipeline automatically.',
+      label: 'Create an Explee account',
+      url: EXPLEE_SIGNUP_URL,
+    },
+  },
+  {
+    id: 'composio',
+    label: 'Composio (toolkits & connected apps)',
+    description: 'The Composio API key for this company. Stored encrypted with the other connection secrets and used by the server; it is never returned to a browser or kept in the dashboard state.',
+    fields: [
+      { key: 'apiKey', label: 'Composio API key', secret: true, required: true, hint: 'Create one at composio.dev → API keys. Stored encrypted; never shown again.' },
+      { key: 'baseUrl', label: 'API base URL', secret: false, required: false, placeholder: 'https://backend.composio.dev', hint: 'Only change for a self-hosted proxy.' },
+    ],
+    steps: [
+      'Create an account at composio.dev and copy an API key from its dashboard.',
+      'Paste the key here and press Test connection (a read-only toolkits call verifies it).',
+      'Connect the accounts you need under Integrations → Toolkits. The server resolves the key on every call.',
+    ],
+    docsUrl: 'https://docs.composio.dev/',
+    testable: false,
   },
 ];
 

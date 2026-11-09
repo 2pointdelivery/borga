@@ -16,10 +16,10 @@ export async function GET(req: NextRequest) {
     const rates = await refreshFx();
     await setBorgaState(key, rates);
     return NextResponse.json({ ok: true, rates });
-  } catch (e) {
+  } catch {
     const kept = (await getBorgaState<FxRates>(key)) ?? EMPTY_FX;
     return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : 'ECB unreachable — kept the saved table.', rates: kept },
+      { ok: false, error: 'Bank of Canada FX API unreachable — kept the saved table.', rates: kept },
       { status: 502 },
     );
   }

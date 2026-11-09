@@ -165,6 +165,17 @@ export interface Lead {
   /** Why the deal closed the way it did — asked on won/lost so the loss report is honest, not guessed. */
   outcomeNote?: string;
   outcomeAt?: string; // ISO when the stage last moved to won/lost
+  /** Explee hot-lead sync: the reply that qualified them, word for word. */
+  hotWhy?: string;
+  /** Enrichment carried from the Explee hot-lead record (title, links, campaign). */
+  explee?: {
+    jobTitle?: string;
+    companyDomain?: string;
+    linkedinUrl?: string;
+    country?: string;
+    campaignId?: string;
+    becameHotAt?: string;
+  };
   /** Three-question need diagnosis asked when the lead is captured. All optional — a lead without answers simply shows none. */
   diagnosis?: {
     problem?: string; // the single biggest problem they face right now
@@ -872,6 +883,17 @@ export interface Approval {
   /** Tier 6 gate: approving runs the deferred company workflow. */
   pendingWorkflow?: {
     workflowName: string;
+  };
+  /**
+   * Execution receipt: the outcome of running the held action after it was
+   * granted (payment released, message sent, action/MCP/workflow dispatched).
+   * Absent until it has been attempted, so "approved but nothing happened" is
+   * visible and retryable instead of silent.
+   */
+  lastResult?: {
+    at: string;
+    ok: boolean;
+    detail: string;
   };
 }
 
@@ -1843,11 +1865,16 @@ export const INITIAL_BROWSES: BrowseResult[] = [];
 // WhatsApp connection + agent-to-client chat threads
 // ---------------------------------------------------------------------------
 
+export type WhatsAppConnectionMode = 'qr-web' | 'cloud-api' | 'demo';
+
 export interface WhatsAppConfig {
   connected: boolean;
   phone: string;
-  waId: string; // whatsapp business id
+  waId: string; // whatsapp business id or QR session id
   lastSync: string;
+  mode?: WhatsAppConnectionMode;
+  bridgeUrl?: string;
+  pairedDevice?: string;
 }
 
 export const DEFAULT_WHATSAPP: WhatsAppConfig = { connected: false, phone: '', waId: '', lastSync: '…' };

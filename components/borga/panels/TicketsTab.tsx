@@ -23,6 +23,7 @@ import {
 } from '@/lib/borga/tickets';
 import { cn } from '@/lib/utils';
 import { SectionTitle } from '../bits';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 import { Field } from '../form-widgets';
 import { TicketDetailSheet } from '../TicketDetailSheet';
 import { SearchSelect } from '../SearchSelect';
@@ -154,7 +155,10 @@ export function TicketsTab() {
       <Card className="p-6 text-sm">
         <p className="font-medium">Support Desk is unavailable</p>
         <p className="mt-1 text-muted-foreground">{error ?? 'Unknown error'}. If the feature was switched off, re-enable it in Settings → Features.</p>
-        <Button size="sm" variant="outline" className="mt-3" onClick={refresh}>Retry</Button>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={refresh}>Retry</Button>
+          <ConfigDeepLinkButton target="features" />
+        </div>
       </Card>
     );
   }

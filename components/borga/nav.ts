@@ -13,6 +13,7 @@ import {
   Settings,
   FolderKanban,
   LifeBuoy,
+  UserCheck,
 } from 'lucide-react';
 
 export type PageId =
@@ -26,6 +27,7 @@ export type PageId =
   | 'projects'
   | 'hr'
   | 'company'
+  | 'services'
   | 'ai'
   | 'integrations'
   | 'developers'
@@ -135,6 +137,14 @@ export const NAV_PAGES: NavPage[] = [
       { id: 'equity', label: 'Cap Table' },
       { id: 'knowledge', label: 'Knowledge Base' },
       { id: 'engine', label: 'Company Engine' },
+    ],
+  },
+  {
+    id: 'services', label: 'Shared Services', icon: UserCheck,
+    tabs: [
+      { id: 'marketplace', label: 'Find an Advisor' },
+      { id: 'active', label: 'Active Advisors & Tabs' },
+      { id: 'proposals', label: 'Proposals, Calls & Invites' },
     ],
   },
   {

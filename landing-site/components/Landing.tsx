@@ -1,343 +1,395 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowRight, Sparkles, Boxes, TrendingUp, Users, Bot, ShieldCheck, ChevronDown,
-  Megaphone, Wallet, Building2, Menu, X, Globe2, Lock, Zap,
+  ArrowRight,
+  ArrowUpRight,
+  CheckCircle2,
+  Command,
+  Menu,
+  Search,
+  Sparkles,
+  Star,
+  X,
 } from 'lucide-react';
 import { CookieBanner } from '@/components/CookieBanner';
 import { SiteFooter } from '@/components/SiteFooter';
 
-// Static-export mirror of components/landing/Landing.tsx in the main app,
-// built to be deployed on GitHub Pages (static files only — no API routes,
-// DB or session auth, which the real dashboard needs). "Sign in" /
-// "Get started" point at the live app; set NEXT_PUBLIC_APP_URL at build time.
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://borga.example.com';
 
-const NAV = [
+const CLIENTFLOW_TABS = [
   {
-    label: 'Product', links: [
-      { label: 'Sales command', href: '#product' },
-      { label: 'Marketing reach', href: '#product' },
-      { label: 'Finance control', href: '#product' },
-      { label: 'Agent fleet', href: '#product' },
-      { label: 'Company value', href: '#product' },
+    id: 'pipeline',
+    label: 'Project pipeline',
+    badge: 'Sales & Projects',
+    headline: 'See where every client and project stands at a glance.',
+    desc: 'Follow every job from the first hello to the signed quote, active project board, and final payment—without jumping between five different apps.',
+    metrics: [
+      { label: 'Open deals', value: '$184,500' },
+      { label: 'Expected this month', value: '$112,300' },
+      { label: 'Projects on track', value: '14 of 15' },
+      { label: 'Avg. time to close', value: '2 days' },
     ],
+    note: 'When a client accepts your quote, Borga sets up the invoice and project board for you in one click.',
   },
   {
-    label: 'Customers', links: [
-      { label: 'Why Borga', href: '#stats' },
-      { label: 'Services', href: '#services' },
-      { label: 'FAQ', href: '#faq' },
+    id: 'capture',
+    label: 'Lead capture',
+    badge: 'Leads & Follow-ups',
+    headline: 'Stay organized and never let a good lead go cold.',
+    desc: 'Capture new inquiries, jot down what they need, see which leads are warmest, and hand each one to the right person on your team.',
+    metrics: [
+      { label: 'Lead warmth', value: '88 / 100 (Hot)' },
+      { label: 'Client needs noted', value: '3 of 3 answered' },
+      { label: 'Assigned to', value: 'Next available rep' },
+      { label: 'First reply time', value: 'Under 5 mins' },
     ],
+    note: 'If a lead goes quiet for a few days, your AI helper drafts a friendly follow-up and waits for your okay to send it.',
   },
   {
-    label: 'Company', links: [
-      { label: 'About us', href: '#about' },
-      { label: 'Contact', href: '#contact' },
-      { label: 'Legal', href: '/privacy' },
+    id: 'clients',
+    label: 'Client management',
+    badge: 'Quotes & Client Portal',
+    headline: 'Make it effortless for clients to say yes.',
+    desc: 'Send clean, professional quotes and share a private client link where customers can review prices, accept proposals, and check their invoices—no login required.',
+    metrics: [
+      { label: 'Client link', value: 'No password needed' },
+      { label: 'Quote status', value: 'Sent & viewed' },
+      { label: 'When accepted', value: 'Creates invoice' },
+      { label: 'Client history', value: 'All in one place' },
     ],
+    note: 'Every email, WhatsApp message, call, quote, and invoice for a client lives on one simple timeline.',
+  },
+  {
+    id: 'payments',
+    label: 'Online payments',
+    badge: 'Invoicing & Bookkeeping',
+    headline: 'Get paid faster, with books that stay balanced on their own.',
+    desc: 'Send invoices, take online payments, match bank transactions in seconds, and keep your income, expenses, and tax numbers ready year-round.',
+    metrics: [
+      { label: 'Money in (period)', value: '$142,800.00' },
+      { label: 'Costs & expenses', value: '$88,350.00' },
+      { label: 'Profit (net income)', value: '$54,450.00' },
+      { label: 'Books balanced', value: 'To the cent ✓' },
+    ],
+    note: 'Real math, never guesswork: every invoice, bill, sale, and paycheck updates your books automatically.',
+  },
+  {
+    id: 'automations',
+    label: 'Automations',
+    badge: 'AI Helpers & Reminders',
+    headline: 'Put helpful AI to work on the busywork.',
+    desc: 'Let your AI team sort support tickets, remind clients about overdue bills, draft replies, and email you a weekly profit summary—while you stay in charge.',
+    metrics: [
+      { label: 'AI helpers ready', value: '16 specialists' },
+      { label: 'Runs on', value: 'Schedule or event' },
+      { label: 'You stay in control', value: 'Approvals first' },
+      { label: 'Notifications', value: 'Web & phone' },
+    ],
+    note: 'Nothing involving money or customer emails ever goes out without your thumbs-up.',
+  },
+] as const;
+
+const SHARED_SERVICES_OFFERS = [
+  {
+    title: 'Bookkeeping & Fractional CFO',
+    badge: 'Finance Access Only',
+    desc: 'Bring in a vetted accountant or CFO to reconcile your bank, close your monthly books, and prepare your tax returns right inside Borga.',
+    price: 'Monthly or Custom',
+    priceSub: 'Advisor gets 85% · Borga keeps 15%',
+    href: `${APP_URL}/login?role=advisor&next=/services`,
+  },
+  {
+    title: '1-on-1 Discovery or Setup Call',
+    badge: 'Live Video Call',
+    desc: 'Spend 45–60 minutes with a specialist to set up your books, review your numbers, plan a campaign, or build custom AI workflows.',
+    price: 'Book a time',
+    priceSub: 'or pick a fixed package',
+    href: `${APP_URL}/login?role=advisor&next=/services`,
+  },
+  {
+    title: 'Sales, Marketing & Project Help',
+    badge: 'Sales · Marketing · Projects',
+    desc: 'Hire a vetted agency or project manager to run your outreach, schedule social campaigns, or keep a big project moving for you.',
+    price: 'Fixed Package',
+    priceSub: 'usually $500 to $5,000',
+    href: `${APP_URL}/login?role=advisor&next=/services`,
+  },
+] as const;
+
+const QUICK_AI_ANSWERS: Array<{ q: string; a: string; href: string; cta: string }> = [
+  {
+    q: 'Which "Log in as" option should I pick?',
+    a: 'Pick "Your Company" if you are running your own business. Pick "Advisor & Agency" if you are an accountant, consultant, or agency helping clients. Pick "System Admin" only if you manage the platform itself.',
+    href: `${APP_URL}/login`,
+    cta: 'Go to Sign In',
+  },
+  {
+    q: 'How much does Borga cost?',
+    a: 'It is $2 per team member per month for your company workspace—with every feature included. If you hire an outside accountant or agency through Shared Services, their seat on your workspace is free, and Borga simply keeps 15% of their service fee (the advisor gets 85%).',
+    href: '#pricing',
+    cta: 'See Pricing & Calculator',
+  },
+  {
+    q: 'Will AI ever send emails or move money without asking me?',
+    a: 'Never. Your AI helpers can draft replies, organize tickets, and prepare reminders, but anything that sends a message to a customer or touches money waits for your approval first.',
+    href: `${APP_URL}/signup`,
+    cta: 'Create Your Workspace',
   },
 ];
-
-/** Numbered hero tabs (emons pattern): each re-themes the 3D scene. */
-const TABS = [
-  { n: '01', title: 'Sales command', desc: 'Pipeline, accounts and AI-written proposals that close.', accent: '#0ea5e9', chips: ['Kanban deals', 'Proposals', 'Forecasts'] },
-  { n: '02', title: 'Marketing reach', desc: 'Social scheduling, paid ROAS and generative content.', accent: '#ec4899', chips: ['Social posts', 'Campaigns', 'AI drafts'] },
-  { n: '03', title: 'Finance control', desc: 'Double-entry ledger, budgets and one-click financials.', accent: '#059669', chips: ['Ledger', 'Budgets', 'Reports'] },
-  { n: '04', title: 'Agent fleet', desc: 'Specialists across every department, always on.', accent: '#8b5cf6', chips: ['Nova', 'Ledger', 'Atlas'] },
-  { n: '05', title: 'Company value', desc: 'Live valuation that grows with your data.', accent: '#f59e0b', chips: ['Multiples', 'Growth', 'Comps'] },
-];
-
-const STATS = [
-  { value: '12', label: 'Departments automated' },
-  { value: '16', label: 'AI agents on fleet' },
-  { value: '11', label: 'Modules included' },
-  { value: '3', label: 'Regulatory regions covered' },
-];
-
-const SERVICES = [
-  { icon: TrendingUp, title: 'Sales', desc: 'Kanban deals, account intelligence and proposals.' },
-  { icon: Megaphone, title: 'Marketing', desc: 'Multi-channel scheduling and generative content.' },
-  { icon: Wallet, title: 'Finance', desc: 'Double-entry ledger and one-click financials.' },
-  { icon: Users, title: 'People', desc: 'Directory, time-off and org planning.' },
-  { icon: Bot, title: 'Agents', desc: 'A brain-linked fleet across every department.' },
-  { icon: Globe2, title: 'Communications', desc: 'Inbox, chat, voice and outbound calling.' },
-  { icon: Building2, title: 'Company', desc: 'Multi-entity workspaces and live valuation.' },
-  { icon: ShieldCheck, title: 'Trust', desc: 'Isolation, approvals and regional privacy.' },
-];
-
-const FAQS = [
-  { q: 'What is Borga?', a: 'Borga is an AI company operating system: sales, marketing, finance, HR, communications and a live valuation in one workspace, operated by a fleet of specialist AI agents.' },
-  { q: 'How do the AI agents work?', a: 'Each department has specialist agents (Nova for marketing, Ledger for finance, Atlas for strategy…). They read your live company data, propose actions, and anything that sends messages or moves value pauses for your approval first.' },
-  { q: 'Is my company data isolated?', a: 'Yes. Every company runs as its own scoped tenant — CRM, ledger, people and agents never leak across workspaces.' },
-  { q: 'Which privacy laws do you follow?', a: 'EU GDPR, US state laws (CCPA/CPRA), Canada PIPEDA, Nigeria NDPR, South Africa POPIA and Kenya DPA. Cookie rules differ by region — see the cookie policy linked below.' },
-  { q: 'Can I cancel any time?', a: 'Yes. Export your data whenever you like; on termination workspaces stay read-only for 30 days, then are deleted.' },
-];
-
-function HeroScene({ accent, chips }: { accent: string; chips: string[] }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const onMove = (e: React.MouseEvent) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const x = (e.clientX - r.left) / r.width - 0.5;
-    const y = (e.clientY - r.top) / r.height - 0.5;
-    el.style.setProperty('--ry', `${x * 14}deg`);
-    el.style.setProperty('--rx', `${-y * 12}deg`);
-  };
-  return (
-    <div ref={ref} onMouseMove={onMove} className="hero3d relative mx-auto h-[380px] w-full max-w-[520px] select-none sm:h-[440px]" style={{ perspective: '1200px' }}>
-      {/* orbit rings */}
-      <div className="hero3d-tilt absolute inset-0" style={{ transformStyle: 'preserve-3d' }}>
-        <div className="absolute left-1/2 top-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full border border-dashed border-foreground/20 ring-a" />
-        <div className="absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full border border-foreground/10 ring-b" />
-        <div className="absolute left-1/2 top-1/2 h-[26rem] w-[26rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-dashed border-foreground/10 ring-c" />
-        {/* core */}
-        <div
-          className="absolute left-1/2 top-1/2 flex h-36 w-36 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[2rem] text-white shadow-2xl core-bob"
-          style={{ background: `linear-gradient(135deg, ${accent}, ${accent}99)`, transform: 'translate(-50%,-50%) translateZ(70px)' }}
-        >
-          <Boxes className="h-12 w-12" />
-        </div>
-        {/* orbiting chips */}
-        {chips.map((c, i) => (
-          <div
-            key={c}
-            className="absolute left-1/2 top-1/2 rounded-full border border-border bg-card/90 px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur chip-orbit"
-            style={{ ['--orbit' as string]: `${i * 120}deg`, borderTopColor: accent }}
-          >
-            {c}
-          </div>
-        ))}
-        {/* floating glass cards */}
-        <div className="absolute left-2 top-10 rounded-2xl border border-border bg-card/80 p-3 shadow-xl backdrop-blur card-a">
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold"><Zap className="h-3 w-3" style={{ color: accent }} /> Pipeline</p>
-          <p className="mt-1 font-mono text-lg font-bold">$1.2M</p>
-        </div>
-        <div className="absolute bottom-12 right-2 rounded-2xl border border-border bg-card/80 p-3 shadow-xl backdrop-blur card-b">
-          <p className="flex items-center gap-1.5 text-[11px] font-semibold"><Lock className="h-3 w-3" style={{ color: accent }} /> Approval gate</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">Nova waits for you</p>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export function Landing() {
-  const [tab, setTab] = useState(0);
-  const [menu, setMenu] = useState(false);
-  const active = TABS[tab];
+  const [activeTab, setActiveTab] = useState<(typeof CLIENTFLOW_TABS)[number]['id']>('pipeline');
+  const [askOpen, setAskOpen] = useState(false);
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [query, setQuery] = useState('');
+  const [calcSeats, setCalcSeats] = useState(5);
+  const [calcRetainer, setCalcRetainer] = useState(1000);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setAskOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const currentFlow = useMemo(
+    () => CLIENTFLOW_TABS.find((t) => t.id === activeTab) ?? CLIENTFLOW_TABS[0],
+    [activeTab],
+  );
+
+  const filteredAnswers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return QUICK_AI_ANSWERS;
+    return QUICK_AI_ANSWERS.filter(
+      (item) => item.q.toLowerCase().includes(q) || item.a.toLowerCase().includes(q),
+    );
+  }, [query]);
+
+  const seatMonthly = Math.max(1, calcSeats) * 2;
+  const platformCut = Math.round(calcRetainer * 0.15);
+  const advisorNet = calcRetainer - platformCut;
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
-      <style>{`
-        @keyframes ringSpin { from { transform: translate(-50%,-50%) rotateX(72deg) rotateZ(0deg); } to { transform: translate(-50%,-50%) rotateX(72deg) rotateZ(360deg); } }
-        @keyframes coreBob { 0%,100% { margin-top: 0; } 50% { margin-top: -14px; } }
-        @keyframes chipOrbit { from { transform: rotate(var(--orbit)) translateX(150px) rotate(calc(-1 * var(--orbit))); } to { transform: rotate(calc(var(--orbit) + 360deg)) translateX(150px) rotate(calc(-1 * (var(--orbit) + 360deg))); } }
-        @keyframes cardFloat { 0%,100% { transform: translateY(0) translateZ(40px); } 50% { transform: translateY(-12px) translateZ(40px); } }
-        @keyframes rise { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
-        .hero3d { --rx: 0deg; --ry: 0deg; }
-        .hero3d-tilt { transform: rotateX(var(--rx)) rotateY(var(--ry)); transition: transform 0.25s ease-out; }
-        .ring-a { animation: ringSpin 26s linear infinite; }
-        .ring-b { animation: ringSpin 40s linear infinite reverse; }
-        .ring-c { animation: ringSpin 60s linear infinite; }
-        .core-bob { animation: coreBob 5s ease-in-out infinite; }
-        .chip-orbit { animation: chipOrbit 18s linear infinite; }
-        .card-a { animation: cardFloat 7s ease-in-out infinite; }
-        .card-b { animation: cardFloat 8.5s ease-in-out 0.8s infinite; }
-        .lf-rise { animation: rise 0.8s cubic-bezier(.2,.7,.2,1) both; }
-      `}</style>
-
-      {/* Nav */}
-      <header className="sticky top-0 z-50 border-b border-border/60 bg-background/85 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <a href="/" className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow">
-              <Boxes className="h-5 w-5" />
-            </span>
-            <span className="text-lg font-bold tracking-tight">Borga</span>
-          </a>
-          <nav className="hidden items-center gap-7 text-sm md:flex">
-            {NAV.map((n) => (
-              <div key={n.label} className="group relative">
-                <button className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground">
-                  {n.label} <ChevronDown className="h-3.5 w-3.5" />
-                </button>
-                <div className="invisible absolute left-0 top-full w-52 translate-y-1 rounded-2xl border border-border bg-card p-2 opacity-0 shadow-xl transition-all group-hover:visible group-hover:translate-y-2 group-hover:opacity-100">
-                  {n.links.map((l) => (
-                    <a key={l.label} href={l.href} className="block rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-                      {l.label}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <a href="#contact" className="text-muted-foreground transition-colors hover:text-foreground">Contact</a>
-          </nav>
-          <div className="hidden items-center gap-2 md:flex">
-            <a href={`${APP_URL}/login`} className="rounded-full px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground">
-              Sign in
+    <div className="min-h-screen bg-[#fbfbfb] text-[#111111] selection:bg-[#111111] selection:text-[#fbfbfb] dark:bg-[#0b0b0d] dark:text-[#f5f5f7]">
+      <header className="sticky top-0 z-40 border-b border-black/10 bg-[#fbfbfb]/90 backdrop-blur-md dark:border-white/10 dark:bg-[#0b0b0d]/90">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-5 sm:px-8">
+          <div className="flex items-center gap-6">
+            <a href="#clientflow" className="flex items-center gap-2 text-base font-semibold tracking-tight">
+              <span className="flex h-6 w-6 items-center justify-center rounded bg-[#111111] font-mono text-xs font-bold text-white dark:bg-white dark:text-black">
+                B
+              </span>
+              <span>Borga</span>
             </a>
-            <a href={`${APP_URL}/signup`} className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:opacity-90">
+
+            <nav aria-label="Primary" className="hidden items-center gap-5 text-sm text-black/70 md:flex dark:text-white/70">
+              <a href="#clientflow" className="transition hover:text-black dark:hover:text-white">How It Works</a>
+              <a href="#work-with-us" className="transition hover:text-black dark:hover:text-white">Hire an Advisor</a>
+              <a href="#pricing" className="transition hover:text-black dark:hover:text-white">Pricing</a>
+              <a href={`${APP_URL}/developers`} className="transition hover:text-black dark:hover:text-white">Developers</a>
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setAskOpen(true)}
+              className="inline-flex items-center gap-2 rounded-md border border-black/15 bg-white px-2.5 py-1 text-xs font-medium text-black/80 shadow-2xs transition hover:border-black/30 dark:border-white/15 dark:bg-white/5 dark:text-white/80"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>Ask a question</span>
+              <kbd className="rounded bg-black/5 px-1.5 py-0.5 font-mono text-[10px] text-black/60 dark:bg-white/10 dark:text-white/60">
+                ⌘K
+              </kbd>
+            </button>
+
+            <a
+              href={`${APP_URL}/login?role=company&next=/app`}
+              className="px-2.5 py-1 text-xs font-medium text-black/75 transition hover:text-black dark:text-white/75 dark:hover:text-white"
+            >
+              Log in as Company
+            </a>
+            <a
+              href={`${APP_URL}/login?role=advisor&next=/services`}
+              className="hidden px-2.5 py-1 text-xs font-medium text-black/75 transition hover:text-black lg:inline-block dark:text-white/75 dark:hover:text-white"
+            >
+              Advisor
+            </a>
+            <a
+              href={`${APP_URL}/login?role=admin&next=/admin`}
+              className="hidden px-2.5 py-1 text-xs font-medium text-black/75 transition hover:text-black lg:inline-block dark:text-white/75 dark:hover:text-white"
+            >
+              Admin
+            </a>
+
+            <a
+              href={`${APP_URL}/signup`}
+              className="hidden rounded-md bg-[#111111] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-black/85 sm:inline-flex dark:bg-white dark:text-black dark:hover:bg-white/90"
+            >
               Get started
             </a>
+
+            <button
+              type="button"
+              onClick={() => setMobileMenu((v) => !v)}
+              aria-label="Open menu"
+              className="rounded-md border border-black/15 p-1.5 md:hidden dark:border-white/15"
+            >
+              {mobileMenu ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+            </button>
           </div>
-          <button className="md:hidden" onClick={() => setMenu((m) => !m)} aria-label="Menu">
-            {menu ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-          </button>
         </div>
-        {menu && (
-          <div className="border-t border-border px-6 py-4 md:hidden">
-            {NAV.flatMap((n) => n.links).map((l) => (
-              <a key={l.label} href={l.href} onClick={() => setMenu(false)} className="block py-2 text-sm text-muted-foreground">
-                {l.label}
-              </a>
-            ))}
-            <div className="mt-3 flex gap-2">
-              <a href={`${APP_URL}/login`} className="flex-1 rounded-full border border-border px-4 py-2 text-center text-sm font-semibold">Sign in</a>
-              <a href={`${APP_URL}/signup`} className="flex-1 rounded-full bg-primary px-4 py-2 text-center text-sm font-semibold text-primary-foreground">Get started</a>
-            </div>
-          </div>
-        )}
       </header>
 
-      {/* Hero (emons pattern: headline + CTA + 3D + numbered tabs) */}
-      <section className="mx-auto grid max-w-7xl items-center gap-10 px-6 pb-10 pt-12 lg:grid-cols-2 lg:pt-16">
-        <div className="lf-rise">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-1.5 text-xs font-medium text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5" /> The AI Company OS
-          </div>
-          <h1 className="mt-6 text-5xl font-extrabold leading-[1.04] tracking-tight sm:text-6xl">
-            Your company.<br />One mission.
-          </h1>
-          <p className="mt-5 max-w-xl text-lg text-muted-foreground">
-            Sales, marketing, finance, people and valuation — run by a fleet of AI agents that act on your live company data, with you approving every consequential move.
+      <main className="mx-auto max-w-6xl px-5 sm:px-8">
+        <section id="clientflow" className="border-b border-black/10 pb-16 pt-12 sm:pb-20 sm:pt-16 dark:border-white/10">
+          <p className="font-mono text-xs uppercase tracking-widest text-black/55 dark:text-white/55">
+            One calm place to run your business
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <a href={`${APP_URL}/signup`} className="group inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-lg transition hover:opacity-90">
-              Create your workspace <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-            </a>
-            <a href="#product" className="inline-flex items-center gap-2 rounded-full border border-border px-6 py-3 text-sm font-semibold transition hover:bg-card">
-              Explore the platform
-            </a>
+
+          <h1 className="mt-3 max-w-3xl text-4xl font-semibold leading-[1.08] tracking-tight sm:text-5xl md:text-[3.35rem]">
+            Manage every client, project, and payment all in one place.
+          </h1>
+
+          <p className="mt-5 max-w-2xl text-base leading-relaxed text-black/70 sm:text-lg dark:text-white/70">
+            Send quotes, get paid, track projects, and keep your books and taxes up to date—with helpful AI that handles the busywork and real accountants or agencies ready to step in when you want a hand.
+          </p>
+
+          <div className="mt-7 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-black/65 dark:text-white/65">
+            <span className="inline-flex items-center gap-1 font-medium text-black dark:text-white">
+              <Star className="h-3.5 w-3.5 fill-current" /> 4.9
+              <span className="font-normal text-black/55 dark:text-white/55">(loved by founders &amp; agencies)</span>
+            </span>
+            <span>·</span>
+            <span><strong className="font-semibold text-black dark:text-white">All-in-one</strong> CRM, projects &amp; books</span>
+            <span>·</span>
+            <span><strong className="font-semibold text-black dark:text-white">16</strong> AI helpers</span>
+            <span>·</span>
+            <span><strong className="font-semibold text-black dark:text-white">$2</strong> / user / month</span>
           </div>
-          {/* numbered tabs */}
+
           <div className="mt-10 flex flex-wrap gap-2">
-            {TABS.map((t, i) => (
+            {CLIENTFLOW_TABS.map((t) => (
               <button
-                key={t.n}
-                onClick={() => setTab(i)}
-                className={`flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-left transition-all ${i === tab ? 'border-transparent text-white shadow-lg' : 'border-border bg-card text-muted-foreground hover:text-foreground'}`}
-                style={i === tab ? { background: `linear-gradient(135deg, ${t.accent}, ${t.accent}aa)` } : undefined}
+                key={t.id}
+                type="button"
+                onClick={() => setActiveTab(t.id)}
+                className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition ${
+                  t.id === activeTab
+                    ? 'border-black bg-[#111111] text-white dark:border-white dark:bg-white dark:text-black'
+                    : 'border-black/15 bg-white text-black/75 dark:border-white/15 dark:bg-white/[0.03]'
+                }`}
               >
-                <span className="font-mono text-xs opacity-70">{t.n}</span>
-                <span className="text-sm font-semibold">{t.title}</span>
+                {t.label}
               </button>
             ))}
           </div>
-          <p className="mt-4 max-w-md text-sm text-muted-foreground">
-            <strong className="text-foreground">{active.title}:</strong> {active.desc}
-          </p>
-        </div>
-        <HeroScene accent={active.accent} chips={active.chips} />
-      </section>
 
-      {/* Stats band */}
-      <section id="stats" className="border-y border-border bg-card/50">
-        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-6 px-6 py-10 md:grid-cols-4">
-          {STATS.map((s) => (
-            <div key={s.label} className="text-center">
-              <p className="text-4xl font-extrabold tracking-tight sm:text-5xl">{s.value}</p>
-              <p className="mt-1 text-xs uppercase tracking-widest text-muted-foreground">{s.label}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Services grid */}
-      <section id="product" className="mx-auto max-w-7xl px-6 py-16">
-        <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Capabilities</p>
-        <h2 className="mt-2 max-w-2xl text-3xl font-extrabold tracking-tight sm:text-4xl">One OS. Every operational area.</h2>
-        <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {SERVICES.map((f) => (
-            <div key={f.title} className="group rounded-2xl border border-border bg-card p-5 transition hover:-translate-y-1 hover:shadow-xl">
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <f.icon className="h-5 w-5" />
-              </span>
-              <h3 className="mt-4 font-semibold">{f.title}</h3>
-              <p className="mt-1.5 text-sm text-muted-foreground">{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* About */}
-      <section id="about" className="border-y border-border bg-card/50">
-        <div className="mx-auto grid max-w-7xl items-center gap-10 px-6 py-16 lg:grid-cols-2">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">About Borga</p>
-            <h2 className="mt-2 text-3xl font-extrabold tracking-tight sm:text-4xl">Your experts for running the whole company in one place.</h2>
-            <p className="mt-4 leading-relaxed text-muted-foreground">
-              Borga replaces a dozen disconnected tools with one workspace where every department&apos;s data feeds the next:
-              marketing spend lands in finance actuals, sales wins move valuation, support tickets train the agents. Each company
-              is its own isolated tenant — your data never mingles with anyone else&apos;s.
-            </p>
-            <ul className="mt-5 space-y-2 text-sm">
-              {['Per-company isolation — CRM, ledger, people and agents stay scoped', 'Approval gates on every consequential agent action', 'Regional privacy: GDPR, CCPA/CPRA, NDPR and POPIA aware'].map((t) => (
-                <li key={t} className="flex items-start gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /> {t}
-                </li>
+          <div className="mt-4 rounded-xl border border-black/12 bg-white p-6 dark:border-white/12 dark:bg-white/[0.03]">
+            <span className="font-mono text-xs text-black/55 dark:text-white/55">{currentFlow.badge}</span>
+            <h2 className="mt-2 text-xl font-semibold tracking-tight sm:text-2xl">{currentFlow.headline}</h2>
+            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-black/65 dark:text-white/65">{currentFlow.desc}</p>
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {currentFlow.metrics.map((m) => (
+                <div key={m.label} className="rounded-lg border border-black/10 bg-[#fbfbfb] p-3.5 dark:border-white/10 dark:bg-black/30">
+                  <p className="text-[11px] text-black/55 dark:text-white/55">{m.label}</p>
+                  <p className="mt-1 font-mono text-sm font-semibold tabular-nums">{m.value}</p>
+                </div>
               ))}
-            </ul>
+            </div>
+            <p className="mt-4 text-xs text-black/65 dark:text-white/65">
+              <CheckCircle2 className="mr-1.5 inline h-3.5 w-3.5" />
+              {currentFlow.note}
+            </p>
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            {[
-              { v: '99.9%', l: 'Uptime target' },
-              { v: '24/7', l: 'Agent coverage' },
-              { v: '1', l: 'Login for everything' },
-              { v: '0', l: 'Data shared across tenants' },
-            ].map((s) => (
-              <div key={s.l} className="rounded-2xl border border-border bg-background p-6 text-center">
-                <p className="text-3xl font-extrabold">{s.v}</p>
-                <p className="mt-1 text-xs uppercase tracking-widest text-muted-foreground">{s.l}</p>
-              </div>
+        </section>
+
+        <section id="work-with-us" className="border-b border-black/10 py-16 sm:py-20 dark:border-white/10">
+          <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Want an expert to handle your books, sales, or marketing?
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm text-black/65 dark:text-white/65">
+            Book a call with a vetted accountant, CFO, or agency. You choose which tabs they can see—and adding an advisor never costs you an extra $2/month user seat.
+          </p>
+          <div className="mt-8 grid gap-4 md:grid-cols-3">
+            {SHARED_SERVICES_OFFERS.map((s) => (
+              <a key={s.title} href={s.href} className="group flex flex-col justify-between rounded-xl border border-black/12 bg-white p-5 transition hover:border-black/35 dark:border-white/12 dark:bg-white/[0.03]">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="rounded bg-black/5 px-2 py-0.5 font-mono text-[11px] dark:bg-white/10">{s.badge}</span>
+                    <ArrowUpRight className="h-4 w-4 text-black/40" />
+                  </div>
+                  <h3 className="mt-3 text-base font-semibold group-hover:underline">{s.title}</h3>
+                  <p className="mt-2 text-xs leading-relaxed text-black/65 dark:text-white/65">{s.desc}</p>
+                </div>
+                <div className="mt-6 border-t border-black/10 pt-4 dark:border-white/10">
+                  <span className="font-mono text-base font-bold">{s.price}</span> <span className="text-[11px] text-black/55">{s.priceSub}</span>
+                </div>
+              </a>
             ))}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* FAQ */}
-      <section id="faq" className="mx-auto max-w-3xl px-6 py-16">
-        <h2 className="text-center text-3xl font-extrabold tracking-tight">Frequently asked questions</h2>
-        <div className="mt-8 space-y-3">
-          {FAQS.map((f) => (
-            <details key={f.q} className="group rounded-2xl border border-border bg-card px-5 py-4">
-              <summary className="cursor-pointer list-none font-medium [&::-webkit-details-marker]:hidden">
-                <span className="flex items-center justify-between gap-3">
-                  {f.q}
-                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-                </span>
-              </summary>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{f.a}</p>
-            </details>
-          ))}
-        </div>
-      </section>
-
-      {/* Contact CTA */}
-      <section id="contact" className="mx-auto max-w-7xl px-6 pb-20">
-        <div className="relative overflow-hidden rounded-3xl bg-primary p-10 text-center text-primary-foreground shadow-2xl sm:p-16">
-          <h2 className="relative text-3xl font-extrabold tracking-tight sm:text-4xl">Start your company OS today.</h2>
-          <p className="relative mt-3 opacity-80">Free to start. Your data stays isolated to your account.</p>
-          <a href={`${APP_URL}/signup`} className="relative mt-7 inline-flex items-center gap-2 rounded-full bg-background px-6 py-3 text-sm font-semibold text-foreground shadow transition hover:opacity-90">
-            Get started <ArrowRight className="h-4 w-4" />
-          </a>
-        </div>
-      </section>
+        <section id="pricing" className="py-16 sm:py-20">
+          <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Simple, honest pricing: $2 per person per month.</h2>
+          <div className="mt-6 grid gap-4 rounded-xl border border-black/12 bg-white p-5 lg:grid-cols-12 dark:border-white/12 dark:bg-white/[0.03]">
+            <div className="space-y-2 text-xs lg:col-span-7">
+              <p className="text-sm font-semibold">Everything included — no extra charge for outside advisors</p>
+              <p className="text-black/65 dark:text-white/65">
+                Every company workspace includes leads, quotes, client portal links, invoicing, bookkeeping, tax worksheets, projects, inventory, and 16 AI helpers.
+              </p>
+            </div>
+            <div className="flex flex-col justify-between rounded-lg border border-black/10 bg-[#fbfbfb] p-4 text-xs lg:col-span-5 dark:border-white/10 dark:bg-black/30">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <span className="text-[11px] text-black/60 dark:text-white/60">People on your team ($2/mo)</span>
+                  <input type="number" min={1} max={500} value={calcSeats} onChange={(e) => setCalcSeats(Math.max(1, Number(e.target.value) || 1))} className="w-full rounded border border-black/15 bg-white px-2.5 py-1 font-mono text-xs dark:border-white/15 dark:bg-black" />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[11px] text-black/60 dark:text-white/60">Advisor fee ($ USD)</span>
+                  <input type="number" min={0} step={100} value={calcRetainer} onChange={(e) => setCalcRetainer(Math.max(0, Number(e.target.value) || 0))} className="w-full rounded border border-black/15 bg-white px-2.5 py-1 font-mono text-xs dark:border-white/15 dark:bg-black" />
+                </label>
+              </div>
+              <div className="mt-3 space-y-1 border-t border-black/10 pt-2.5 font-mono text-[11px] dark:border-white/10">
+                <div className="flex justify-between"><span>Your monthly workspace bill:</span><strong>${seatMonthly.toFixed(2)}/mo</strong></div>
+                <div className="flex justify-between"><span>Advisor takes home (85%):</span><strong>${advisorNet.toLocaleString()}</strong></div>
+                <div className="flex justify-between"><span>Borga platform fee (15%):</span><strong>${platformCut.toLocaleString()}</strong></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
 
       <SiteFooter />
       <CookieBanner />
-    </main>
+
+      {askOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-20 backdrop-blur-xs" onClick={() => setAskOpen(false)}>
+          <div className="w-full max-w-xl rounded-xl border border-black/15 bg-[#fbfbfb] p-4 shadow-2xl dark:border-white/15 dark:bg-[#141417]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 border-b border-black/10 pb-3 dark:border-white/10">
+              <Search className="h-4 w-4 text-black/50" />
+              <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Ask about pricing, hiring an advisor, or which login to pick…" className="flex-1 bg-transparent text-sm outline-none" />
+              <button type="button" onClick={() => setAskOpen(false)} className="rounded p-1"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="mt-3 max-h-80 space-y-2.5 overflow-y-auto">
+              {filteredAnswers.map((item) => (
+                <div key={item.q} className="rounded-lg border border-black/10 bg-white p-3 text-xs dark:border-white/10 dark:bg-white/[0.03]">
+                  <p className="font-semibold">{item.q}</p>
+                  <p className="mt-1 leading-relaxed text-black/65 dark:text-white/65">{item.a}</p>
+                  <a href={item.href} className="mt-2 inline-flex items-center gap-1 font-medium underline underline-offset-4">{item.cta} <ArrowRight className="h-3 w-3" /></a>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center justify-between border-t border-black/10 pt-2.5 text-[11px] text-black/50">
+              <span className="inline-flex items-center gap-1"><Command className="h-3 w-3" /> Press Esc or ⌘K to close</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

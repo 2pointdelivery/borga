@@ -16,6 +16,7 @@ import { useComposioReady } from '../use-composio-ready';
 import { useConnectedApps } from '../use-connected-apps';
 import { AgentAvatar, SectionTitle } from '../bits';
 import { SearchSelect } from '../SearchSelect';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 
 /** Human display for stored schedule values ('Just now', ISO datetime-local, or legacy text). */
 function formatScheduledAt(v: string): string {
@@ -60,7 +61,8 @@ export function SocialMediaTab() {
   const [replyBusy, setReplyBusy] = useState<string | null>(null);
 
   const entityId = activeWorkspaceId || 'default';
-  const keyPayload = composio.apiKey ? { apiKey: composio.apiKey } : {};
+  // The Composio key is resolved server-side; the browser never sends it.
+  const keyPayload = {};
   // Shared live connection state (also mirror-syncs Inbox/Tools cards on load).
   const { apps: conns, loading: connsLoading, refresh: loadConns } = useConnectedApps(entityId);
 
@@ -270,10 +272,15 @@ export function SocialMediaTab() {
 
       {!composioReady && !composioChecking && (
         <Card className="border-amber-500/40 bg-amber-500/5 p-4 text-sm">
-          <p className="font-medium">Live publishing is off — no Composio key found.</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Add your Composio API key under Integrations → Composio Toolkits (or set COMPOSIO_API_KEY on the server) to link social accounts and publish for real. Until then posts stay as drafts and schedules.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="font-medium">Live publishing is off — no Composio key found.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Add your Composio API key under Integrations → Composio Toolkits (or set COMPOSIO_API_KEY on the server) to link social accounts and publish for real. Until then posts stay as drafts and schedules.
+              </p>
+            </div>
+            <ConfigDeepLinkButton target="composio" label="Configure Composio Toolkits" />
+          </div>
         </Card>
       )}
 

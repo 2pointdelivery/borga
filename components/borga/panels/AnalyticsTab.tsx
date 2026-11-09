@@ -131,15 +131,18 @@ export function AnalyticsTab() {
       </div>
 
       {/* KPI strip */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
         {cards.map((c) => {
           const Icon = c.icon;
           return (
-            <Card key={c.label} className="p-3">
-              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Icon className={cn('h-3.5 w-3.5', c.color)} /> {c.label}
+            <Card key={c.label} className="gap-1.5 p-3.5">
+              <p className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                <Icon className={cn('h-3.5 w-3.5 shrink-0', c.color)} />
+                <span className="truncate">{c.label}</span>
               </p>
-              <p className="mt-1 truncate text-lg font-semibold">{c.value}</p>
+              <p className="truncate font-mono text-base font-semibold tabular-nums tracking-tight text-foreground">
+                {c.value}
+              </p>
               {c.sub && <p className="truncate text-[10px] text-muted-foreground">{c.sub}</p>}
             </Card>
           );

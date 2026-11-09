@@ -1,6 +1,7 @@
 import { paymentRequired } from '@/lib/borga/billing-server';
 import { NextResponse, type NextRequest } from 'next/server';
 import { getBorgaState, setBorgaState } from '@/lib/borga/persistence';
+import { ownsWorkspaceStrict } from '@/lib/borga/workspace-access';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { type ScheduledTask, type ScheduleInterval } from '@/lib/borga/data';
 import {
@@ -30,6 +31,9 @@ export async function GET(req: NextRequest) {
   const ws = wsParam && /^[a-zA-Z0-9_-]{1,64}$/.test(wsParam) ? wsParam : null;
   const userId = await getUserId(req);
   if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  if (ws && !(await ownsWorkspaceStrict(userId, ws))) {
+    return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
+  }
   const tasks = await loadTasks(ws, userId);
   return NextResponse.json({ ok: true, tasks });
 }
@@ -48,6 +52,9 @@ export async function POST(req: NextRequest) {
 
   const action = String(body.action ?? 'list');
   const ws = wsOf(body);
+  if (ws && !(await ownsWorkspaceStrict(userId, ws))) {
+    return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
+  }
 
   if (action === 'create') {
     const tasks = await loadTasks(ws, userId);
@@ -171,7 +178,25 @@ export async function POST(req: NextRequest) {
 
   if (action === 'tick') {
     const result = await tickWorkspace(ws, userId);
-    return NextResponse.json({ ok: true, ...result });
+    // The Explee hot-lead job also rides the browser tick: its own 10-minute
+    // due-gate keeps the cadence, and a locally-run workspace then syncs while
+    // the dashboard is open — no external scheduler needed. (The cron endpoint
+    // drives the same job when one is configured.)
+    let sync: Record<string, unknown> | undefined;
+    if (ws) {
+      try {
+        const { loadFeatures } = await import('@/lib/borga/features-server');
+        if ((await loadFeatures(userId, ws)).flags.explee) {
+          const { runSyncJob, listSyncJobs } = await import('@/lib/borga/sync-jobs');
+          await import('@/lib/borga/sync-registry');
+          const job = listSyncJobs().find((j) => j.id === 'explee-hot-leads');
+          if (job) sync = await runSyncJob(userId, ws, job);
+        }
+      } catch {
+        /* the beat goes on — the sync is best-effort on the tick */
+      }
+    }
+    return NextResponse.json({ ok: true, ...result, ...(sync ? { sync } : {}) });
   }
 
   // trigger — enqueue one task now (bypasses quiet hours, keeps overlap guard).

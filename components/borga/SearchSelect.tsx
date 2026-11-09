@@ -86,7 +86,7 @@ export function SearchSelect({
           aria-label={rest['aria-label']}
           disabled={disabled}
           className={cn(
-            'flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 text-left text-sm shadow-xs outline-none transition focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50',
+            'flex h-8.5 w-full items-center justify-between gap-2 rounded-md border border-border/85 bg-background px-2.5 text-left text-sm shadow-2xs outline-none transition-colors hover:bg-muted/20 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50',
             className,
           )}
         >

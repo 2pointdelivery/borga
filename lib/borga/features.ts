@@ -38,6 +38,7 @@ export const FEATURES = [
   { id: 'calls', label: 'Calls', description: 'Outbound calls. Real only with Twilio configured, otherwise simulated.', status: 'simulated', defaultOn: false, page: 'communications', tab: 'calls', group: 'Communications' },
   { id: 'secureChat', label: 'Encrypted chat', description: 'Encrypted internal threads.', status: 'beta', defaultOn: true, page: 'communications', tab: 'securechat', group: 'Communications' },
   { id: 'social', label: 'Social media', description: 'Post planner. Publishes live to linked accounts via Composio; anything unlinked stays queued.', status: 'beta', defaultOn: true, page: 'marketing', tab: 'social', group: 'Marketing' },
+  { id: 'explee', label: 'Explee (outreach hot leads)', description: 'Explee finds B2B leads, emails them and flags interested replies as hot leads. New hot leads sync into the sales pipeline about every 10 minutes.', status: 'beta', defaultOn: true, group: 'Marketing' },
   { id: 'advertising', label: 'Advertising', description: 'Ad campaign tracker.', status: 'experimental', defaultOn: false, page: 'marketing', tab: 'advertising', group: 'Marketing' },
   { id: 'banking', label: 'Banking', description: 'Bank accounts, transactions and reconciliation rules.', status: 'beta', defaultOn: true, page: 'finance', tab: 'banking', group: 'Finance' },
   { id: 'fixedAssets', label: 'Fixed assets', description: 'Asset register with automatic depreciation, revaluation and impairment under IFRS, US GAAP or ASPE.', status: 'beta', defaultOn: true, page: 'finance', tab: 'assets', group: 'Finance' },
@@ -66,6 +67,7 @@ export const FEATURES = [
   { id: 'payroll', label: 'Payroll', description: 'Pay runs from HR salaries with withholding taxes and employer contributions, every line mapped to a ledger account. Lives under HR.', status: 'experimental', defaultOn: true, page: 'hr', tab: 'payroll', group: 'Company' },
   { id: 'procurement', label: 'Purchase orders', description: 'Purchase orders, goods receipt and 3-way PO → receipt → bill matching. Feeds Vendors & AP, Inventory costing and Approvals.', status: 'experimental', defaultOn: true, page: 'inventory', tab: 'orders', group: 'Operations' },
   { id: 'quotes', label: 'Quotes & estimates', description: 'Quotes and estimates with versioning, expiry and one-click convert to invoice or project. HubSpot-style CPQ lite for the Sales pipeline.', status: 'experimental', defaultOn: true, page: 'sales', tab: 'quotes', group: 'Operations' },
+  { id: 'sharedServices', label: 'Shared Services (advisors & agencies)', description: 'Hire vetted accountants, project managers, sales and marketing agencies; book calls, accept proposals or packages, and grant module-scoped workspace access.', status: 'beta', defaultOn: true, page: 'services', group: 'Company' },
 ] as const satisfies readonly FeatureDef[];
 
 export type FeatureId = (typeof FEATURES)[number]['id'];

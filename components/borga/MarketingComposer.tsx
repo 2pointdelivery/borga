@@ -10,6 +10,7 @@ import { useBorga } from '@/lib/borga/store';
 import { CHANNEL_CHAR_LIMIT } from '@/lib/borga/social-publish';
 import { renderPostPreview } from '@/lib/borga/safe-markdown';
 import { CHANNEL_LABEL, type SocialChannel } from '@/lib/borga/data';
+import { ConfigAutoLink } from './ConfigDeepLink';
 import { cn } from '@/lib/utils';
 
 const TONES = ['Professional', 'Friendly', 'Bold', 'Playful'] as const;
@@ -181,7 +182,11 @@ export function MarketingComposer({
             {aiBusy ? 'Drafting…' : 'Generate'}
           </Button>
         </div>
-        {aiError && <p className="mt-1 text-[11px] text-destructive">{aiError}</p>}
+        {aiError && (
+          <div className="mt-1.5 text-[11px] text-destructive">
+            <ConfigAutoLink text={aiError} />
+          </div>
+        )}
       </div>
     </div>
   );

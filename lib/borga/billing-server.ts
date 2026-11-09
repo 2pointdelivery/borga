@@ -5,7 +5,7 @@ import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from './keys
 import { getUserById } from '@/lib/auth/queries';
 import { isOperator } from '@/lib/auth/signup-policy';
 import {
-  ACCESS_TEXT, DEFAULT_LEGACY_GRACE_DAYS, EMPTY_BILLING, PRICE_CENTS_PER_USER, billableSeats, billingModeOf, evaluateAccess, monthlyCents,
+  ACCESS_TEXT, DEFAULT_LEGACY_GRACE_DAYS, EMPTY_BILLING, PRICE_CENTS_PER_USER, billableSeats, billingModeOf, evaluateAccess,
   type BillingInfo, type BillingRecord,
 } from './billing';
 import {
@@ -31,7 +31,7 @@ function stripeFor(inject?: StripeClient): StripeClient {
   if (inject) return inject;
   const key = (process.env.STRIPE_SECRET_KEY ?? '').trim();
   if (!key) throw new BillingUserError('Billing is not configured on this server yet. Ask the administrator.');
-  // a stand-in server (scripts/fake-stripe.mjs) for development; never honoured in production, so no setting can send the real key elsewhere
+  // STRIPE_BASE_URL points at a stand-in server for development; never honoured in production, so no setting can send the real key elsewhere
   const base = process.env.NODE_ENV !== 'production' ? (process.env.STRIPE_BASE_URL ?? '').trim() || undefined : undefined;
   return createStripe(key, { base });
 }
@@ -63,13 +63,32 @@ async function workspaceOf(u: string, ws: string): Promise<Workspace | undefined
 }
 
 async function seatsFor(u: string, ws: string, ownerEmail?: string): Promise<number> {
-  const invites = (await getBorgaState<TeamInvite[]>(userWsKey(u, ws, 'invites'))) ?? [];
-  return billableSeats(invites.filter((i) => i.status === 'accepted').map((i) => i.email), ownerEmail);
+  const [invites, engagements] = await Promise.all([
+    getBorgaState<TeamInvite[]>(userWsKey(u, ws, 'invites')),
+    getBorgaState<Array<{ clientUserId?: string; clientWs?: string; status?: string; advisorEmail?: string }>>('t::shared_services::engagements').catch(() => null),
+  ]);
+  const advisorEmails = new Set(
+    (engagements ?? [])
+      .filter((e) => e && e.clientUserId === u && e.clientWs === ws && e.status === 'active' && e.advisorEmail)
+      .map((e) => String(e.advisorEmail).trim().toLowerCase()),
+  );
+  const teamEmails = (invites ?? [])
+    .filter((i) => i.status === 'accepted' && !advisorEmails.has(i.email.trim().toLowerCase()))
+    .map((i) => i.email);
+  return billableSeats(teamEmails, ownerEmail);
 }
 
 export async function billingInfo(u: string, ws: string, opts: { sync?: boolean; stripe?: StripeClient } = {}): Promise<BillingInfo> {
   const mode = billingMode();
-  const [record, user, workspace] = await Promise.all([loadRecord(u, ws), getUserById(u), workspaceOf(u, ws)]);
+  const [record, user, workspace, adminCfg] = await Promise.all([
+    loadRecord(u, ws),
+    getUserById(u),
+    workspaceOf(u, ws),
+    getBorgaState<{ pricePerUserCents?: number }>('t::admin::config').catch(() => null),
+  ]);
+  const pricePerUserCents = typeof adminCfg?.pricePerUserCents === 'number' && Number.isFinite(adminCfg.pricePerUserCents) && adminCfg.pricePerUserCents >= 0
+    ? Math.round(adminCfg.pricePerUserCents)
+    : PRICE_CENTS_PER_USER;
   const seats = await seatsFor(u, ws, user?.email);
   const access = mode === 'off'
     ? evaluateAccess({ mode, record, startedOn: '1970-01-01', graceDays: 0, isOperator: false, now: new Date() })
@@ -87,7 +106,7 @@ export async function billingInfo(u: string, ws: string, opts: { sync?: boolean;
   }
   return {
     mode, configured: stripeConfigured(), access: access.access, reason: access.reason, message: ACCESS_TEXT[access.reason], graceEndsOn: access.graceEndsOn,
-    status: record.status, seats, billedSeats: record.seats, pricePerUserCents: PRICE_CENTS_PER_USER, monthlyCents: monthlyCents(seats),
+    status: record.status, seats, billedSeats: record.seats, pricePerUserCents, monthlyCents: Math.max(1, Math.floor(seats)) * pricePerUserCents,
     currentPeriodEnd: record.currentPeriodEnd, canManage: !!record.customerId,
   };
 }

@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import type { DigestFrequency, EmailEventDef, EmailEventId, EmailSettings } from '@/lib/borga/email-core';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 
 interface LogRow {
   at: string;
@@ -110,7 +111,7 @@ export function EmailUpdatesCard() {
   const wsName = activeWorkspace()?.name ?? 'this company';
 
   return (
-    <Card className="space-y-4 p-5">
+    <Card id="config-email-updates" className="space-y-4 p-5 scroll-mt-20">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Mail className="h-4 w-4 text-primary" /> Email updates for {wsName}
@@ -126,9 +127,19 @@ export function EmailUpdatesCard() {
       </p>
 
       {!s.smtpConfigured && (
-        <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-700">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Outgoing email (SMTP) is not configured, so nothing can be delivered. Add the SMTP settings under Integrations → AI &amp; Voice, then send a test email here. No mail server? <a href={MAILDOG_URL} target="_blank" rel="noopener noreferrer" className="font-medium underline">Create a MailDog account</a> to get your email address and SMTP details.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-300">
+          <p className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              Outgoing email (SMTP) is not configured, so nothing can be delivered. Add the SMTP settings under Integrations → Connections, then send a test email here. No mail server?{' '}
+              <a href={MAILDOG_URL} target="_blank" rel="noopener noreferrer" className="font-medium underline">
+                Create a MailDog account
+              </a>{' '}
+              to get your email address and SMTP details.
+            </span>
+          </p>
+          <ConfigDeepLinkButton target="smtp" label="Configure SMTP →" />
+        </div>
       )}
       {!s.appUrl && <p className="text-[11px] text-muted-foreground">Links back to Borga appear in emails once the public address is known. It is remembered when you save here from your browser, or set <code>APP_URL</code> on the server.</p>}
 

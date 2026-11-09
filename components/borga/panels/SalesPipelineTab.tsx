@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, DollarSign, Target, TrendingUp, GripVertical, Mail, Users, MessageSquare, Send, MessageCircle, LayoutGrid, LayoutList, Pencil, ReceiptText, Stethoscope, FileText, ArrowDownUp, UserCheck, Copy } from 'lucide-react';
+import { Plus, DollarSign, Target, TrendingUp, GripVertical, Mail, Users, MessageSquare, Send, MessageCircle, LayoutGrid, LayoutList, Pencil, ReceiptText, Stethoscope, FileText, ArrowDownUp, UserCheck, Copy, Flame } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,6 +17,7 @@ import { WhatsAppPanel } from '../WhatsAppPanel';
 import { LeadEditDialog, LeadDiagnosisInputs } from '../LeadEditDialog';
 import { LeadRulesDialog } from '../LeadRulesDialog';
 import { LeadDedupeDialog } from '../LeadDedupeDialog';
+import { ExpleeSyncCard } from './ExpleeSyncCard';
 import { scoreLead, compareLeadsByScore, type LeadScore } from '@/lib/borga/lead-score';
 import { findLeadDuplicates } from '@/lib/borga/duplicates';
 import { cn } from '@/lib/utils';
@@ -46,20 +47,26 @@ function ScorePill({ score }: { score: LeadScore }) {
 }
 
 export function SalesPipelineTab() {
-  const { leads, moveLeadStage, addLead, agents, customers, messages, log, convertLeadToInvoice, quoteFromLead, invoices, activeWorkspace } = useBorga();
+  const { leads, moveLeadStage, addLead, agents, customers, messages, log, convertLeadToInvoice, quoteFromLead, invoices, activeWorkspace, whatsapp } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
   const money = (n: number) => fmtMoney(n, currency);
   const [open, setOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
-  const [view, setView] = useState<'board' | 'list'>('board');
+  const [view, setView] = useState<'board' | 'list'>('list');
   const [outcomeTarget, setOutcomeTarget] = useState<{ lead: Lead; stage: 'won' | 'lost' } | null>(null);
   const [outcomeReason, setOutcomeReason] = useState('');
   const [outcomeNote, setOutcomeNote] = useState('');
   const [whatsOpen, setWhatsOpen] = useState(false);
+  const [whatsLeadId, setWhatsLeadId] = useState<string | undefined>(undefined);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [dedupeOpen, setDedupeOpen] = useState(false);
   const [sortByScore, setSortByScore] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);  const [form, setForm] = useState({ name: '', company: '', customerId: '' as string | undefined, email: '', phone: '', value: '', priority: 'P1' as Priority, source: 'Web — Form', ownerId: 'a-sales', diagnosis: undefined as Lead['diagnosis'] });
+
+  const openWhatsAppForLead = (lead?: Lead) => {
+    setWhatsLeadId(lead?.id);
+    setWhatsOpen(true);
+  };
 
   const openComms = (mode: 'single' | 'bulk', lead: Lead | null = null) => {
     // The inbox is the one home for communications now: a lead row opens its
@@ -134,24 +141,34 @@ export function SalesPipelineTab() {
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Sales & leads pipeline" sub="Drag deals between stages — recorded in Borga, pull your CRM data from Company → Company Engine" />
+        <SectionTitle title="Sales & leads pipeline" sub="Drag deals between stages — recorded in Borga. Hot leads arrive on their own from Explee; CRM data can be pulled from Company → Company Engine" />
         <div className="flex flex-wrap gap-2">
-          <div className="flex overflow-hidden rounded-lg border bg-muted/20">
-            <button
-              onClick={() => setView('board')}
-              className={cn('flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors', view === 'board' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
-            >
-              <LayoutGrid className="h-3.5 w-3.5" /> Board
-            </button>
+          <div className="flex overflow-hidden rounded-lg border border-border/80 bg-muted/35 p-0.5">
             <button
               onClick={() => setView('list')}
-              className={cn('flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors', view === 'list' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all',
+                view === 'list' ? 'bg-background text-foreground shadow-2xs ring-1 ring-border/70' : 'text-muted-foreground hover:text-foreground',
+              )}
             >
               <LayoutList className="h-3.5 w-3.5" /> List
             </button>
+            <button
+              onClick={() => setView('board')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all',
+                view === 'board' ? 'bg-background text-foreground shadow-2xs ring-1 ring-border/70' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" /> Board
+            </button>
           </div>
-          <Button variant="outline" className="gap-1.5" onClick={() => setWhatsOpen(true)}>
-            <MessageCircle className="h-4 w-4 text-green-600" /> WhatsApp
+          <Button variant="outline" className="gap-1.5" onClick={() => openWhatsAppForLead()}>
+            <MessageCircle className="h-4 w-4 text-emerald-600" />
+            <span>WhatsApp</span>
+            {whatsapp.connected && (
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title={`Connected: ${whatsapp.phone}`} />
+            )}
           </Button>
           <Button variant="outline" className="gap-1.5" onClick={() => openComms('bulk')} title="Pick recipients in the dialog — it needs at least one lead">
             <Mail className="h-4 w-4" /> Send message
@@ -171,48 +188,18 @@ export function SalesPipelineTab() {
         </div>
       </div>
 
-      {/* Recent communications */}
-      {messages.length > 0 && (
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <SectionTitle title="Outbound communications" sub="Email, SMS & WhatsApp — single and bulk" />
-            <span className="text-xs text-muted-foreground">{messages.filter((m) => m.status === 'sent').length} sent — {messages.filter((m) => m.status === 'scheduled').length} scheduled</span>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {messages.slice(0, 6).map((m) => {
-              const Icon = COMMS_ICON[m.channel] ?? Mail;
-              return (
-                <div key={m.id} className="flex items-start gap-3 rounded-lg border bg-muted/20 p-3">
-                  <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1', COMMS_CHANNEL_COLOR[m.channel])}>
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium capitalize">{COMMS_CHANNEL_LABEL[m.channel]}</p>
-                      {m.mode === 'bulk' && <Badge variant="secondary" className="text-[10px]">bulk — {m.count}</Badge>}
-                      <span className={cn('ml-auto text-[11px]', m.status === 'sent' ? 'text-emerald-600' : m.status === 'scheduled' ? 'text-sky-600' : 'text-rose-600')}>{m.status}</span>
-                    </div>
-                    <p className="truncate text-[11px] text-muted-foreground">{m.to}</p>
-                    {m.subject && <p className="truncate text-xs font-medium">{m.subject}</p>}
-                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{m.body}</p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">{m.sentAt}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
+      <ExpleeSyncCard />
 
+      {/* 1. Metrics strip first */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {summary.map((s) => (
-          <Card key={s.label} className="flex items-center gap-3 p-3" title={'hint' in s ? s.hint : undefined}>
-            <span className={cn('flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10', s.color)}>
+          <Card key={s.label} className="flex flex-row items-center gap-3 p-3.5" title={'hint' in s ? s.hint : undefined}>
+            <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-inset ring-primary/15', s.color)}>
               <s.icon className="h-4 w-4" />
             </span>
-            <div>
-              <p className="text-sm font-semibold">{s.value}</p>
-              <p className="text-[11px] text-muted-foreground">{s.label}</p>
+            <div className="min-w-0">
+              <p className="truncate font-mono text-base font-semibold tabular-nums tracking-tight text-foreground">{s.value}</p>
+              <p className="truncate text-[11px] font-medium text-muted-foreground">{s.label}</p>
             </div>
           </Card>
         ))}
@@ -258,6 +245,11 @@ export function SalesPipelineTab() {
                             {hasDiagnosis(l) && (
                               <span title={`Diagnosed: ${l.diagnosis?.problem ?? '—'}${l.diagnosis?.since ? ` (since ${l.diagnosis.since})` : ''}${l.diagnosis?.tried ? ` — tried: ${l.diagnosis.tried}` : ''}`}>
                                 <Stethoscope className="h-3 w-3 shrink-0 text-emerald-600" />
+                              </span>
+                            )}
+                            {l.hotWhy && (
+                              <span title={`Hot lead — their reply: “${l.hotWhy}”`}>
+                                <Flame className="h-3 w-3 shrink-0 text-amber-500" />
                               </span>
                             )}
                           </p>
@@ -307,6 +299,13 @@ export function SalesPipelineTab() {
                                   title={`Edit ${l.name}`}
                                 >
                                   <Pencil className="h-3 w-3" />
+                                </button>
+                                <button
+                                  onClick={() => openWhatsAppForLead(l)}
+                                  className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-600"
+                                  title={`WhatsApp ${l.name}`}
+                                >
+                                  <MessageCircle className="h-3 w-3" />
                                 </button>
                                 <button
                                   onClick={() => openComms('single', l)}
@@ -370,6 +369,11 @@ export function SalesPipelineTab() {
                               <Stethoscope className="h-3 w-3 shrink-0 text-emerald-600" />
                             </span>
                           )}
+                          {l.hotWhy && (
+                            <span title={`Hot lead — their reply: “${l.hotWhy}”`}>
+                              <Flame className="h-3 w-3 shrink-0 text-amber-500" />
+                            </span>
+                          )}
                         </p>
                         <p className="text-[11px] text-muted-foreground">{l.company}{l.email ? ` — ${l.email}` : ''}</p>
                       </td>
@@ -392,6 +396,9 @@ export function SalesPipelineTab() {
                       <td className="px-4 py-2.5 text-xs text-muted-foreground">{l.source}</td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => openWhatsAppForLead(l)} className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-600" title={`WhatsApp ${l.name}`}>
+                            <MessageCircle className="h-3.5 w-3.5" />
+                          </button>
                           <button onClick={() => openComms('single', l)} className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary" title="Message">
                             <Mail className="h-3.5 w-3.5" />
                           </button>
@@ -434,15 +441,54 @@ export function SalesPipelineTab() {
         </Card>
       )}
 
+      {/* 3. Outbound communications third (after leads section) */}
+      {messages.length > 0 && (
+        <Card className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <SectionTitle title="Outbound communications" sub="Email, SMS & WhatsApp — single and bulk" />
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              {messages.filter((m) => m.status === 'sent').length} sent · {messages.filter((m) => m.status === 'scheduled').length} scheduled
+            </span>
+          </div>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {messages.slice(0, 6).map((m) => {
+              const Icon = COMMS_ICON[m.channel] ?? Mail;
+              return (
+                <div key={m.id} className="flex items-start gap-3 rounded-lg border border-border/80 bg-muted/15 p-3">
+                  <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1', COMMS_CHANNEL_COLOR[m.channel])}>
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-semibold capitalize">{COMMS_CHANNEL_LABEL[m.channel]}</p>
+                      {m.mode === 'bulk' && <Badge variant="secondary" className="text-[10px]">bulk — {m.count}</Badge>}
+                      <span className={cn('ml-auto font-mono text-[10px] font-medium uppercase', m.status === 'sent' ? 'text-emerald-600' : m.status === 'scheduled' ? 'text-sky-600' : 'text-rose-600')}>{m.status}</span>
+                    </div>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">{m.to}</p>
+                    {m.subject && <p className="mt-0.5 truncate text-xs font-medium">{m.subject}</p>}
+                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{m.body}</p>
+                    <p className="mt-1 font-mono text-[10px] text-muted-foreground">{m.sentAt}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Capture a new lead</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            <Input placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <div className="space-y-3.5">
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-muted-foreground">Full name</label>
+              <Input placeholder="e.g. Ama Mensah" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            </div>
             <div className="grid grid-cols-2 gap-3">
-              <div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Company</label>
                 <SearchSelect
                   options={customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry }))}
                   value={form.customerId ?? form.company}
@@ -451,36 +497,57 @@ export function SalesPipelineTab() {
                     if (picked) setForm({ ...form, customerId: picked.id, company: picked.name });
                     else setForm({ ...form, customerId: undefined, company: option?.label ?? v });
                   }}
-                  placeholder="Company (search or type)…"
+                  placeholder="Search or type company…"
                   searchPlaceholder="Search customers"
                   allowCustom
                 />
               </div>
-              <Input placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-            </div>
-            <Input placeholder="Phone (used for outbound calls)" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-            <div className="grid grid-cols-2 gap-3">
-              <Input placeholder="Source (e.g. Web — Form)" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} />
-              <SearchSelect
-                options={agents.map((a) => ({ value: a.id, label: a.name, detail: a.department }))}
-                value={form.ownerId}
-                onChange={(v) => setForm({ ...form, ownerId: v || 'a-sales' })}
-                placeholder="Owner agent…"
-                searchPlaceholder="Search agents"
-                clearable={false}
-              />
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Email</label>
+                <Input type="email" placeholder="ama@company.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Input placeholder="Deal value ($)" type="number" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} />
-              <div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Phone (WhatsApp &amp; calls)</label>
+                <Input placeholder="+1 (555) 234-5678" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="font-mono text-xs" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Lead source</label>
+                <Input placeholder="e.g. Web — Form" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Deal value ({currency})</label>
+                <Input placeholder="0.00" type="number" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} className="font-mono tabular-nums" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Priority</label>
                 <SelectPriority value={form.priority} onChange={(v) => setForm({ ...form, priority: v })} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Owner agent</label>
+                <SearchSelect
+                  options={agents.map((a) => ({ value: a.id, label: a.name, detail: a.department }))}
+                  value={form.ownerId}
+                  onChange={(v) => setForm({ ...form, ownerId: v || 'a-sales' })}
+                  placeholder="Owner agent…"
+                  searchPlaceholder="Search agents"
+                  clearable={false}
+                />
               </div>
             </div>
             <LeadDiagnosisInputs value={form.diagnosis} onChange={(d) => setForm({ ...form, diagnosis: d })} />
             <DraftDuplicates name={form.name} company={form.company} email={form.email} phone={form.phone} />
-            <Button className="w-full" onClick={submit}>
-              <Plus className="h-4 w-4" /> Add to pipeline
-            </Button>
+            <div className="flex items-center justify-end gap-2 border-t border-border/70 pt-3">
+              <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={submit} disabled={!form.name.trim()}>
+                <Plus className="h-4 w-4" /> Add to pipeline
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -536,7 +603,7 @@ export function SalesPipelineTab() {
         </DialogContent>
       </Dialog>
 
-      <WhatsAppPanel open={whatsOpen} onOpenChange={setWhatsOpen} />
+      <WhatsAppPanel open={whatsOpen} onOpenChange={setWhatsOpen} initialLeadId={whatsLeadId} />
       <LeadRulesDialog open={rulesOpen} onOpenChange={setRulesOpen} />
       <LeadDedupeDialog open={dedupeOpen} onOpenChange={setDedupeOpen} />
       <LeadEditDialog open={!!editLead} onOpenChange={(o) => { if (!o) setEditLead(null); }} lead={editLead} />

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Sparkles, X, RefreshCw, ArrowUpRight, Send, MessageCircle, EyeOff, PartyPopper, BellRing, MessageCircleQuestion, Ear } from 'lucide-react';
+import { Sparkles, X, RefreshCw, ArrowUpRight, Send, MessageCircle, EyeOff, PartyPopper, BellRing, MessageCircleQuestion, Ear, BookOpen, CheckCircle2, Search } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +10,20 @@ import { useBorga } from '@/lib/borga/store';
 import { fmtMoney } from '@/lib/borga/currencies';
 import { ticketsApi, type ClientSettings } from '@/lib/borga/tickets-client';
 import { deriveBusinessInsights, type BusinessInsight } from '@/lib/borga/insights';
-import { ADVISOR_SUGGESTIONS, ADVISOR_TOPIC_META, answerAdvisorQuestion, detectAdvisorTopics, routeAdvisorTopic, type AdvisorAnswer, type AdvisorContext, type AdvisorMemory } from '@/lib/borga/advisor';
+import {
+  ADVISOR_SUGGESTIONS,
+  ADVISOR_TOPIC_META,
+  HOW_TO_GUIDES,
+  answerAdvisorQuestion,
+  detectAdvisorTopics,
+  matchHowToGuide,
+  routeAdvisorTopic,
+  searchHowToGuides,
+  type AdvisorAnswer,
+  type AdvisorContext,
+  type AdvisorMemory,
+  type HowToStep,
+} from '@/lib/borga/advisor';
 import { AdvisorAvatar, type AdvisorMood } from './AdvisorAvatar';
 import { isDoneStatus, type TicketSummary } from '@/lib/borga/tickets';
 import { slaFor } from './ticket-bits';
@@ -106,6 +119,10 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
   const [draft, setDraft] = useState('');
   const [teaser, setTeaser] = useState<Teaser | null>(null);
   const [wiggleKey, setWiggleKey] = useState(0);
+  const [advisorMode, setAdvisorMode] = useState<'insights' | 'guides'>('insights');
+  const [guideQuery, setGuideQuery] = useState('');
+  const [expandedGuideId, setExpandedGuideId] = useState<string | null>(null);
+  const [doneSteps, setDoneSteps] = useState<Set<string>>(new Set());
 
   const lastActiveRef = useRef(Date.now());
   const lastTeaserAtRef = useRef(0);
@@ -219,11 +236,41 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
       .map((id) => ({ id, ...ADVISOR_TOPIC_META[id] }));
   }, [draft]);
 
-  const go = (link: NonNullable<BusinessInsight['link']>) => {
+  const go = (link: { page: string; tab?: string; sectionId?: string }) => {
     setOpen(false);
     setTeaser(null);
-    window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: link.page, tab: link.tab } }));
+    window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: link.page, tab: link.tab, sectionId: link.sectionId } }));
+    if (link.sectionId) {
+      window.setTimeout(() => {
+        const el = document.getElementById(link.sectionId!);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('borga-config-highlight');
+          window.setTimeout(() => el.classList.remove('borga-config-highlight'), 2600);
+        }
+      }, 150);
+    }
   };
+
+  const toggleStepDone = (key: string) => {
+    setDoneSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const filteredGuides = useMemo(
+    () => searchHowToGuides(guideQuery, page, tab),
+    [guideQuery, page, tab],
+  );
+
+  const matchedGuideHint = useMemo(() => {
+    const t = draft.trim();
+    if (t.length < 3) return null;
+    return matchHowToGuide(t);
+  }, [draft]);
 
   const showTeaser = useCallback((t: Teaser) => {
     lastTeaserAtRef.current = Date.now();
@@ -427,8 +474,9 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
       {open && (
         <Card className="borga-teaser-in fixed bottom-24 left-5 z-40 flex max-h-[70vh] w-[min(400px,92vw)] flex-col overflow-hidden shadow-xl">
           <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-            <span className="flex items-center gap-2 text-sm font-semibold">
-              <Sparkles className="h-4 w-4 text-primary" /> Business advisor
+            <span className="flex items-center gap-2.5 text-sm font-semibold">
+              <AdvisorAvatar mood={mood} size={28} />
+              <span>Business Advisor</span>
               {urgent > 0 && <Badge className="bg-amber-500/10 text-[10px] text-amber-600">{urgent} need{urgent === 1 ? 's' : ''} action</Badge>}
             </span>
             <div className="flex items-center gap-1">
@@ -443,22 +491,178 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
               </button>
             </div>
           </div>
-          <div className="border-b bg-muted/30 px-4 py-2">
-            <p className="text-[11px] text-muted-foreground">
-              Contextual help — you are on <span className="font-semibold text-foreground">{page}{tab ? ` / ${tab}` : ''}</span>. Try: <button onClick={() => ask(nudge.question)} className="font-medium text-primary hover:underline">“{nudge.question}”</button>
-            </p>
+          <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-3.5 py-2">
+            <div className="inline-flex rounded-lg border border-border/80 bg-background p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setAdvisorMode('insights')}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-[11px] font-medium transition-all',
+                  advisorMode === 'insights' ? 'bg-primary text-primary-foreground shadow-2xs' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                Insights &amp; Ask
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdvisorMode('guides')}
+                className={cn(
+                  'flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-all',
+                  advisorMode === 'guides' ? 'bg-primary text-primary-foreground shadow-2xs' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <BookOpen className="h-3 w-3" /> How-To Guides ({HOW_TO_GUIDES.length})
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setAdvisorMode('insights');
+                ask(nudge.question);
+              }}
+              className="truncate text-[11px] font-medium text-primary hover:underline"
+            >
+              “{nudge.question}”
+            </button>
           </div>
+
+          {advisorMode === 'guides' ? (
+            <div className="flex-1 space-y-2.5 overflow-y-auto p-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={guideQuery}
+                  onChange={(e) => setGuideQuery(e.target.value)}
+                  placeholder="Search how-to guides (invoice, WhatsApp, website, payroll…)"
+                  className="h-8 pl-8 text-xs"
+                />
+              </div>
+              {filteredGuides.map((g) => {
+                const isContextual = g.page === page;
+                const isExpanded = expandedGuideId === g.id || (expandedGuideId === null && filteredGuides[0]?.id === g.id);
+                return (
+                  <div
+                    key={g.id}
+                    className={cn(
+                      'rounded-xl border transition-colors',
+                      isContextual ? 'border-primary/35 bg-primary/[0.03]' : 'border-border/80 bg-muted/15',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setExpandedGuideId(isExpanded ? '__none__' : g.id)}
+                      className="flex w-full items-start justify-between gap-2 p-3 text-left"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-xs font-semibold text-foreground">{g.title}</span>
+                          {isContextual && (
+                            <Badge className="bg-primary/10 px-1.5 py-0 text-[9px] text-primary ring-1 ring-primary/25">
+                              For this page
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{g.summary}</p>
+                      </div>
+                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+                        {g.steps.length} steps
+                      </span>
+                    </button>
+                    {isExpanded && (
+                      <div className="space-y-2 border-t border-border/70 px-3 pb-3 pt-2.5">
+                        {g.steps.map((s: HowToStep) => {
+                          const stepKey = `${g.id}:${s.step}`;
+                          const done = doneSteps.has(stepKey);
+                          return (
+                            <div
+                              key={s.step}
+                              className={cn(
+                                'flex items-start gap-2.5 rounded-lg border p-2.5 text-xs transition-colors',
+                                done ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-border/70 bg-background',
+                              )}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => toggleStepDone(stepKey)}
+                                className={cn(
+                                  'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px] font-bold transition-colors',
+                                  done ? 'bg-emerald-600 text-white' : 'bg-primary/10 text-primary hover:bg-primary/20',
+                                )}
+                                title="Mark step done"
+                              >
+                                {done ? <CheckCircle2 className="h-3 w-3" /> : s.step}
+                              </button>
+                              <div className="min-w-0 flex-1">
+                                <p className={cn('font-medium text-foreground', done && 'line-through opacity-70')}>
+                                  {s.title}
+                                </p>
+                                <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{s.detail}</p>
+                                {s.link && (
+                                  <button
+                                    type="button"
+                                    onClick={() => go(s.link!)}
+                                    className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
+                                  >
+                                    <span>{s.ctaLabel ?? 'Go to step'}</span>
+                                    <ArrowUpRight className="h-2.5 w-2.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {filteredGuides.length === 0 && (
+                <p className="py-8 text-center text-xs text-muted-foreground">No how-to guides match “{guideQuery}”.</p>
+              )}
+            </div>
+          ) : (
           <div className="flex-1 space-y-3 overflow-y-auto p-3">
             {qa.length > 0 && (
               <div className="space-y-2">
                 {qa.map((t, n) => (
                   <div key={n} className="rounded-xl border border-primary/30 bg-primary/5 p-3">
                     <p className="text-xs font-semibold">{t.q}</p>
-                    <p className="mt-1 text-xs leading-snug text-muted-foreground">{t.a.text}</p>
-                    {t.a.link && (
-                      <Button size="sm" variant="outline" className="mt-2 h-7 gap-1 text-[11px]" onClick={() => go(t.a.link as NonNullable<BusinessInsight['link']>)}>
-                        Open <ArrowUpRight className="h-3 w-3" />
-                      </Button>
+                    {t.a.steps && t.a.steps.length > 0 ? (
+                      <div className="mt-2 space-y-1.5">
+                        {t.a.guideTitle && (
+                          <p className="text-[11px] font-semibold text-primary">
+                            Workflow: {t.a.guideTitle}
+                          </p>
+                        )}
+                        {t.a.steps.map((s) => (
+                          <div key={s.step} className="rounded-lg border border-border/80 bg-background p-2 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="font-medium text-foreground">
+                                {s.step}. {s.title}
+                              </span>
+                              {s.link && (
+                                <button
+                                  type="button"
+                                  onClick={() => go(s.link!)}
+                                  className="inline-flex shrink-0 items-center gap-0.5 rounded border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/15"
+                                >
+                                  {s.ctaLabel ?? 'Open'} <ArrowUpRight className="h-2.5 w-2.5" />
+                                </button>
+                              )}
+                            </div>
+                            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{s.detail}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        <p className="mt-1 text-xs leading-snug text-muted-foreground">{t.a.text}</p>
+                        {t.a.link && (
+                          <Button size="sm" variant="outline" className="mt-2 h-7 gap-1 text-[11px]" onClick={() => go(t.a.link!)}>
+                            Open <ArrowUpRight className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </>
                     )}
                   </div>
                 ))}
@@ -499,15 +703,31 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
               </div>
             ))}
           </div>
+          )}
           <div className="border-t p-2.5">
             {/* Live keyword hints — what the advisor hears in your typing */}
-            {hints.length > 0 && (
+            {(hints.length > 0 || matchedGuideHint) && (
               <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2 py-1.5">
                 <Ear className="h-3 w-3 shrink-0 text-primary" />
+                {matchedGuideHint && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdvisorMode('insights');
+                      ask(`How to ${matchedGuideHint.title}`);
+                    }}
+                    className="shrink-0 rounded-full bg-emerald-600 px-2.5 py-1 text-[11px] font-medium text-white transition-transform hover:scale-105"
+                  >
+                    How-To: {matchedGuideHint.title}
+                  </button>
+                )}
                 {hints.map((h) => (
                   <button
                     key={h.id}
-                    onClick={() => ask(h.prompt)}
+                    onClick={() => {
+                      setAdvisorMode('insights');
+                      ask(h.prompt);
+                    }}
                     className="shrink-0 rounded-full bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground transition-transform hover:scale-105"
                     title={`Ask: ${h.prompt}`}
                   >
@@ -545,11 +765,25 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
               <Input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') ask(draft); }}
-                placeholder="Ask about cash, pipeline, tickets…"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setAdvisorMode('insights');
+                    ask(draft);
+                  }
+                }}
+                placeholder="Ask about cash, pipeline, or 'how do I…' for steps"
                 className="h-9 text-xs"
               />
-              <Button size="icon" className="h-9 w-9 shrink-0" onClick={() => ask(draft)} disabled={!draft.trim()} title="Ask the engine">
+              <Button
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={() => {
+                  setAdvisorMode('insights');
+                  ask(draft);
+                }}
+                disabled={!draft.trim()}
+                title="Ask the engine"
+              >
                 <Send className="h-4 w-4" />
               </Button>
             </div>
@@ -562,8 +796,11 @@ export function AdvisoryWidget({ page = 'overview', tab }: { page?: string; tab?
         <div className="borga-teaser-in fixed bottom-24 left-5 z-40 w-[min(320px,88vw)]">
           <Card className="overflow-hidden shadow-xl">
             <div className="flex items-start gap-2.5 p-3.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-green-600 text-white">
-                <TeaserIcon className="h-4 w-4" />
+              <span className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+                <AdvisorAvatar mood={mood} size={36} />
+                <span className=" -bottom-0.5 -right-0.5 absolute flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-white ring-1 ring-background">
+                  <TeaserIcon className="h-2.5 w-2.5" />
+                </span>
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-[13px] font-semibold leading-snug">{teaser.title}</p>

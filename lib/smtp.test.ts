@@ -11,6 +11,9 @@ test('good settings are accepted and normalised', () => {
   assert.ok(d.ok && d.settings.port === 587 && d.settings.host === 'smtp.acme.com' && d.settings.user === '' && d.settings.secure === false, 'defaults: port 587, no login, host lower-cased');
   assert.ok(parseSmtp({ ...ok, port: '465' }).ok && (parseSmtp({ ...ok, port: '465' }) as { settings: { secure: boolean } }).settings.secure === true, 'port 465 is encrypted by default');
   assert.equal((parseSmtp({ ...ok, secure: 'yes' }) as { settings: { secure: boolean } }).settings.secure, true);
+  // Google 16-letter app passwords pasted with spaces are normalized automatically
+  const gmailSpaced = parseSmtp({ ...ok, password: 'abcd efgh ijkl mnop', secure: '587' });
+  assert.ok(gmailSpaced.ok && gmailSpaced.settings.password === 'abcdefghijklmnop' && gmailSpaced.settings.secure === false);
 });
 
 test('hosts that could reach inside the network, odd ports, and half-filled forms are refused with a reason', () => {

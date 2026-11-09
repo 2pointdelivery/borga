@@ -41,6 +41,7 @@ import { AgentAvatar, SectionTitle } from '../bits';
 import { DateInput } from '../form-widgets';
 import { SearchSelect } from '../SearchSelect';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { openConfigDeepLink } from '@/lib/borga/config-deeplink';
 import { cn } from '@/lib/utils';
 import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
 
@@ -251,6 +252,7 @@ export function CommandCenter() {  const {
     deleteGoal,
     approvals,
     setApproval,
+    recordApprovalResult,
     finance,
     connections,
     llm,
@@ -347,6 +349,8 @@ export function CommandCenter() {  const {
 
   // ---- Attention items ----
   const pendingApprovals = approvals.filter((a) => a.status === 'pending');
+  // Approved actions that have run: their execution receipt (ok/failed + why).
+  const recentlyExecuted = approvals.filter((a) => a.status === 'approved' && a.lastResult).slice(0, 5);
   const atRiskGoals = goals.filter((g) => g.status === 'at-risk' || g.status === 'behind');
   const offConnections = connections.filter((c) => c.status === 'off' || c.status === 'error');
   const p0Tasks = sortTasks(tasks.filter((t) => t.status !== 'done' && t.priority === 'P0'));
@@ -406,20 +410,27 @@ export function CommandCenter() {  const {
 
   /** Executes a held autonomous-mode action once its approval is granted (payment release or outbound send). */
   const executeApprovedAction = async (a: NonNullable<ReturnType<typeof approvals.find>>) => {
+    // Collect the outcome of whichever held action runs, then write it back as
+    // the approval's execution receipt so "approved but nothing happened" is
+    // visible and retryable instead of silent.
+    let outcome: { ok: boolean; detail: string } | null = null;
     if (a.pendingPayment?.kind === 'bill') {
       const { targetId, method, paidOnIso, externalRef } = a.pendingPayment;
       payBill(targetId, method, paidOnIso, externalRef);
       log({ agentId: 'a-finance', agentName: 'Sage', actor: 'agent', kind: 'task', message: `Approved payment released: ${a.title}.` });
+      outcome = { ok: true, detail: `Payment released for bill ${targetId}.` };
     }
     if (a.pendingSend) {
       try {
-        const d = await sendCompanyEmail({ ws: activeWorkspaceId, to: a.pendingSend.to, subject: a.pendingSend.subject, body: a.pendingSend.body, composioKey: composio.apiKey });
+        const d = await sendCompanyEmail({ ws: activeWorkspaceId, to: a.pendingSend.to, subject: a.pendingSend.subject, body: a.pendingSend.body });
         log({
           agentId: 'a-sales', agentName: 'Atlas', actor: 'agent', kind: 'sync',
           message: d.ok ? `Approved send delivered to ${a.pendingSend.to}: ${a.title}.` : `Approved send to ${a.pendingSend.to} failed to deliver — resend manually from the record.`,
         });
+        outcome = { ok: !!d.ok, detail: d.ok ? `Message delivered to ${a.pendingSend.to}.` : `Delivery to ${a.pendingSend.to} failed.` };
       } catch {
         log({ agentId: 'a-sales', agentName: 'Atlas', actor: 'system', kind: 'system', message: `Approved send to ${a.pendingSend.to} could not be delivered — resend manually from the record.` });
+        outcome = { ok: false, detail: `Could not reach the mail server for ${a.pendingSend.to}.` };
       }
     }
     if (a.pendingComposio) {
@@ -428,15 +439,17 @@ export function CommandCenter() {  const {
         const res = await fetch('/api/borga/composio', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-          body: JSON.stringify({ action: 'execute', appName: action, entityId, apiKey: composio.apiKey, params: parameters }),
+          body: JSON.stringify({ action: 'execute', appName: action, entityId, params: parameters }),
         });
         const d = (await res.json()) as { ok?: boolean };
         log({
           agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync',
           message: d.ok ? `Approved autonomous action executed: ${action} on ${app}.` : `Approved action "${action}" on ${app} failed to execute — retry manually.`,
         });
+        outcome = { ok: !!d.ok, detail: d.ok ? `Action ${action} executed on ${app}.` : `Action "${action}" on ${app} failed.` };
       } catch {
         log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Approved action "${action}" on ${app} could not be executed — retry manually.` });
+        outcome = { ok: false, detail: `Action "${action}" on ${app} could not be reached.` };
       }
     }
     // Tier 6: held MCP tool call runs exactly once on approval (per-action, never blanket).
@@ -453,14 +466,43 @@ export function CommandCenter() {  const {
           agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync',
           message: d.ok ? `Approved MCP tool executed: ${tool} on ${server}.` : `Approved MCP tool "${tool}" on ${server} failed: ${d.error ?? 'unknown error'} — retry manually.`,
         });
+        outcome = { ok: !!d.ok, detail: d.ok ? `MCP tool ${tool} executed on ${server}.` : `MCP tool "${tool}" on ${server} failed: ${d.error ?? 'unknown error'}.` };
       } catch {
         log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Approved MCP tool "${tool}" on ${server} could not be executed — retry manually.` });
+        outcome = { ok: false, detail: `MCP tool "${tool}" on ${server} could not be reached.` };
       }
     }
     // Tier 6: held workflow triggers on approval; rejecting ran nothing.
+    // Approval actually dispatches: the server hands the workflow to the
+    // company engine or this workspace's AI workers (run queue).
     if (a.pendingWorkflow) {
-      log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Approved workflow triggered on engine: ${a.pendingWorkflow.workflowName}.` });
+      const workflowName = a.pendingWorkflow.workflowName;
+      try {
+        const res = await fetch('/api/borga/orchestrate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+          body: JSON.stringify({ action: 'run', workflowName, agent: 'Borga', ws: activeWorkspaceId }),
+        });
+        const d = (await res.json()) as { ok?: boolean; mode?: string; jobId?: string; agentName?: string; error?: string };
+        if (d.ok && d.mode === 'queue') {
+          log({
+            agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync',
+            message: `Approved workflow "${workflowName}" handed to ${d.agentName ?? 'an AI worker'} — live in Runs & Queue (job ${d.jobId}).`,
+          });
+          outcome = { ok: true, detail: `Handed to ${d.agentName ?? 'an AI worker'} — job ${d.jobId}.` };
+        } else if (d.ok) {
+          log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Approved workflow "${workflowName}" executed on the company engine.` });
+          outcome = { ok: true, detail: 'Executed on the company engine.' };
+        } else {
+          log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Approved workflow "${workflowName}" could not start: ${d.error ?? 'unknown error'}.` });
+          outcome = { ok: false, detail: d.error ?? 'The workflow could not start.' };
+        }
+      } catch {
+        log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Approved workflow "${workflowName}" could not be dispatched — retry from Workflows.` });
+        outcome = { ok: false, detail: 'Could not reach the orchestrator.' };
+      }
     }
+    if (outcome) recordApprovalResult(a.id, outcome);
   };
 
   const actOnApproval = (id: string, status: 'approved' | 'rejected') => {
@@ -578,11 +620,20 @@ export function CommandCenter() {  const {
               const dot = ok ? 'bg-emerald-500' : 'bg-amber-500';
               if (active === 'llm-muse' && ok) { label = 'Muse remote API configured'; }
               if (active === 'llm-muse' && !ok) { label = 'Muse not set up — add its remote base URL and key in Integrations → AI & Voice'; }
-              return (
+              return ok ? (
                 <span className={`flex items-center gap-1.5 rounded-full px-2 py-1 font-medium ring-1 ${color}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
                   {label}
                 </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openConfigDeepLink('ai-providers')}
+                  className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 font-medium ring-1 transition hover:opacity-85 ${color}`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+                  {label} →
+                </button>
               );
             })() : (
               <span className="flex items-center gap-1.5 rounded-full bg-muted px-2 py-1 font-medium text-muted-foreground ring-1 ring-border">
@@ -601,7 +652,7 @@ export function CommandCenter() {  const {
             </p>
           </div>
           <button
-            onClick={() => window.dispatchEvent(new CustomEvent('borga:nav', { detail: { page: 'integrations', tab: 'ai-providers' } }))}
+            onClick={() => openConfigDeepLink('ai-providers')}
             className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
           >
             Change in Integrations <ChevronRight className="h-3.5 w-3.5" />
@@ -718,6 +769,27 @@ export function CommandCenter() {  const {
                 onReject={() => actOnApproval(a.id, 'rejected')}
               />
             ))}
+            {recentlyExecuted.length > 0 && (
+              <div className="mt-2 space-y-2 border-t pt-3">
+                <p className="text-[11px] font-medium text-muted-foreground">Recently executed</p>
+                {recentlyExecuted.map((a) => (
+                  <div key={a.id} className="flex items-start gap-2 rounded-lg border bg-muted/20 px-3 py-2">
+                    <span className={cn('mt-0.5 shrink-0 text-[11px] font-semibold', a.lastResult!.ok ? 'text-emerald-600' : 'text-rose-600')}>
+                      {a.lastResult!.ok ? 'Executed' : 'Failed'}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs">{a.title}</p>
+                      <p className="text-[11px] text-muted-foreground">{a.lastResult!.detail}</p>
+                    </div>
+                    {!a.lastResult!.ok && (
+                      <Button size="sm" variant="outline" className="h-6 shrink-0 px-2 text-[11px]" onClick={() => void executeApprovedAction(a)}>
+                        Retry
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </Card>
       </div>

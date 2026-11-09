@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { Eye, Check, ReceiptText, Ban, Trash2 } from 'lucide-react';
+import { Eye, Check, ReceiptText, Ban, Trash2, Send } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +11,7 @@ import { FormDialog, Field, FieldGrid, TextField, NotesField } from '../form-kit
 import { CurrencySelect } from '../form-widgets';
 import { SearchSelect } from '../SearchSelect';
 import { FilterPills, TableSearch, TableToolbar, CrudTable, IdCell, TextCell, AmountCell, StatusBadge, EmptyRow, IconBtn, RowActions } from '../data-table';
+import { DocumentEmailDialog, type DocumentEmailTarget } from '../DocumentEmailDialog';
 import { cn } from '@/lib/utils';
 
 const STATUS_STYLE: Record<POStatus, string> = {
@@ -23,7 +24,7 @@ const STATUS_STYLE: Record<POStatus, string> = {
 };
 
 export function ProcurementTab() {
-  const { purchaseOrders, upsertPurchaseOrder, deletePurchaseOrder, vendors, inventoryItems, warehouses, activeWorkspace, activeWorkspaceId, hydrate } = useBorga();
+  const { purchaseOrders, upsertPurchaseOrder, deletePurchaseOrder, vendors, inventoryItems, warehouses, activeWorkspace, activeWorkspaceId, hydrate, log } = useBorga();
   const wsCurrency = activeWorkspace()?.currency ?? 'USD';
   const [showNew, setShowNew] = useState(false);
   const [vendorId, setVendorId] = useState('');
@@ -37,6 +38,38 @@ export function ProcurementTab() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<'all' | POStatus>('all');
   const [query, setQuery] = useState('');
+  const [emailPo, setEmailPo] = useState<PurchaseOrder | null>(null);
+  const [emailTarget, setEmailTarget] = useState<DocumentEmailTarget | null>(null);
+
+  const openPoEmail = (po: PurchaseOrder) => {
+    const vendor = vendors.find((v) => v.id === po.vendorId || v.name.toLowerCase() === po.vendorName.toLowerCase());
+    const wsName = activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? 'Our Team';
+    const cur = po.currency ?? wsCurrency;
+    const total = poTotal(po);
+    setEmailPo(po);
+    setEmailTarget({
+      to: vendor?.email ?? '',
+      subject: `Purchase Order ${po.number} from ${wsName}`,
+      body: `Hi ${po.vendorName},\n\nPlease find attached Purchase Order ${po.number} for ${cur} ${total.toFixed(2)}.${po.expectedIso ? `\n\nRequested delivery date: ${po.expectedIso}` : ''}${po.notes ? `\n\nDelivery notes: ${po.notes}` : ''}\n\nPlease confirm receipt and expected dispatch date.\n\nKind regards,\n${wsName}`,
+      document: {
+        kind: 'purchase_order',
+        workspaceName: wsName,
+        documentNumber: po.number,
+        recipientName: po.vendorName,
+        currency: cur,
+        totalAmount: total,
+        subtotalAmount: total,
+        issuedDate: po.orderedAt,
+        dueOrValidDate: po.expectedIso,
+        lines: po.lines.map((l) => ({
+          label: l.label,
+          qty: l.qty,
+          unitPrice: l.unitCost,
+          amount: l.qty * l.unitCost,
+        })),
+      },
+    });
+  };
 
   const visible = purchaseOrders
     .filter((p) => (filter === 'all' ? true : p.status === filter))
@@ -137,6 +170,11 @@ export function ProcurementTab() {
                     <IconBtn title={expanded[po.id] ? 'Hide lines' : 'View lines + receive'} onClick={() => setExpanded((e) => ({ ...e, [po.id]: !e[po.id] }))}>
                       <Eye className="h-3.5 w-3.5" />
                     </IconBtn>
+                    {(po.status === 'draft' || po.status === 'ordered') && (
+                      <IconBtn title="Email purchase order to supplier" tone="green" onClick={() => openPoEmail(po)}>
+                        <Send className="h-3 w-3" />
+                      </IconBtn>
+                    )}
                     {po.status === 'draft' && (
                       <IconBtn title="Mark as ordered (sent to supplier)" tone="green" onClick={() => setStatus(po.id, 'ordered')}>
                         <Check className="h-3.5 w-3.5" />
@@ -251,6 +289,27 @@ export function ProcurementTab() {
         <NotesField label="Note to supplier" value={poNotes} onChange={setPoNotes} placeholder="Delivery instructions, dock hours, call on arrival…" />
         <p className="text-xs text-muted-foreground">Receives into: {warehouses.find((w) => w.active)?.name ?? warehouses[0]?.name ?? 'no warehouse yet — create one under Inventory → Warehouses first'}</p>
       </FormDialog>
+
+      <DocumentEmailDialog
+        open={!!emailPo}
+        onOpenChange={(o) => {
+          if (!o) {
+            setEmailPo(null);
+            setEmailTarget(null);
+          }
+        }}
+        ws={activeWorkspaceId}
+        target={emailTarget}
+        onSent={(_via, to) => {
+          if (emailPo) {
+            if (emailPo.status === 'draft') {
+              upsertPurchaseOrder({ ...emailPo, status: 'ordered' });
+            }
+            log({ agentId: 'a-ops', agentName: 'Vega', actor: 'user', kind: 'task', message: `Purchase order ${emailPo.number} emailed to ${to}.` });
+            setMsg(`Purchase order ${emailPo.number} emailed to ${to} and marked ordered.`);
+          }
+        }}
+      />
     </div>
   );
 }

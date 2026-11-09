@@ -19,6 +19,7 @@ import { EmailUpdatesCard } from './EmailUpdatesCard';
 import { InvitesCard } from './InvitesCard';
 import { AuditCard } from './AuditCard';
 import { usePush } from '../use-push';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 import { cn } from '@/lib/utils';
 
 const THEMES: { id: ThemeMode; label: string; swatch: string[] }[] = [
@@ -119,7 +120,7 @@ export function SettingsTab() {
               </div>
             ))}
           </div>
-          <div className="mt-4 border-t pt-4">
+          <div id="config-push-settings" className="mt-4 border-t pt-4 scroll-mt-20">
             <p className="text-sm font-medium">Browser push</p>
             <p className="mt-0.5 text-xs text-muted-foreground">Urgent and noteworthy notices reach subscribed devices even with the dashboard closed. Info stays in the app.</p>
             <div className="mt-2 space-y-2">
@@ -167,7 +168,7 @@ export function SettingsTab() {
                 <BrainCircuit className="h-4 w-4 text-primary" /> Autonomous mode
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Let agents act on the company&apos;s behalf. Outbound vendor payments of {AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD.toLocaleString()}+ and every outbound email to a customer or vendor are held in Approvals for your sign-off instead of executing immediately.
+                Let agents act on the company&apos;s behalf — this is the switch the always-on autopilot in Runs &amp; Queue respects. Outbound vendor payments of {AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD.toLocaleString()}+ and every outbound email to a customer or vendor are held in Approvals for your sign-off instead of executing immediately.
               </p>
             </div>
             <Switch checked={!!settings.autonomousMode} onCheckedChange={(v) => setSettings({ autonomousMode: v, autonomousModeChosen: true })} />
@@ -179,12 +180,13 @@ export function SettingsTab() {
           )}
         </Card>
 
-        <Card className="p-5 lg:col-span-2">
+        <Card id="config-voice-settings" className="p-5 lg:col-span-2 scroll-mt-20">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Mic className="h-4 w-4 text-primary" /> Voice assistant
           </div>
-          <p className="mt-1 mb-3 text-xs text-muted-foreground">
-            How Borga sounds and which model answers out loud. Phone calls are configured under Integrations → Connections (Twilio).
+          <p className="mt-1 mb-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <span>How Borga sounds and which model answers out loud. Phone calls are configured under</span>
+            <ConfigDeepLinkButton target="twilio" label="Integrations → Connections (Twilio)" variant="inline" />
           </p>
           <VoiceSetup showListening={false} inlineKey={false} />
           <div className="mt-3 flex items-center justify-between gap-4 rounded-lg border px-3 py-2.5">

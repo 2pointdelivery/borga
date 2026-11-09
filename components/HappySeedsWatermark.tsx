@@ -7,12 +7,15 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from 'react';
 
-const REACTUS_ORIGIN = (process.env.REACTUS_BASE_URL ?? '').replace(/\/$/, '');
+// Public branding config only: NEXT_PUBLIC_ so these actually reach the
+// browser bundle (plain env vars are empty in client components). No secret
+// material belongs here — the endpoint is public and the id appears in a link.
+const REACTUS_ORIGIN = (process.env.NEXT_PUBLIC_REACTUS_BASE_URL ?? '').replace(/\/$/, '');
 const WATERMARK_API_BASE = REACTUS_ORIGIN
   ? `${REACTUS_ORIGIN}/v1/project`
   : '';
-const PROJECT_ID = typeof process.env.PROJECT_ID === 'string'
-  ? process.env.PROJECT_ID.trim()
+const PROJECT_ID = typeof process.env.NEXT_PUBLIC_HAPPYSEEDS_PROJECT_ID === 'string'
+  ? process.env.NEXT_PUBLIC_HAPPYSEEDS_PROJECT_ID.trim()
   : '';
 const WATERMARK_LINK_URL = `https://link.happyseeds.ai/watermark?utm_term=${encodeURIComponent(PROJECT_ID)}`;
 const HAPPYSEEDS_LOGO_URL = 'https://happyseeds.ai/logo.svg';

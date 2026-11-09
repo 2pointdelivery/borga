@@ -85,6 +85,8 @@ export interface ThreadedMail {
   inReplyTo?: string;
   references?: string[];
   headers?: Record<string, string>;
+  /** RFC 5545 iCalendar attachment (invite.ics) for meeting invites and cancellations. */
+  icalEvent?: { method?: string; filename?: string; content: string };
   /** Open/click tracking for the API path. Defaults on; the workspace can switch it off. */
   tracking?: boolean;
 }
@@ -119,20 +121,61 @@ export async function sendThreadedEmail(opts: ThreadedMail, ctx?: MailContext): 
     // the company's own server only accepts its own address as the sender: keep a display name if the caller gave one
     const nameOf = (h?: string) => /^\s*"?([^"<]*?)"?\s*<[^>]+>\s*$/.exec(h ?? '')?.[1]?.trim() ?? '';
     const from = own ? fromHeader({ fromAddress: own.fromAddress, fromName: nameOf(opts.from) || own.fromName }) : opts.from || shared!.from;
-    const transport = own ? await makeTransport(own) : getTransport(shared!);
-    const info = await transport.sendMail({
-      from,
-      to: opts.to,
-      replyTo: opts.replyTo,
-      subject: opts.subject,
-      text: opts.text,
-      html: opts.html,
-      inReplyTo: opts.inReplyTo,
-      references: opts.references,
-      headers: opts.headers,
-    });
-    if (own) transport.close();
-    return { ok: true, messageId: info.messageId, provider: 'smtp' };
+    let transport = own ? await makeTransport(own) : getTransport(shared!);
+    try {
+      const info = await transport.sendMail({
+        from,
+        to: opts.to,
+        replyTo: opts.replyTo,
+        subject: opts.subject,
+        text: opts.text,
+        html: opts.html,
+        inReplyTo: opts.inReplyTo,
+        references: opts.references,
+        headers: opts.headers,
+        ...(opts.icalEvent ? { icalEvent: opts.icalEvent } : {}),
+      });
+      if (own) transport.close();
+      return { ok: true, messageId: info.messageId, provider: 'smtp' };
+    } catch (firstErr) {
+      if (own) transport.close();
+      const errObj = firstErr as { code?: string; responseCode?: number };
+      const isAuthErr = errObj.code === 'EAUTH' || errObj.responseCode === 535 || errObj.responseCode === 534;
+      // Auto-heal expired 24-hour MailDog public sandbox (`pub_...`) on send
+      if (ctx && own && isAuthErr && own.host === 'mail.maildog.io' && own.user.startsWith('pub_')) {
+        const { provisionMaildogSandbox } = await import('@/lib/borga/smtp-transport');
+        const { saveConnection } = await import('@/lib/borga/connections-server');
+        const fresh = await provisionMaildogSandbox();
+        if (fresh) {
+          await saveConnection(ctx.userId, ctx.ws, 'smtp', {
+            host: fresh.host,
+            port: String(fresh.port),
+            secure: 'no',
+            user: fresh.user,
+            password: fresh.password,
+            fromAddress: own.fromAddress,
+            fromName: own.fromName,
+          });
+          const refreshedOwn = { ...own, host: fresh.host, port: fresh.port, secure: false, user: fresh.user, password: fresh.password };
+          transport = await makeTransport(refreshedOwn);
+          const info = await transport.sendMail({
+            from,
+            to: opts.to,
+            replyTo: opts.replyTo,
+            subject: opts.subject,
+            text: opts.text,
+            html: opts.html,
+            inReplyTo: opts.inReplyTo,
+            references: opts.references,
+            headers: opts.headers,
+            ...(opts.icalEvent ? { icalEvent: opts.icalEvent } : {}),
+          });
+          transport.close();
+          return { ok: true, messageId: info.messageId, provider: 'smtp' };
+        }
+      }
+      throw firstErr;
+    }
   } catch (e) {
     // Said plainly, with the server's own words, and never the password: a send that fails must be diagnosable, not silent.
     const why = describeMailError(e);

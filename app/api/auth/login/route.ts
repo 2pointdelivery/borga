@@ -3,6 +3,9 @@ import { createSessionToken, sessionCookieName, sessionMaxAge, isSecureContext }
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { LoginThrottle } from '@/lib/auth/login-throttle';
 import { getUserByEmail } from '@/lib/auth/queries';
+import { isOperator } from '@/lib/auth/signup-policy';
+import { evaluateLoginRailGuard, normalizeLoginRail, resolveRailRedirect } from '@/lib/auth/login-rails';
+import { getAdvisorByUserId, upsertAdvisorProfile } from '@/lib/borga/shared-services-server';
 import { getBorgaState } from '@/lib/borga/persistence';
 import { userWorkspacesKey } from '@/lib/borga/keys';
 import { type Workspace } from '@/lib/borga/data';
@@ -49,11 +52,40 @@ export async function POST(req: Request) {
     }
     throttle.recordSuccess(email);
 
+    const rail = normalizeLoginRail(body?.role, body?.next);
+    const op = isOperator(user.email, process.env);
+    let advisor = await getAdvisorByUserId(user.id).catch(() => null);
+
+    const guard = evaluateLoginRailGuard({
+      rail,
+      isOperator: op,
+      advisorStatus: advisor?.status ?? null,
+    });
+    if (!guard.allowed) {
+      return NextResponse.json({ ok: false, error: guard.error, rail }, { status: guard.status });
+    }
+
+    if (rail === 'advisor' && !advisor) {
+      advisor = await upsertAdvisorProfile(user.id, user.email, {
+        name: user.name,
+        autoApproveIfOperator: true,
+      }).catch(() => null);
+    }
+
     const workspaces = (await getBorgaState<Workspace[]>(userWorkspacesKey(user.id)).catch(() => [])) ?? [];
     const token = await createSessionToken(user.id);
+    const redirectTo = resolveRailRedirect(rail, 'login', body?.next);
     const res = NextResponse.json({
       ok: true,
-      user: { id: user.id, email: user.email, name: user.name },
+      rail,
+      redirectTo,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        isOperator: op,
+        advisorStatus: advisor?.status ?? null,
+      },
       workspaceId: workspaces[0]?.id ?? '',
     });
     res.cookies.set(sessionCookieName(), token, {

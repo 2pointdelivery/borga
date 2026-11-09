@@ -32,6 +32,7 @@ import {
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 import { toast } from '@/lib/toast-bus';
 import { findBillDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
@@ -39,6 +40,7 @@ import { SearchSelect } from '../SearchSelect';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect, CountrySelect, CityInput, CurrencySelect } from '../form-widgets';
 import { rateFor } from '@/lib/borga/fx';
+import { documentTotals, convertToWorkspace, normalizeBill } from '@/lib/borga/pricing';
 import { FormDialog, FieldGrid, TextField, SelectField } from '../form-kit';
 import { billHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { cn } from '@/lib/utils';
@@ -190,37 +192,28 @@ export function VendorsTab() {
     [taxProfiles, billForm.taxProfileIds],
   );
 
-  const billTotals = useMemo(() => {
-    const subtotal = billForm.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const tax = (subtotal * billTaxRate) / 100;
-    return { subtotal, tax, total: subtotal + tax };
-  }, [billForm.lines, billTaxRate]);
+  const billTotals = useMemo(
+    () => documentTotals(billForm.lines, { taxRate: billTaxRate, currency: billForm.currency.trim().toUpperCase() || currency }),
+    [billForm.lines, billTaxRate, billForm.currency, currency],
+  );
 
   const submitBill = () => {
     const vendor = vendors.find((v) => v.id === billForm.vendorId);
     if (!vendor || billTotals.total <= 0) return;
     const lines = billForm.lines.filter((l) => l.description.trim() || l.unitPrice);
     if (lines.length === 0) return;
-    const foreignSubtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const foreignTotal = foreignSubtotal + (foreignSubtotal * billTaxRate) / 100;
+    // The server reprices bills from these lines; mirror its helpers here so the
+    // preview, the stored bill and an emailed copy cannot disagree.
     const docCcy = billForm.currency.trim().toUpperCase() || currency;
-    let total = Math.round(foreignTotal * 100) / 100;
-    let fxRate: number | undefined;
-    let foreignAmount: number | undefined;
-    if (docCcy !== currency) {
-      const rate = rateFor(fxRates, docCcy, currency);
-      if (rate === null) {
-        toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or record in ${currency}.`, variant: 'error' });
-        return;
-      }
-      fxRate = rate;
-      foreignAmount = Math.round(foreignTotal * 100) / 100;
-      total = Math.round(foreignTotal * rate * 100) / 100;
+    const rate = docCcy === currency ? null : rateFor(fxRates, docCcy, currency);
+    if (docCcy !== currency && rate === null) {
+      toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or record in ${currency}.`, variant: 'error' });
+      return;
     }
     const profileNames = taxProfiles.filter((t) => billForm.taxProfileIds.includes(t.id)).map((t) => t.name).join(' + ');
-    const shared = {
+    const draft = {
       vendorId: vendor.id, vendorName: vendor.name, number: billForm.number.trim(),
-      amount: Math.round(total * 100) / 100, received: billForm.received, due: billForm.due,
+      amount: 0, received: billForm.received, due: billForm.due,
       status: billForm.status, lines, taxRate: billTaxRate,
       taxProfileIds: billForm.taxProfileIds,
       taxProfileId: billForm.taxProfileIds[0],
@@ -232,12 +225,12 @@ export function VendorsTab() {
       projectId: billForm.projectId,
       accountId: billForm.accountId,
       currency: docCcy === currency ? undefined : docCcy,
-      fxRate,
-      foreignAmount,
+      fxRate: rate ?? undefined,
     };
+    const shared = normalizeBill(draft as Bill, currency);
     if (editingBill) {
       updateBill(editingBill.id, shared);
-      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill ${billForm.number.trim()} updated — ${lines.length} line(s), total ${money(Math.round(total * 100) / 100)}.` });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill ${billForm.number.trim()} updated — ${lines.length} line(s), total ${money(shared.amount)}.` });
     } else {
       const number = shared.number || `BILL-${Date.now().toString().slice(-4)}`;
       const flags = findBillDuplicates({ id: '', vendorId: vendor.id, vendorName: vendor.name, number, amount: shared.amount, received: shared.received, externalRef: shared.externalRef }, bills);
@@ -252,8 +245,8 @@ export function VendorsTab() {
         setConfirmDuplicateBill({ data: { ...shared, number }, flags: likely });
         return;
       }
-      addBill({ id: `b-${Date.now()}`, ...shared, number });
-      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill recorded from ${vendor.name}: ${money(Math.round(total * 100) / 100)} (${PAYMENT_METHOD_LABEL[billForm.paymentMethod]}).` });
+      addBill({ ...shared, id: `b-${Date.now()}`, number });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill recorded from ${vendor.name}: ${money(shared.amount)} (${PAYMENT_METHOD_LABEL[billForm.paymentMethod]}).` });
     }
     setBillDialogOpen(false);
     setEditingBill(null);
@@ -341,8 +334,20 @@ export function VendorsTab() {
     setEmailState('sending');
     try {
       const r = await sendCompanyEmail({
-        ws: activeWorkspaceId, to: emailForm.to, subject: emailForm.subject, composioKey: composio.apiKey,
+        ws: activeWorkspaceId,
+        to: emailForm.to,
+        subject: emailForm.subject,
         body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
+        document: {
+          kind: 'bill',
+          workspaceName: activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? 'Company',
+          documentNumber: b.number,
+          recipientName: b.vendorName,
+          currency: b.currency ?? currency,
+          totalAmount: b.amount,
+          dueOrValidDate: b.due,
+          lines: [{ label: b.description || `Vendor Bill ${b.number}`, qty: 1, unitPrice: b.amount, amount: b.amount }],
+        },
       });
       if (r.ok) {
         setEmailState('sent');
@@ -726,7 +731,7 @@ export function VendorsTab() {
               <Field label="Total">
                 <p className="py-2 font-mono text-sm font-semibold">
                   {billForm.currency && billForm.currency.toUpperCase() !== currency
-                    ? (() => { const r = rateFor(fxRates, billForm.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(billTotals.total * r)} (${billForm.currency.toUpperCase()} ${billTotals.total.toFixed(2)})`; })()
+                    ? (() => { const r = rateFor(fxRates, billForm.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(convertToWorkspace(billTotals.total, r, currency))} (${billForm.currency.toUpperCase()} ${billTotals.total.toFixed(2)})`; })()
                     : money(billTotals.total)}
                 </p>
               </Field>
@@ -841,9 +846,10 @@ export function VendorsTab() {
             <Field label="Message">
               <Textarea rows={6} value={emailForm.body} onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })} />
             </Field>
-            <p className="text-[11px] text-muted-foreground">
-              Sent through the company&apos;s Gmail, or its own mail server (SMTP) when Gmail isn&apos;t linked. If neither is set up, the message opens in your mail client instead.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <span>Sent as a formatted HTML + plain-text remittance via your mail server (SMTP/Postmark) or Gmail.</span>
+              <ConfigDeepLinkButton target="smtp" label="Configure SMTP" />
+            </div>
             {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Remittance emailed — bill marked scheduled. The payment itself still needs to be made.</p>}
             {emailState === 'fallback' && <p className="text-xs font-medium text-amber-600">Opened in your mail client (Gmail not linked for this workspace).</p>}
           </div>

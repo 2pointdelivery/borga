@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 import { useBorga } from '@/lib/borga/store';
 import { SectionTitle } from '../bits';
 import { InboundEndpoint } from '../InboundEndpoint';
+import { AutopilotCard } from '../AutopilotCard';
 import { ScheduledTaskEditDialog } from './ScheduledTaskEditDialog';
 import type { AgentRun, AgentRunStep, RunJob, ScheduledTask, ScheduleInterval } from '@/lib/borga/data';
 
@@ -829,6 +830,7 @@ export function RunsQueueTab() {
         sub="Every run — manual, scheduled, webhook or plan — goes through one worker queue you can watch, edit and stop."
       />
 
+      <AutopilotCard />
       <HeartbeatCard />
       <NoticesInbox notices={notices} onDismiss={dismissNotice} onClear={clearNotices} />
 

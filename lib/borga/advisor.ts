@@ -17,9 +17,29 @@ export interface AdvisorContext extends InsightInput {
   nowMs: number;
 }
 
+export interface HowToStep {
+  step: number;
+  title: string;
+  detail: string;
+  link?: { page: string; tab?: string; sectionId?: string };
+  ctaLabel?: string;
+}
+
+export interface HowToGuide {
+  id: string;
+  title: string;
+  summary: string;
+  page: string;
+  tab?: string;
+  keywords: string[];
+  steps: HowToStep[];
+}
+
 export interface AdvisorAnswer {
   text: string;
-  link?: { page: string; tab?: string };
+  link?: { page: string; tab?: string; sectionId?: string };
+  guideTitle?: string;
+  steps?: HowToStep[];
 }
 
 const has = (q: string, ...words: string[]) => words.some((w) => q.includes(w));
@@ -449,14 +469,475 @@ const FOLLOWUP_MORE = ['more', 'detail', 'why', 'explain', 'deeper', 'expand'];
 const FOLLOWUP_ACTION = ['what should i do', 'next step', 'do about', 'fix it', 'recommend', 'advice', 'advise'];
 const FOLLOWUP_THANKS = ['thank', 'thanks', 'great', 'perfect', 'awesome', 'nice'];
 
-/** Route an owner question to the slice of business data that answers it. */
+// ── Step-by-Step "How-To" Workflow Guides ───────────────────────────────────────────────────────────────────────────
+
+export const HOW_TO_GUIDES: readonly HowToGuide[] = [
+  {
+    id: 'quote-to-cash',
+    title: 'Send a Quote & Convert to Invoice + Project',
+    summary: 'Price a deal for a customer, email the quote, and convert it in one click when they accept.',
+    page: 'sales',
+    tab: 'quotes',
+    keywords: ['quote', 'estimate', 'proposal', 'convert quote', 'quote to invoice', 'send quote'],
+    steps: [
+      {
+        step: 1,
+        title: 'Capture or pick the lead in Sales Pipeline',
+        detail: 'Open Sales → Pipeline and click the Quote icon on an open deal (or go straight to Sales → Quotes).',
+        link: { page: 'sales', tab: 'pipeline' },
+        ctaLabel: 'Open Pipeline',
+      },
+      {
+        step: 2,
+        title: 'Draft the quote with line items & expiry',
+        detail: 'Click "+ New quote", pick the customer, add catalog or custom lines, and set a 30-day "Good until" date.',
+        link: { page: 'sales', tab: 'quotes' },
+        ctaLabel: 'Open Quotes',
+      },
+      {
+        step: 3,
+        title: 'Email the quote to the customer',
+        detail: 'Click the green Send icon on the quote row to open the HTML email preview and deliver it to the customer.',
+        link: { page: 'sales', tab: 'quotes' },
+        ctaLabel: 'Email Quote',
+      },
+      {
+        step: 4,
+        title: 'Accept & convert to Invoice + Project',
+        detail: 'When the customer says yes, click the green Check icon on the sent quote to auto-create the Invoice and delivery Project.',
+        link: { page: 'sales', tab: 'invoices' },
+        ctaLabel: 'View Invoices',
+      },
+    ],
+  },
+  {
+    id: 'send-invoice',
+    title: 'Create, Email & Record Payment on an Invoice',
+    summary: 'Bill a customer, send a formatted HTML invoice, and post the payment to the ledger.',
+    page: 'sales',
+    tab: 'invoices',
+    keywords: ['invoice', 'send invoice', 'email invoice', 'bill customer', 'record payment', 'get paid'],
+    steps: [
+      {
+        step: 1,
+        title: 'Create the invoice in Sales → Invoicing',
+        detail: 'Click "+ New invoice", choose the customer, add line items and tax profiles, and set the due date.',
+        link: { page: 'sales', tab: 'invoices' },
+        ctaLabel: 'Open Invoicing',
+      },
+      {
+        step: 2,
+        title: 'Email the formatted invoice',
+        detail: 'Click the Mail icon on the invoice row to send a clean HTML + plain-text invoice via SMTP or Gmail.',
+        link: { page: 'sales', tab: 'invoices' },
+        ctaLabel: 'Send Invoice',
+      },
+      {
+        step: 3,
+        title: 'Post payment when paid',
+        detail: 'Click the Dollar icon on the row to record the payment method and date — Borga posts the revenue & AR journal automatically.',
+        link: { page: 'finance', tab: 'ledger' },
+        ctaLabel: 'Check Ledger',
+      },
+    ],
+  },
+  {
+    id: 'whatsapp-connect',
+    title: 'Connect WhatsApp via QR Code or WhatsApp Web',
+    summary: 'Link your WhatsApp session, scan a lead QR code, or launch WhatsApp Web for pipeline leads.',
+    page: 'sales',
+    tab: 'pipeline',
+    keywords: ['whatsapp', 'qr code', 'scan qr', 'whatsapp web', 'message lead', 'chat lead'],
+    steps: [
+      {
+        step: 1,
+        title: 'Open the WhatsApp workspace in Sales Pipeline',
+        detail: 'Go to Sales → Pipeline and click the "WhatsApp" button in the top toolbar (or the WhatsApp icon on any lead row).',
+        link: { page: 'sales', tab: 'pipeline' },
+        ctaLabel: 'Open Pipeline',
+      },
+      {
+        step: 2,
+        title: 'Scan QR & Link Device',
+        detail: 'Switch to the "Scan QR & Link" tab inside the modal to scan the ISO QR code or link your WhatsApp number.',
+        link: { page: 'sales', tab: 'pipeline' },
+        ctaLabel: 'Scan QR',
+      },
+      {
+        step: 3,
+        title: 'Launch WhatsApp Web or reply in CRM Threads',
+        detail: 'Use the "WhatsApp Web" tab to launch a pre-filled chat in a docked window while logging every message to the lead thread.',
+        link: { page: 'sales', tab: 'pipeline' },
+        ctaLabel: 'Open Pipeline',
+      },
+    ],
+  },
+  {
+    id: 'email-smtp-setup',
+    title: 'Configure Outgoing Email (SMTP) & Test Delivery',
+    summary: 'Connect your company mail server or Gmail so invoices, quotes, ticket replies, and digests deliver.',
+    page: 'integrations',
+    tab: 'connections',
+    keywords: ['smtp', 'email setup', 'configure email', 'mail server', 'gmail', 'send email', 'maildog'],
+    steps: [
+      {
+        step: 1,
+        title: 'Enter SMTP credentials in Integrations → Connections',
+        detail: 'Open Integrations → Connections, locate the SMTP card, and enter your host, port (587 or 465), username, password, and From address.',
+        link: { page: 'integrations', tab: 'connections', sectionId: 'config-provider-smtp' },
+        ctaLabel: 'Configure SMTP',
+      },
+      {
+        step: 2,
+        title: 'Save & test the connection',
+        detail: 'Click "Save" then "Test" on the SMTP card (or send a test email under Integrations → Connected Apps).',
+        link: { page: 'integrations', tab: 'connected', sectionId: 'config-email-section' },
+        ctaLabel: 'Test Email',
+      },
+      {
+        step: 3,
+        title: 'Enable company email updates & digests',
+        detail: 'Go to Settings → Email updates to choose recipients and turn on daily/weekly financial digests.',
+        link: { page: 'settings', sectionId: 'config-email-updates' },
+        ctaLabel: 'Email Updates',
+      },
+    ],
+  },
+  {
+    id: 'build-knowledge-website',
+    title: 'Build the Knowledge Base from Your Website URL',
+    summary: 'Scan your public website to extract company facts, services, and pricing, then teach the AI agent fleet.',
+    page: 'company',
+    tab: 'knowledge',
+    keywords: ['website', 'url', 'knowledge base', 'crawl', 'scan website', 'import website', 'teach fleet', 'train agents'],
+    steps: [
+      {
+        step: 1,
+        title: 'Open Company → Knowledge Base',
+        detail: 'Navigate to Company → Knowledge Base and click "Build from Website URL" in the header.',
+        link: { page: 'company', tab: 'knowledge' },
+        ctaLabel: 'Open Knowledge Base',
+      },
+      {
+        step: 2,
+        title: 'Scan your domain & preview extracted facts',
+        detail: 'Enter your company domain (e.g. yourcompany.com) and click "Scan Website". Borga reads your home, about, services, and pricing pages.',
+        link: { page: 'company', tab: 'knowledge' },
+        ctaLabel: 'Scan Website',
+      },
+      {
+        step: 3,
+        title: 'Approve facts & Teach Fleet',
+        detail: 'Review or edit the extracted entries, keep the accurate ones checked, and click "Import & Teach Fleet" so all agents learn them immediately.',
+        link: { page: 'company', tab: 'knowledge' },
+        ctaLabel: 'Teach Fleet',
+      },
+    ],
+  },
+  {
+    id: 'launch-paid-ads',
+    title: 'Launch a Multi-Platform Paid Ad Campaign',
+    summary: 'Select multiple ad networks (Google, Meta, LinkedIn, TikTok, X), allocate budget, and track ROAS.',
+    page: 'marketing',
+    tab: 'advertising',
+    keywords: ['paid campaign', 'launch ad', 'google ads', 'meta ads', 'multi-platform', 'roas', 'advertising'],
+    steps: [
+      {
+        step: 1,
+        title: 'Open Marketing → Advertising',
+        detail: 'Click "+ New campaign" in the top right of the Advertising tab.',
+        link: { page: 'marketing', tab: 'advertising' },
+        ctaLabel: 'Open Advertising',
+      },
+      {
+        step: 2,
+        title: 'Multi-select ad platforms & budget mode',
+        detail: 'Toggle one or more platforms (Google, Meta, LinkedIn, etc.) and choose whether the budget is "Per platform" or "Split total evenly".',
+        link: { page: 'marketing', tab: 'advertising' },
+        ctaLabel: 'New Campaign',
+      },
+      {
+        step: 3,
+        title: 'Draft ad copy & launch',
+        detail: 'Fill in the headline, body copy, and destination link, then click "Launch" to track spend, conversions, and ROAS per platform.',
+        link: { page: 'marketing', tab: 'advertising' },
+        ctaLabel: 'Track ROAS',
+      },
+    ],
+  },
+  {
+    id: 'purchase-order-3way',
+    title: 'Order Stock with a Purchase Order & 3-Way Match',
+    summary: 'Email a Purchase Order to a supplier, receive goods into a warehouse, and auto-draft the vendor bill.',
+    page: 'inventory',
+    tab: 'orders',
+    keywords: ['purchase order', 'po', 'order stock', 'receive stock', 'supplier', '3-way match', 'procurement'],
+    steps: [
+      {
+        step: 1,
+        title: 'Create a Purchase Order in Inventory → Purchase Orders',
+        detail: 'Click "+ New purchase order", pick a supplier, add catalog items and quantities, and save the draft.',
+        link: { page: 'inventory', tab: 'orders' },
+        ctaLabel: 'Open Purchase Orders',
+      },
+      {
+        step: 2,
+        title: 'Email the PO to your supplier',
+        detail: 'Click the green Send icon on the PO row to email the formatted Purchase Order and mark it "ordered".',
+        link: { page: 'inventory', tab: 'orders' },
+        ctaLabel: 'Email PO',
+      },
+      {
+        step: 3,
+        title: 'Receive goods & convert to Vendor Bill',
+        detail: 'Expand the PO row when boxes arrive, enter received quantities, then click the Bill icon to create the matched Vendor Bill.',
+        link: { page: 'finance', tab: 'vendors' },
+        ctaLabel: 'Open Vendors & AP',
+      },
+    ],
+  },
+  {
+    id: 'bank-reconciliation',
+    title: 'Import Bank Statements & Reconcile Transactions',
+    summary: 'Upload a CSV/PDF bank statement or connect a live feed, then match bank lines to invoices and bills.',
+    page: 'finance',
+    tab: 'banking',
+    keywords: ['reconcile', 'bank statement', 'csv import', 'pdf statement', 'match transaction', 'banking'],
+    steps: [
+      {
+        step: 1,
+        title: 'Add or select a bank account in Finance → Banking',
+        detail: 'Create your checking/savings account or select an existing account card.',
+        link: { page: 'finance', tab: 'banking' },
+        ctaLabel: 'Open Banking',
+      },
+      {
+        step: 2,
+        title: 'Import CSV or PDF statement',
+        detail: 'Click "Import CSV" or "Import PDF" to parse statement lines automatically with duplicate protection.',
+        link: { page: 'finance', tab: 'banking' },
+        ctaLabel: 'Import Statement',
+      },
+      {
+        step: 3,
+        title: 'Accept auto-matches or book to GL',
+        detail: 'Review suggested invoice/bill matches and click "Match" or "Book to ledger" until Unmatched Lines reaches 0.',
+        link: { page: 'finance', tab: 'banking' },
+        ctaLabel: 'Reconcile Lines',
+      },
+    ],
+  },
+  {
+    id: 'run-payroll',
+    title: 'Run Monthly Payroll & Post Balanced GL Journals',
+    summary: 'Calculate gross pay, statutory taxes, and net pay for your team, then release payroll once per month.',
+    page: 'hr',
+    tab: 'payroll',
+    keywords: ['run payroll', 'pay team', 'salary', 'payslip', 'payroll journal', 'paye', 'ssnit', 'fica'],
+    steps: [
+      {
+        step: 1,
+        title: 'Verify employees in HR → Directory',
+        detail: 'Ensure active team members have their compensation, role, and tax jurisdiction set.',
+        link: { page: 'hr', tab: 'directory' },
+        ctaLabel: 'Open Directory',
+      },
+      {
+        step: 2,
+        title: 'Review the monthly batch in HR → Payroll',
+        detail: 'Check gross-to-net calculations, employee deductions, and employer statutory contributions.',
+        link: { page: 'hr', tab: 'payroll' },
+        ctaLabel: 'Open Payroll',
+      },
+      {
+        step: 3,
+        title: 'Release payroll & post to Accounting',
+        detail: 'Confirm and release the month — Borga locks the snapshot and posts balanced salary/tax journals to your Chart of Accounts.',
+        link: { page: 'finance', tab: 'accounting' },
+        ctaLabel: 'Check Journals',
+      },
+    ],
+  },
+  {
+    id: 'hire-shared-advisor',
+    title: 'Hire an Accountant, PM or Agency in Shared Services',
+    summary: 'Book a discovery call or purchase a package, and grant module-scoped access ($0 seat cost).',
+    page: 'services',
+    tab: 'marketplace',
+    keywords: ['shared services', 'hire advisor', 'accountant', 'bookkeeper', 'agency', 'cfo', 'module access'],
+    steps: [
+      {
+        step: 1,
+        title: 'Browse vetted professionals in Shared Services',
+        detail: 'Open Shared Services from the main sidebar and filter by Accounting, Project Management, Sales, or Marketing.',
+        link: { page: 'services', tab: 'marketplace' },
+        ctaLabel: 'Open Marketplace',
+      },
+      {
+        step: 2,
+        title: 'Book a call or purchase a fixed-price package',
+        detail: 'Pick an available time slot for a discovery call, or buy an upfront package directly.',
+        link: { page: 'services', tab: 'marketplace' },
+        ctaLabel: 'Browse Advisors',
+      },
+      {
+        step: 3,
+        title: 'Grant module-scoped workspace access',
+        detail: 'Choose which tabs the advisor can access (e.g. Finance only). External advisors never add a $2/month seat to your bill.',
+        link: { page: 'services', tab: 'engagements' },
+        ctaLabel: 'Manage Access',
+      },
+    ],
+  },
+  {
+    id: 'support-sla-mailbox',
+    title: 'Set Up Support Desk SLAs & Email-to-Ticket',
+    summary: 'Track customer issues with response/resolution SLA timers and reply directly by email.',
+    page: 'support',
+    tab: 'tickets',
+    keywords: ['support ticket', 'helpdesk', 'sla timer', 'mailbox', 'customer support', 'reply ticket'],
+    steps: [
+      {
+        step: 1,
+        title: 'Configure SLA targets & mailbox in Support → SLA & Mailbox',
+        detail: 'Set first-response and resolution targets by priority (P0–P3) and copy your inbound ticket bridge address.',
+        link: { page: 'support', tab: 'settings' },
+        ctaLabel: 'SLA & Mailbox',
+      },
+      {
+        step: 2,
+        title: 'Triage & assign tickets in Support → Tickets',
+        detail: 'Filter by Breached or At-Risk SLAs, assign an owner, and post public replies (emailed to the requester) or internal notes.',
+        link: { page: 'support', tab: 'tickets' },
+        ctaLabel: 'Open Support Desk',
+      },
+    ],
+  },
+  {
+    id: 'close-books',
+    title: 'Close the Books & Export Financial Statements',
+    summary: 'Complete the month-end checklist, post depreciation/FX entries, and lock the accounting period.',
+    page: 'finance',
+    tab: 'closure',
+    keywords: ['close books', 'month end', 'book closure', 'trial balance', 'financial statements', 'p&l', 'balance sheet'],
+    steps: [
+      {
+        step: 1,
+        title: 'Review the outstanding checklist in Finance → Book Closure',
+        detail: 'Check unposted journals, unreconciled bank lines, fixed-asset depreciation, and AR/AP tie-outs.',
+        link: { page: 'finance', tab: 'closure' },
+        ctaLabel: 'Open Book Closure',
+      },
+      {
+        step: 2,
+        title: 'Sign off & lock the period',
+        detail: 'Close the period so historical entries cannot be altered without an explicit reopen audit trail.',
+        link: { page: 'finance', tab: 'closure' },
+        ctaLabel: 'Lock Period',
+      },
+      {
+        step: 3,
+        title: 'Export P&L, Balance Sheet & Cash Flow',
+        detail: 'Open Finance → Reports to inspect, share, or schedule automated email delivery of your statements.',
+        link: { page: 'finance', tab: 'reports' },
+        ctaLabel: 'Open Reports',
+      },
+    ],
+  },
+];
+
+const HOW_TO_INTENT_WORDS = [
+  'how to',
+  'how do i',
+  'how can i',
+  'steps to',
+  'guide',
+  'walk me through',
+  'walkthrough',
+  'where do i',
+  'where can i',
+  'help me',
+  'teach me',
+  'set up',
+  'setup',
+  'configure',
+  'create a',
+  'send a',
+  'import a',
+];
+
+export function isHowToQuestion(question: string): boolean {
+  const q = question.toLowerCase().trim();
+  return HOW_TO_INTENT_WORDS.some((w) => q.includes(w));
+}
+
+export function matchHowToGuide(question: string): HowToGuide | null {
+  const q = question.toLowerCase().trim();
+  if (!q) return null;
+  let best: { guide: HowToGuide; score: number } | null = null;
+  for (const g of HOW_TO_GUIDES) {
+    let score = 0;
+    for (const kw of g.keywords) {
+      if (q.includes(kw.toLowerCase())) {
+        score += kw.includes(' ') ? 3 : 2;
+      }
+    }
+    if (q.includes(g.page.toLowerCase())) score += 1;
+    if (g.tab && q.includes(g.tab.toLowerCase())) score += 1;
+    if (score > 0 && (!best || score > best.score)) {
+      best = { guide: g, score };
+    }
+  }
+  return best ? best.guide : null;
+}
+
+export function guidesForPage(page: string, tab?: string): HowToGuide[] {
+  const exactTab = HOW_TO_GUIDES.filter((g) => g.page === page && (!tab || g.tab === tab));
+  const samePage = HOW_TO_GUIDES.filter((g) => g.page === page && !exactTab.includes(g));
+  const rest = HOW_TO_GUIDES.filter((g) => g.page !== page);
+  return [...exactTab, ...samePage, ...rest];
+}
+
+export function searchHowToGuides(query: string, page?: string, tab?: string): HowToGuide[] {
+  const ordered = page ? guidesForPage(page, tab) : [...HOW_TO_GUIDES];
+  const q = query.toLowerCase().trim();
+  if (!q) return ordered;
+  return ordered.filter((g) => {
+    const hay = `${g.title} ${g.summary} ${g.page} ${g.tab ?? ''} ${g.keywords.join(' ')} ${g.steps.map((s) => `${s.title} ${s.detail}`).join(' ')}`.toLowerCase();
+    return q.split(/\s+/).every((word) => hay.includes(word));
+  });
+}
+
+export function formatHowToGuideAnswer(guide: HowToGuide): AdvisorAnswer {
+  return {
+    text: `How to ${guide.title.charAt(0).toLowerCase() + guide.title.slice(1)}: ${guide.steps.map((s) => `${s.step}. ${s.title} — ${s.detail}`).join(' ')}`,
+    link: { page: guide.page, tab: guide.tab },
+    guideTitle: guide.title,
+    steps: guide.steps,
+  };
+}
+
+/** Route an owner question to the slice of business data or step-by-step workflow guide that answers it. */
 export function answerAdvisorQuestion(question: string, ctx: AdvisorContext, memory?: AdvisorMemory): AdvisorAnswer {
   // Padded so short keywords ('ar', 'ap', 'pay') only match whole words.
   const q = ` ${question.toLowerCase().trim()} `;
-  if (!question.trim()) return { text: 'Ask me about cash, invoices, pipeline, goals, tickets, projects, stock, ads, team, comms, fundraising, knowledge, runs, banking, filings, social, integrations or KPIs — or say "brief" for priorities.' };
+  if (!question.trim()) return { text: 'Ask me about cash, invoices, pipeline, goals, tickets, projects, stock, ads, team, comms, fundraising, knowledge, runs, banking, filings, social, integrations or KPIs — or ask "how do I…" for step-by-step workflow guides.' };
+
+  // 1. Explicit "How to / How do I" questions route to step-by-step workflow playbooks first
+  if (isHowToQuestion(question)) {
+    const guide = matchHowToGuide(question);
+    if (guide) return formatHowToGuideAnswer(guide);
+  }
+
+  // 2. Live business data topic routing
   const topic = routeAdvisorTopic(question);
   if (topic) return withRelated(topic, topicAnswer(topic, ctx));
-  // Conversational follow-ups resolve against what we just talked about.
+
+  // 3. Fallback to How-To guide match if a user typed a workflow name directly
+  const fallbackGuide = matchHowToGuide(question);
+  if (fallbackGuide) return formatHowToGuideAnswer(fallbackGuide);
+
+  // 4. Conversational follow-ups resolve against what we just talked about.
   const last = memory?.topic;
   if (has(q, ...FOLLOWUP_THANKS)) {
     return { text: `Anytime! ${last ? `We were on ${ADVISOR_TOPIC_META[last].label.toLowerCase()} — say "tell me more" to go deeper, or ask about anything else.` : 'Ask me about anything else — cash, pipeline, tickets, KPIs…'} ` };
@@ -472,5 +953,5 @@ export function answerAdvisorQuestion(question: string, ctx: AdvisorContext, mem
     const a = topicAnswer(last, ctx);
     return withRelated(last, { ...a, text: `Going deeper on ${ADVISOR_TOPIC_META[last].label.toLowerCase()}: ${a.text}` });
   }
-  return { text: 'I answer from live numbers on cash, invoices, bills, pipeline, goals, tickets, projects, stock, ads, team, revenue, customers, comms, fundraising, knowledge, runs, banking, filings, social, integrations and KPIs. Try "morning brief".' };
+  return { text: 'I answer from live numbers on cash, invoices, bills, pipeline, goals, tickets, projects, stock, ads, team, revenue, customers, comms, fundraising, knowledge, runs, banking, filings, social, integrations and KPIs — or ask "how do I…" for step-by-step guides. Try "morning brief".' };
 }

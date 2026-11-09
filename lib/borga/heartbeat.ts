@@ -1,10 +1,11 @@
 import 'server-only';
-import { getBorgaState, setBorgaState, listBorgaKeys, scopedKey } from './persistence';
+import { getBorgaState, getBorgaRowOrThrow, setBorgaState, setBorgaStateIfVersion, listBorgaKeys, scopedKey } from './persistence';
 import { userWsKey } from './keys';
 import { INITIAL_SCHEDULED_TASKS, type ScheduledTask, type ScheduleInterval, type ProactiveNotice } from './data';
 import { enqueueRun } from './run-queue';
 import { loadSettings, DEFAULT_QUIET } from './heartbeat-settings';
 import { addNotice } from './notices';
+import { claimScheduledSlot, releaseScheduledSlot, type ClaimDeps } from './schedule-claim';
 
 // Settings + notices moved to their own modules: the run queue needs both and
 // heartbeat needs the queue — re-exported here so every existing import keeps working.
@@ -52,6 +53,20 @@ export async function loadTasks(ws: string | null | undefined, userId: string | 
 export async function saveTasks(tasks: ScheduledTask[], ws: string | null | undefined, userId: string | null | undefined): Promise<void> {
   await setBorgaState(tasksKey(ws, userId), tasks.slice(0, 50));
 }
+
+/**
+ * One claim row per scheduled task, in the workspace's own key space. The
+ * claim is what makes "enqueue this due task" single-winner across concurrent
+ * beats (autopilot + cron + another process), not just within one tick.
+ */
+export function scheduleClaimKey(ws: string | null | undefined, userId: string | null | undefined, taskId: string): string {
+  return ws && userId ? userWsKey(userId, ws, `scheduledClaim::${taskId}`) : scopedKey(ws, `scheduledClaim::${taskId}`);
+}
+
+const claimDeps: ClaimDeps = {
+  read: (key) => getBorgaRowOrThrow(key),
+  writeIfVersion: (key, value, expected) => setBorgaStateIfVersion(key, value, expected),
+};
 
 function toMinutes(hhmm: string): number | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
@@ -131,12 +146,27 @@ export async function tickWorkspace(ws: string | null, userId: string | null): P
       continue;
     }
     try {
+      // Conditional write first: two beats (the in-process autopilot and the cron
+      // endpoint, or two app processes) must never both enqueue this occurrence.
+      const slot = `${task.id}:${task.nextRun ?? ''}`;
+      const claimKey = scheduleClaimKey(ws, userId, task.id);
+      let claimed = false;
+      try {
+        claimed = await claimScheduledSlot(claimDeps, claimKey, slot);
+      } catch (error) {
+        console.error('[scheduler] could not claim a due task:', error);
+      }
+      if (!claimed) {
+        skippedOverlap.push(task.id);
+        continue;
+      }
       await enqueueRun({ agentId: task.agentId, goal: task.goal, triggeredBy: 'scheduler', ws, userId, urgent: task.urgent, schedTaskId: task.id, maxSteps: 6 });
       triggered.push(task.id);
       // Mark running + push nextRun now so the next tick can't double-fire a slow run.
       await setBorgaState(tasksKey(ws, userId), (await loadTasks(ws, userId)).map((t) => (t.id === task.id ? { ...t, runningSince: now.toISOString(), nextRun: computeNextRun(t.interval) } : t)));
     } catch {
-      // Enqueue failed — leave the marker clear so the next tick retries.
+      // Enqueue failed — release the claim and leave the marker clear so the next tick retries.
+      await releaseScheduledSlot(claimDeps, scheduleClaimKey(ws, userId, task.id), `${task.id}:${task.nextRun ?? ''}`).catch(() => false);
     }
   }
 

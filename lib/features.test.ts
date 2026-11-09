@@ -60,6 +60,7 @@ test('optional modules can be switched off from Settings, and their nav entries 
   assert.equal(featureForTab('integrations', 'toolkits'), 'composio');
   assert.equal(featureForTab('hr'), 'hr');
   assert.equal(featureForTab('developers'), 'developers');
+  assert.equal(featureForTab('services'), 'sharedServices');
   assert.equal(featureForTab('overview', 'command'), null, 'the Command Center is not optional');
   const { flags } = resolveFeatures({ hr: false, kpis: false, automations: false, widgets: false });
   assert.deepEqual([flags.hr, flags.kpis, flags.automations, flags.widgets], [false, false, false, false]);

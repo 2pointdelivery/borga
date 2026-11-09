@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { cancelJob, retryJob, rerunJob, listQueue, enqueueRun, setWorkerCount, updateQueuedJob, MAX_WORKERS } from '@/lib/borga/run-queue';
 import { MAX_RUN_STEPS } from '@/lib/borga/agent-runner';
+import { ownsWorkspaceStrict } from '@/lib/borga/workspace-access';
 import type { AgentRun } from '@/lib/borga/data';
 
 export const runtime = 'nodejs';
@@ -29,6 +30,9 @@ export async function GET(req: NextRequest) {
   if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const wsParam = new URL(req.url).searchParams.get('ws');
   const ws = isValidWsId(wsParam) ? wsParam : null;
+  if (ws && !(await ownsWorkspaceStrict(userId, ws))) {
+    return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
+  }
   const snapshot = await listQueue(ws, userId);
   return NextResponse.json({ ok: true, ...snapshot });
 }
@@ -50,6 +54,9 @@ export async function POST(req: NextRequest) {
 
   const action = String(body.action ?? '');
   const ws = isValidWsId(body.ws) ? body.ws : null;
+  if (ws && !(await ownsWorkspaceStrict(userId, ws))) {
+    return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
+  }
 
   if (action === 'cancel' || action === 'retry' || action === 'rerun') {
     const id = String(body.id ?? '');

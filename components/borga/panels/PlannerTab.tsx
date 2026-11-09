@@ -506,14 +506,20 @@ export function PlannerTab() {
           <DialogHeader>
             <DialogTitle>Create a new task</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            <Input placeholder="Task title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-            <Textarea placeholder="Details (optional)" rows={2} value={form.detail} onChange={(e) => setForm({ ...form, detail: e.target.value })} />
+          <div className="space-y-3.5">
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-muted-foreground">Task title</label>
+              <Input placeholder="e.g. Follow up with Q4 leads" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[11px] font-medium text-muted-foreground">Details (optional)</label>
+              <Textarea placeholder="Context, acceptance criteria, or notes…" rows={2} value={form.detail} onChange={(e) => setForm({ ...form, detail: e.target.value })} />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Priority</label>
+                <label className="text-[11px] font-medium text-muted-foreground">Priority</label>
                 <Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v as Priority })}>
-                  <SelectTrigger className="mt-1">
+                  <SelectTrigger className="mt-1 w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -526,9 +532,9 @@ export function PlannerTab() {
                 </Select>
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Bucket</label>
+                <label className="text-[11px] font-medium text-muted-foreground">Bucket</label>
                 <Select value={form.bucket} onValueChange={(v) => setForm({ ...form, bucket: v as Bucket, due: BUCKET_DUE[v as Bucket] })}>
-                  <SelectTrigger className="mt-1">
+                  <SelectTrigger className="mt-1 w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -541,13 +547,13 @@ export function PlannerTab() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Due (places it on the calendar)</label>
+                <label className="text-[11px] font-medium text-muted-foreground">Due (places it on the calendar)</label>
                 <Input className="mt-1" placeholder="e.g. Today, Tue, This week" value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground">Assign to agent</label>
+                <label className="text-[11px] font-medium text-muted-foreground">Assign to agent</label>
                 <Select value={form.assignee} onValueChange={(v) => setForm({ ...form, assignee: v })}>
-                  <SelectTrigger className="mt-1">
+                  <SelectTrigger className="mt-1 w-full">
                     <SelectValue placeholder="Assign…" />
                   </SelectTrigger>
                   <SelectContent>
@@ -560,9 +566,14 @@ export function PlannerTab() {
                 </Select>
               </div>
             </div>
-            <Button className="w-full" onClick={submit}>
-              <Plus className="h-4 w-4" /> Create task
-            </Button>
+            <div className="flex items-center justify-end gap-2 border-t border-border/70 pt-3">
+              <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={submit} disabled={!form.title.trim()}>
+                <Plus className="h-4 w-4" /> Create task
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

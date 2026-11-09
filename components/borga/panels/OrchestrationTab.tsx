@@ -260,7 +260,7 @@ export function OrchestrationTab() {
         <div className="flex items-center gap-2">
           <Badge variant="outline" className="gap-1.5">
             <span className={cn('h-2 w-2 rounded-full', engine?.ok === false ? 'bg-rose-500' : 'animate-pulse bg-emerald-500')} />
-            {checking ? 'Probing…' : engine?.mode === 'unconfigured' ? 'Not configured' : engine?.ok === false ? 'Local fallback' : 'Engine online'}
+            {checking ? 'Probing…' : engine?.mode === 'run-queue' ? 'AI workers (run queue)' : engine?.ok === false ? 'Unreachable' : 'Engine online'}
           </Badge>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={probeEngine}>
             <RefreshCw className="h-3.5 w-3.5" /> Re-probe

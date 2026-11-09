@@ -2,7 +2,7 @@ import 'server-only';
 import { z } from 'zod';
 import { mirrorMemory } from './supermemory-mirror';
 import { smPassages } from './supermemory';
-import { getBorgaState, setBorgaState, getAllBorgaStates, scopedKey } from './persistence';
+import { getBorgaState, setBorgaState, scopedKey } from './persistence';
 import { userWsKey } from './keys';
 import { getApiKey, decryptSecret } from './secrets';
 import { mcpCallTool } from './mcp-client';
@@ -13,6 +13,7 @@ import type { KpiGroup, Task, Lead, AgentMemory, Approval, KnowledgeEntry, Activ
 import { INITIAL_TASKS, INITIAL_LEADS, KNOWLEDGE_SEED, AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD, completeKpiGroups } from './data';
 import { analyzeOpportunity, draftApplication as draftFundingApplication, loadOpportunities, runFullPipeline } from './fundraising-pipeline';
 import { TOOL_NAMES as TOOL_NAMES_CLIENT } from './tool-names';
+import { allowedNext, canTransition } from './lifecycles';
 import { recomputeCosting, stockByWarehouse, stockStatus, valuation, type InventoryItem, type StockMovement, type Warehouse } from './inventory';
 
 /**
@@ -34,8 +35,8 @@ const bucketEnum = z.enum(['today', 'week', 'month']);
 
 export const TOOL_DEFS: ToolDef[] = [
   { name: 'create_task', description: 'Use this to create a follow-up or action task (e.g. pipeline follow-up, KPI fix).', schema: z.object({ title: z.string().min(1).max(200), detail: z.string().max(1500).optional(), priority: priorityEnum.optional(), bucket: bucketEnum.optional(), assignee: z.string().max(50).optional(), tags: z.array(z.string()).max(8).optional(), due: z.string().max(50).optional() }).passthrough(), needsConfirm: false },
-  { name: 'update_task', description: 'Use this to advance a task by id (status, progress, priority).', schema: z.object({ id: z.string().min(1), patch: z.object({ status: z.enum(['todo', 'in-progress', 'done']).optional(), progress: z.number().optional(), priority: priorityEnum.optional(), detail: z.string().max(1500).optional() }).passthrough() }).passthrough(), needsConfirm: false },
-  { name: 'update_lead', description: 'Use this to move a sales lead to a new stage or update its value/priority.', schema: z.object({ id: z.string().min(1), patch: z.object({ stage: z.enum(['new', 'qualified', 'proposal', 'won', 'lost']).optional(), value: z.number().nonnegative().optional(), priority: priorityEnum.optional() }).passthrough() }).passthrough(), needsConfirm: false },
+  { name: 'update_task', description: 'Use this to advance a task by id (status, progress, priority). Illegal status moves are refused with the allowed next states.', schema: z.object({ id: z.string().min(1), patch: z.object({ status: z.enum(['todo', 'in-progress', 'done']).optional(), progress: z.number().optional(), priority: priorityEnum.optional(), detail: z.string().max(1500).optional() }).passthrough() }).passthrough(), needsConfirm: false },
+  { name: 'update_lead', description: 'Use this to move a sales lead to a new stage or update its value/priority. Illegal stage moves are refused with the allowed next states.', schema: z.object({ id: z.string().min(1), patch: z.object({ stage: z.enum(['new', 'qualified', 'proposal', 'won', 'lost']).optional(), value: z.number().nonnegative().optional(), priority: priorityEnum.optional() }).passthrough() }).passthrough(), needsConfirm: false },
   { name: 'store_memory', description: 'Use this to remember a durable fact about the user or business for future sessions.', schema: z.object({ content: z.string().min(1).max(2000), kind: z.enum(['fact', 'context', 'instruction', 'observation']).optional(), tags: z.array(z.string()).max(10).optional(), confidence: z.number().min(0).max(100).optional() }).passthrough(), needsConfirm: false },
   { name: 'search_knowledge', description: 'Use this to look up the company knowledge base for services, policies, or facts.', schema: z.object({ query: z.string().min(1) }).passthrough(), needsConfirm: false },
   { name: 'browse_web', description: 'Use this to read one public web page (http/https only, no internal hosts).', schema: z.object({ url: z.string().min(1) }).passthrough(), needsConfirm: false },
@@ -240,11 +241,16 @@ export async function executeTool(
 
       const found = tasks.find((t) => t.id === id);
       if (!found) return { ok: false, error: `Task ${id} not found` };
+      // Lifecycle rule (lib/borga/lifecycles.ts): refuse an illegal move, but
+      // tell the model the legal next states so it can recover in one retry.
+      if (safe.status && !canTransition('task', found.status, safe.status)) {
+        return { ok: false, error: `A task cannot move from "${found.status}" to "${safe.status}". Allowed next: ${(allowedNext('task', found.status) ?? []).join(', ') || 'none'}.` };
+      }
 
       const updated = tasks.map((t) => (t.id === id ? { ...t, ...safe } : t));
       await setBorgaState(key('tasks'), updated);
       await appendActivity(agentId, agentName, ws, userId, 'task', `Updated task "${found.title}": ${JSON.stringify(safe)}`);
-      return { ok: true, data: { id, applied: safe } };
+      return { ok: true, data: { id, applied: safe, allowedNext: allowedNext('task', safe.status ?? found.status) } };
     }
 
     case 'update_lead': {
@@ -258,12 +264,16 @@ export async function executeTool(
 
       const found = leads.find((l) => l.id === id);
       if (!found) return { ok: false, error: `Lead ${id} not found` };
+      // A won/lost deal does not slide back to `new`; reopen means re-qualify.
+      if (safe.stage && !canTransition('lead', found.stage, safe.stage)) {
+        return { ok: false, error: `A lead cannot move from "${found.stage}" to "${safe.stage}". Allowed next: ${(allowedNext('lead', found.stage) ?? []).join(', ') || 'none'}.` };
+      }
 
       const updated = leads.map((l) => (l.id === id ? { ...l, ...safe } : l));
       await setBorgaState(key('leads'), updated);
       await appendActivity(agentId, agentName, ws, userId, 'task',
-        `Updated lead ${found.name}${safe.stage ? ` → stage: ${safe.stage}` : ''}${safe.value !== undefined ? `, value: $${safe.value.toLocaleString()}` : ''}`);
-      return { ok: true, data: { id, name: found.name, applied: safe } };
+        `Updated lead ${found.name}${safe.stage ? ` �+' stage: ${safe.stage}` : ''}${safe.value !== undefined ? `, value: $${safe.value.toLocaleString()}` : ''}`);
+      return { ok: true, data: { id, name: found.name, applied: safe, allowedNext: allowedNext('lead', safe.stage ?? found.stage) } };
     }
 
     case 'store_memory': {
@@ -546,7 +556,7 @@ ${String(params.body)}`, author: agentName });
 
       const all = ws
         ? await getBorgaState<Record<string, unknown>>(key(entity))
-        : (await getAllBorgaStates())[entity];
+        : []; // no workspace in scope: never read deployment-wide state (other tenants' rows)
       // KPIs are always the full best-practice set (a company that never opened its dashboard has nothing stored); nothing else returns null
       let data: unknown = entity === 'kpis' ? completeKpiGroups(all as unknown as KpiGroup[] | null).groups : (all ?? []);
       if (filter && Array.isArray(data)) {

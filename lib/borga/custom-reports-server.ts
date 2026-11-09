@@ -103,7 +103,8 @@ export async function mintShareLink(u: string, ws: string, reportId: string): Pr
   };
   const all = (await getBorgaState<ShareTokenRow[]>(shareKey(u, ws)).catch(() => null)) ?? [];
   await setBorgaState(shareKey(u, ws), [...all, record]);
-  const { hash: _h, ...pub } = record;
+  const { hash, ...pub } = record;
+  void hash;
   return { record: pub, secret };
 }
 
@@ -118,7 +119,10 @@ export async function revokeShareLink(u: string, ws: string, id: string): Promis
 
 export async function listShareLinks(u: string, ws: string): Promise<ShareTokenPublic[]> {
   const all = (await getBorgaState<ShareTokenRow[]>(shareKey(u, ws)).catch(() => null)) ?? [];
-  return all.map(({ hash: _h, ...pub }) => pub);
+  return all.map(({ hash, ...pub }) => {
+    void hash;
+    return pub;
+  });
 }
 
 export interface ShareBinding {

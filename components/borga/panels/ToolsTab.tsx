@@ -318,7 +318,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       const r = await fetch('/api/borga/composio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ action: 'list', apiKey: composio.apiKey }),
+        body: JSON.stringify({ action: 'list', ws: activeWorkspaceId }),
       });
       const d = await r.json() as { ok: boolean; apps?: ComposioApp[] };
       if (!d.ok || !d.apps) return;
@@ -344,7 +344,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     } finally {
       setCatalogLoading(false);
     }
-  }, [composio.apiKey, hasComposioKey, catalogLoading]);
+  }, [hasComposioKey, catalogLoading]);
 
 
   const connectViaOAuth = async (id: string, composioAppName: string, label: string, connId?: string) => {
@@ -356,7 +356,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       const res = await fetch('/api/borga/composio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ action: 'connect', appName: composioAppName, entityId: COMPOSIO_ENTITY, apiKey: composio.apiKey }),
+        body: JSON.stringify({ action: 'connect', appName: composioAppName, entityId: COMPOSIO_ENTITY, ws: activeWorkspaceId }),
       });
       const d = await res.json() as { ok: boolean; method?: string; connection?: { redirectUrl?: string; redirect_url?: string } };
       const redirectUrl = d.connection?.redirectUrl ?? d.connection?.redirect_url;
@@ -376,7 +376,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             const pr = await fetch('/api/borga/composio', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-              body: JSON.stringify({ action: 'accounts', apiKey: composio.apiKey }),
+              body: JSON.stringify({ action: 'accounts', ws: activeWorkspaceId }),
             });
             const pd = await pr.json() as { ok: boolean; error?: string; accounts?: { appName?: string; status?: string }[] };
             if (!pd.ok) {
@@ -414,9 +414,8 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
   const connectEmail = async (app: EmailApp) => connectViaOAuth(app.id, app.composioAppName, app.label);
 
   // Composio config
-  // A persisted mask is not a key — never show or resend it.
-  const sanitizedStoreKey = /^\[.*\]$/.test((composio.apiKey ?? '').trim()) ? '' : composio.apiKey;
-  const [apiKey, setApiKey] = useState(sanitizedStoreKey);
+  // The key is server-side only: the field starts empty and is never read back.
+  const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(composio.baseUrl);
   const [showKey, setShowKey] = useState(false);
 
@@ -594,7 +593,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       const res = await fetch('/api/borga/composio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({ action: 'mcpSocialSetup', entityId: activeWorkspaceId, apiKey: composio.apiKey || undefined }),
+        body: JSON.stringify({ action: 'mcpSocialSetup', entityId: activeWorkspaceId, ws: activeWorkspaceId }),
       });
       const d = (await res.json()) as { ok: boolean; error?: string; serverId?: string; url?: string; manual?: string[] };
       if (!d.ok || !d.url) {
@@ -693,10 +692,34 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
     }
   };
 
-  const saveComposio = () => {
-    const clean = /^\[.*\]$/.test(apiKey.trim()) ? '' : apiKey.trim();
-    setComposio({ apiKey: clean, baseUrl: baseUrl.trim() });
-    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: 'Composio.dev API configuration saved.' });
+  const saveComposio = async () => {
+    const clean = apiKey.trim();
+    setComposio({ baseUrl: baseUrl.trim() });
+    if (!clean) {
+      toast({ title: 'Configuration saved', description: 'No new key entered — the server-side key stays in use.', variant: 'success' });
+      return;
+    }
+    try {
+      const r = await fetch(`/api/borga/connections?ws=${encodeURIComponent(activeWorkspaceId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+        body: JSON.stringify({
+          action: 'save',
+          provider: 'composio',
+          values: { apiKey: clean, ...(baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}) },
+        }),
+      });
+      const d = (await r.json()) as { ok?: boolean; error?: string };
+      if (!d.ok) {
+        toast({ title: 'Could not save the key', description: d.error ?? 'Unknown error', variant: 'error' });
+        return;
+      }
+      setApiKey(''); // never keep the secret in the page after it is stored
+      log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'sync', message: 'Composio API key saved server-side (encrypted).' });
+      toast({ title: 'Composio key saved', description: 'Stored encrypted — the server uses it, the browser never sees it again.', variant: 'success' });
+    } catch {
+      toast({ title: 'Could not save the key', description: 'Network error — try again.', variant: 'error' });
+    }
   };
 
   // Merge static (store) toolkits with live Composio catalog
@@ -736,7 +759,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
           body: JSON.stringify({
             action: 'connect',
-            apiKey: composio.apiKey,
+            ws: activeWorkspaceId,
             baseUrl: composio.baseUrl || undefined,
             appName: oauth.appName,
             entityId: account.trim(),
@@ -760,7 +783,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
                     headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
                     body: JSON.stringify({
                       action: 'accounts',
-                      apiKey: composio.apiKey,
+                      ws: activeWorkspaceId,
                       baseUrl: composio.baseUrl || undefined,
                     }),
                   });
@@ -886,7 +909,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
 
       {/* ── LLM providers ─────────────────────────────────────────────────── */}
       {(section === 'ai-providers' || section === 'apps') && (
-      <section>
+      <section id="config-ai-providers" className="scroll-mt-20">
         <div className="flex items-center gap-2 mb-1">
           <Cpu className="h-4 w-4 text-primary" />
           <SectionTitle title="LLM providers" sub="Paste API keys here — encrypted and stored server-side" />
@@ -1274,7 +1297,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           </span>
           <SectionTitle
             title="Email accounts"
-            sub={composio.apiKey ? 'Connect via OAuth — agents can read, send and manage mail' : 'Requires a Composio API key (below)'}
+            sub={hasComposioKey ? 'Connect via OAuth — agents can read, send and manage mail' : 'Requires a Composio API key (below)'}
           />
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
@@ -1338,7 +1361,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
 
       {/* ── Sending server (SMTP) ───────────────────────────────────────────── */}
       {(section === 'email' || section === 'apps') && (
-      <section>
+      <section id="config-email-section" className="scroll-mt-20">
         <div className="flex items-center gap-2 mb-3">
           <Radio className="h-4 w-4 text-primary" />
           <SectionTitle title="Sending server (SMTP)" sub="Mail sent from your company's own address: ticket replies, notifications, and messages when Gmail isn't connected" />
@@ -1389,7 +1412,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
       )}
       {/* ── Composio.dev API configuration ───────────────────────────────── */}
       {(section === 'composio' || section === 'apps') && (
-      <Card className="p-5">
+      <Card id="config-composio" className="p-5 scroll-mt-20">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <KeyRound className="h-4 w-4 text-primary" />
@@ -1400,7 +1423,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
           </div>
           <Badge variant="outline" className={cn('gap-1.5', hasComposioKey && 'text-emerald-600')}>
             <span className={cn('h-2 w-2 rounded-full', hasComposioKey ? 'bg-emerald-500' : 'bg-muted-foreground/50')} />
-            {hasComposioKey ? (composio.apiKey ? 'Workspace key set' : 'Server key set') : 'Not configured'}
+            {hasComposioKey ? 'Configured' : 'Not configured'}
           </Badge>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -1454,7 +1477,7 @@ export function ToolsTab({ section = 'ai-providers' }: { section?: ToolsSection 
             />
             {catalogLoading
               ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-              : composio.apiKey
+              : hasComposioKey
                 ? <button onClick={refreshCatalog} title="Refresh live catalog from Composio" className="p-0.5 text-muted-foreground hover:text-foreground transition-colors"><RefreshCw className="h-3.5 w-3.5" /></button>
                 : null
             }

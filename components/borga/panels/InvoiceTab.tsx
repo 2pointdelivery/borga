@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { effectiveInvoiceStatus } from '@/lib/borga/lifecycles';
 import {
   INVOICE_STATUS_STYLE,
   PAYMENT_METHODS,
@@ -38,12 +39,14 @@ import {
 import { invoiceHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
 import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 import { toast } from '@/lib/toast-bus';
 import { findInvoiceDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
 import { DateInput, Field, ProjectSelect, AccountSelect,
   TaxProfilesMultiSelect, CurrencySelect } from '../form-widgets';
 import { rateFor } from '@/lib/borga/fx';
+import { documentTotals, convertToWorkspace, normalizeInvoice } from '@/lib/borga/pricing';
 import { SearchSelect } from '../SearchSelect';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
@@ -159,40 +162,29 @@ export function InvoiceTab() {
     [taxProfiles, form.taxProfileIds],
   );
 
-  const formTotals = useMemo(() => {
-    const subtotal = form.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const tax = (subtotal * formTaxRate) / 100;
-    return { subtotal, tax, total: subtotal + tax };
-  }, [form.lines, formTaxRate]);
+  const formTotals = useMemo(
+    () => documentTotals(form.lines, { taxRate: formTaxRate, currency: form.currency.trim().toUpperCase() || currency }),
+    [form.lines, formTaxRate, form.currency, currency],
+  );
 
   const submit = () => {
     if (!form.client.trim() || form.lines.length === 0) return;
     const lines = form.lines.filter((l) => l.description.trim() || l.unitPrice);
     if (lines.length === 0) return;
-    const foreignSubtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const foreignTotal = foreignSubtotal + (foreignSubtotal * formTaxRate) / 100;
-    // Foreign face value converts to workspace currency at the FX table rate (snapshotted on the invoice).
+    // The server reprices from these lines; use the same helpers here so the
+    // preview, the stored invoice and an emailed copy cannot disagree.
     const docCcy = form.currency.trim().toUpperCase() || currency;
-    let amount = Math.round(foreignTotal * 100) / 100;
-    let fxRate: number | undefined;
-    let foreignAmount: number | undefined;
-    if (docCcy !== currency) {
-      const rate = rateFor(fxRates, docCcy, currency);
-      if (rate === null) {
-        toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or bill in ${currency}.`, variant: 'error' });
-        return;
-      }
-      fxRate = rate;
-      foreignAmount = Math.round(foreignTotal * 100) / 100;
-      amount = Math.round(foreignTotal * rate * 100) / 100;
+    const rate = docCcy === currency ? null : rateFor(fxRates, docCcy, currency);
+    if (docCcy !== currency && rate === null) {
+      toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or bill in ${currency}.`, variant: 'error' });
+      return;
     }
-    const total = amount;
     const profileNames = taxProfiles.filter((t) => form.taxProfileIds.includes(t.id)).map((t) => t.name).join(' + ');
-    const base: Invoice = {
+    const draft: Invoice = {
       id: editing?.id ?? `inv-${Date.now().toString(36)}`,
       number: form.number.trim() || `#${2200 + invoices.length}`,
       client: form.client.trim(),
-      amount: Math.round(total * 100) / 100,
+      amount: 0,
       status: form.status,
       issued: form.issued,
       due: form.due,
@@ -209,9 +201,10 @@ export function InvoiceTab() {
       projectId: form.projectId,
       accountId: form.accountId,
       currency: docCcy === currency ? undefined : docCcy,
-      fxRate,
-      foreignAmount,
+      fxRate: rate ?? undefined,
     };
+    // The saved amount is the server's arithmetic, mirrored locally.
+    const base = normalizeInvoice(draft, currency);
     if (editing) {
       updateInvoice(editing.id, base);
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Invoice ${base.number} updated — ${lines.length} line(s), total ${money(base.amount)}.` });
@@ -302,8 +295,25 @@ export function InvoiceTab() {
     setEmailState('sending');
     try {
       const r = await sendCompanyEmail({
-        ws: activeWorkspaceId, to: emailForm.to, subject: emailForm.subject, composioKey: composio.apiKey,
+        ws: activeWorkspaceId,
+        to: emailForm.to,
+        subject: emailForm.subject,
         body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
+        document: {
+          kind: 'invoice',
+          workspaceName: activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? 'Company',
+          documentNumber: inv.number,
+          recipientName: inv.client,
+          currency: inv.currency ?? currency,
+          totalAmount: inv.amount,
+          dueOrValidDate: inv.due,
+          lines: inv.lines?.map((l) => ({
+            label: l.description,
+            qty: l.qty,
+            unitPrice: l.unitPrice,
+            amount: l.qty * l.unitPrice,
+          })),
+        },
       });
       if (r.ok) {
         setEmailState('sent');
@@ -353,7 +363,7 @@ export function InvoiceTab() {
   const stats = useMemo(() => {
     const unpaid = invoices.filter((i) => i.status === 'sent' || i.status === 'overdue');
     const totalUnpaid = unpaid.reduce((s, i) => s + i.amount, 0);
-    const overdueAmount = invoices.filter((i) => i.status === 'overdue').reduce((s, i) => s + i.amount, 0);
+    const overdueAmount = invoices.filter((i) => effectiveInvoiceStatus(i) === 'overdue').reduce((s, i) => s + i.amount, 0);
     const paid = invoices.filter((i) => i.status === 'paid');
     const nonDraft = invoices.filter((i) => i.status !== 'draft');
     const avgTotal = nonDraft.length ? nonDraft.reduce((s, i) => s + i.amount, 0) / nonDraft.length : 0;
@@ -375,10 +385,11 @@ export function InvoiceTab() {
   const filteredInvoices = useMemo(
     () =>
       invoices.filter((i) => {
-        if (statusFilter === 'open' && !(i.status === 'sent' || i.status === 'overdue')) return false;
-        if (statusFilter === 'overdue' && i.status !== 'overdue') return false;
-        if (statusFilter === 'draft' && i.status !== 'draft') return false;
-        if (statusFilter === 'paid' && i.status !== 'paid') return false;
+        const eff = effectiveInvoiceStatus(i);
+        if (statusFilter === 'open' && !(eff === 'sent' || eff === 'overdue')) return false;
+        if (statusFilter === 'overdue' && eff !== 'overdue') return false;
+        if (statusFilter === 'draft' && eff !== 'draft') return false;
+        if (statusFilter === 'paid' && eff !== 'paid') return false;
         if (query && !`${i.number} ${i.client} ${i.issued} ${i.due}`.toLowerCase().includes(query.toLowerCase())) return false;
         return true;
       }),
@@ -481,7 +492,7 @@ export function InvoiceTab() {
                   {i.taxProfileName && <span className="block text-[10px] font-normal text-muted-foreground">{i.taxProfileName} {i.taxRate ?? 0}%</span>}
                 </td>
                 <td className="px-4 py-2.5">
-                  <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1', i.voidedAt ? 'bg-rose-500/10 text-rose-600 ring-rose-500/30' : INVOICE_STATUS_STYLE[i.status])}>{i.voidedAt ? 'voided' : i.status}</span>
+                  <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1', i.voidedAt ? 'bg-rose-500/10 text-rose-600 ring-rose-500/30' : INVOICE_STATUS_STYLE[effectiveInvoiceStatus(i)])}>{i.voidedAt ? 'voided' : effectiveInvoiceStatus(i)}</span>
                 </td>
                 <td className="px-2 py-2.5">
                   <div className="flex justify-end gap-0.5">
@@ -676,7 +687,7 @@ export function InvoiceTab() {
               <Field label="Total">
                 <p className="py-2 font-mono text-sm font-semibold">
                   {form.currency && form.currency.toUpperCase() !== currency
-                    ? (() => { const r = rateFor(fxRates, form.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(formTotals.total * r)} (${form.currency.toUpperCase()} ${formTotals.total.toFixed(2)})`; })()
+                    ? (() => { const r = rateFor(fxRates, form.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(convertToWorkspace(formTotals.total, r, currency))} (${form.currency.toUpperCase()} ${formTotals.total.toFixed(2)})`; })()
                     : money(formTotals.total)}
                 </p>
               </Field>
@@ -761,9 +772,10 @@ export function InvoiceTab() {
             <Field label="Message">
               <Textarea rows={6} value={emailForm.body} onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })} />
             </Field>
-            <p className="text-[11px] text-muted-foreground">
-              Sent through the company&apos;s Gmail, or its own mail server (SMTP) when Gmail isn&apos;t linked. If neither is set up, the message opens in your mail client instead.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <span>Sent as a formatted HTML + plain-text invoice via your mail server (SMTP/Postmark) or Gmail.</span>
+              <ConfigDeepLinkButton target="smtp" label="Configure SMTP" />
+            </div>
             {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Sent — invoice marked as sent.</p>}
             {emailState === 'fallback' && <p className="text-xs font-medium text-amber-600">Opened in your mail client (Gmail not linked for this workspace).</p>}
           </div>

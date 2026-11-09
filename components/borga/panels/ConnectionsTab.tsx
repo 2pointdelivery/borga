@@ -70,7 +70,7 @@ function ProviderCard({ def, status, webhookUrl, ws, onChange }: { def: Provider
   };
 
   return (
-    <Card className="space-y-4 p-5">
+    <Card id={`config-provider-${def.id}`} className="space-y-4 p-5 scroll-mt-20">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold">

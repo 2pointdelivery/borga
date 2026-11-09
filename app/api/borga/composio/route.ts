@@ -1,6 +1,9 @@
 import { composioScope, inScope, scopedEntity } from '@/lib/borga/composio-scope';
 import { NextResponse, type NextRequest } from 'next/server';
-import { getApiKey, setApiKey, isAllowedKey } from '@/lib/borga/secrets';
+import { getApiKey } from '@/lib/borga/secrets';
+import { getConnection } from '@/lib/borga/connections-server';
+import { ownsWorkspaceStrict } from '@/lib/borga/workspace-access';
+import { isValidWsId } from '@/lib/borga/keys';
 import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 import { composioWorkspaceSession } from '@/lib/borga/session';
 import {
@@ -135,6 +138,7 @@ interface Body {
   pageId?: string;
   replyTo?: string;
   userId?: string;
+  ws?: string;
 }
 
 async function upstreamJson(url: string, apiKey: string, init?: RequestInit) {
@@ -167,19 +171,29 @@ export async function POST(req: NextRequest) {
     return reject('(unparsed)', 'Invalid request body.');
   }
 
-  const apiKey = (body.apiKey ?? '').trim();
-  const persistKey = body.persistKey === true;
-
-  // Check if we should use stored key
-  let effectiveApiKey = apiKey;
-  if (!effectiveApiKey) {
-    effectiveApiKey = await getApiKey('COMPOSIO_API_KEY');
+  // The browser never supplies the key: a workspace's encrypted connection is
+  // tried first, then the deployment key. Any `apiKey` in the body is ignored.
+  const callerId = await sessionUserId(req);
+  const wsParam = body.ws ?? new URL(req.url).searchParams.get('ws') ?? '';
+  let effectiveApiKey = '';
+  let keySource: 'workspace' | 'deployment' | 'none' = 'none';
+  if (callerId && isValidWsId(wsParam)) {
+    if (!(await ownsWorkspaceStrict(callerId, wsParam))) {
+      return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
+    }
+    const conn = await getConnection(callerId, wsParam, 'composio');
+    const stored = typeof conn?.apiKey === 'string' ? conn.apiKey.trim() : '';
+    if (isValidApiKey(stored)) {
+      effectiveApiKey = stored;
+      keySource = 'workspace';
+    }
   }
-  const keyFromServer = !apiKey && !!effectiveApiKey;
-
-  // Persist the key if requested and allowed
-  if (persistKey && isValidApiKey(effectiveApiKey) && isAllowedKey('COMPOSIO_API_KEY')) {
-    await setApiKey('COMPOSIO_API_KEY', effectiveApiKey);
+  if (!effectiveApiKey) {
+    const serverKey = await getApiKey('COMPOSIO_API_KEY');
+    if (isValidApiKey(serverKey)) {
+      effectiveApiKey = serverKey;
+      keySource = 'deployment';
+    }
   }
 
   // Use custom base URL from user config if provided, fall back to default.
@@ -198,7 +212,9 @@ export async function POST(req: NextRequest) {
   } catch {
     return reject(body.action ?? '(unparsed)', 'Composio base URL must be a valid HTTPS URL.');
   }
-  if (customHost) effectiveApiKey = apiKey;
+  if (customHost && keySource === 'deployment') {
+    return reject(body.action ?? '(unparsed)', 'A custom Composio base URL is only allowed with a workspace-specific key.');
+  }
 
   const baseStr = normalizeBase(rawBase);
   const action = body.action ?? 'list';
@@ -208,8 +224,7 @@ export async function POST(req: NextRequest) {
   // Gmail or social accounts would be used by another. While the deployment key is in use, every entity id is therefore prefixed
   // with a hash of the signed-in user, and only accounts under that prefix are ever listed, used or changed. A company with its
   // own Composio key has its own project and needs no prefix.
-  const callerId = await sessionUserId(req);
-  const scope = composioScope(callerId, keyFromServer && !customHost);
+  const scope = composioScope(callerId, keySource === 'deployment' && !customHost);
   const ent = (raw?: string) => scopedEntity(scope, raw);
   const unscope = (id: string) => (scope && id.startsWith(scope) ? id.slice(scope.length) : id);
   /** Whether a connected-account id belongs to this caller. Always true when no scope applies. */
@@ -228,7 +243,7 @@ export async function POST(req: NextRequest) {
   const actionsRequiringKey = ['list', 'authConfigs', 'authConfigCreate', 'tools', 'accounts', 'connect', 'disconnect', 'execute', 'connectionStatus', 'refreshToken', 'socialStatus', 'socialPost', 'mcpSocialSetup'];
 
   if (actionsRequiringKey.includes(action) && !isValidApiKey(effectiveApiKey)) {
-    return reject(action, 'A valid Composio API key is required for this action. Provide it in the request or configure COMPOSIO_API_KEY in your environment.');
+    return reject(action, 'A valid Composio API key is required for this action. Save one under Integrations → Connections, or configure COMPOSIO_API_KEY on the server.');
   }
 
   try {
@@ -237,7 +252,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, action: 'validate', connected: false, keyInvalid: false, via: 'none', baseUrl: baseStr });
       }
       const probe = await validateComposioConnection(effectiveApiKey, baseStr);
-      return NextResponse.json({ ok: true, action: 'validate', connected: probe.connected, keyInvalid: probe.keyInvalid, via: keyFromServer ? 'server' : 'provided', baseUrl: baseStr });
+      return NextResponse.json({ ok: true, action: 'validate', connected: probe.connected, keyInvalid: probe.keyInvalid, via: keySource === 'workspace' ? 'workspace' : keySource === 'deployment' ? 'server' : 'none', baseUrl: baseStr });
     }
 
     if (action === 'list') {

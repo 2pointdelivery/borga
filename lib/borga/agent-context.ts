@@ -1,6 +1,6 @@
 import 'server-only';
 import { composioScope, inScope } from './composio-scope';
-import { getAllBorgaStates, getBorgaState, getBorgaStatesByPrefix, scopedKey } from './persistence';
+import { getBorgaState, getBorgaStatesByPrefix, scopedKey } from './persistence';
 import { userWsKey } from './keys';
 import { resolveProviderConfig, resolveApiKey } from './llm-providers';
 import { getApiKey } from './secrets';
@@ -17,6 +17,7 @@ import type { FilingsState } from './filing-catalog';
 import type { InventoryItem, StockMovement } from './inventory';
 import { AGENTS, DEFAULT_LLM, completeKpiGroups, KNOWLEDGE_SEED, INITIAL_TASKS, INITIAL_LEADS, LLM_PROVIDERS, RETIRED_LLM_PROVIDERS, kpiAttainment, kpiMeasured, type LlmProvider } from './data';
 import { assertPublicUrl } from './safe-url';
+import { lifecyclePrompt } from './lifecycles';
 import { friendlyLlmError, isRetryableLlmStatus, LLM_MAX_ATTEMPTS, llmRetryDelayMs } from './llm-errors';
 import { effectiveInstructions } from './agent-personas';
 import { deriveBusinessInsights } from './insights';
@@ -70,14 +71,13 @@ async function getConnectedComposioApps(userId?: string | null): Promise<string[
 export async function buildAgentContext(agentId: string, ws?: string | null, userId?: string | null, goal?: string): Promise<AgentContext | null> {
   // One bulk read; entity lookup is scoped to exactly the key the dashboard
   // itself reads/writes (userWsKey when we have a userId — the real per-user
-  // per-workspace row), falling back to the older bare-workspace key only
-  // when no userId is available so this never throws.
-  // Scoped to this workspace's rows when we know the tenant (the old unscoped read loaded every row in the database per run).
-  const all = ws && userId ? await getBorgaStatesByPrefix(userWsKey(userId, ws, '')) : await getAllBorgaStates();
-  const read = <T>(entity: string): T | null => {
-    const scoped = ws ? all[userId ? userWsKey(userId, ws, entity) : scopedKey(ws, entity)] : undefined;
-    return ((scoped ?? all[entity]) as T | undefined) ?? null;
-  };
+  // per-workspace row). Without a tenant (userId + workspace) there is no
+  // context to build: reading deployment-wide state would pull other
+  // companies' rows into an agent's prompt, so refuse instead.
+  if (!ws || !userId) return null;
+  const all = await getBorgaStatesByPrefix(userWsKey(userId, ws, ''));
+  const read = <T>(entity: string): T | null =>
+    (all[userWsKey(userId, ws, entity)] as T | undefined) ?? null;
 
   const agents = read<Agent[]>('agents') ?? AGENTS;
   const agent = agents.find((a) => a.id === agentId);
@@ -265,6 +265,8 @@ Only call composio_action for an app listed above (case-insensitive app slug, e.
 ## Business Intelligence (auto-derived from all modules)
 ${insightSummary || 'No insights derived yet.'}
 Use these findings to ground your decisions and store durable conclusions with store_memory.
+
+${lifecyclePrompt()}
 
 ## Available Tools
 Take real actions using these tools. Output one tool call at a time, then wait for the result before calling the next.

@@ -816,12 +816,18 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>New project</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Project name" />
-            <Textarea rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="What is this project about?" />
+          <div className="space-y-3.5">
+            <div className="space-y-1">
+              <p className="text-[11px] font-medium text-muted-foreground">Project name</p>
+              <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Q4 Client Onboarding" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-[11px] font-medium text-muted-foreground">Scope &amp; description</p>
+              <Textarea rows={3} value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="What is this project about?" />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <p className="mb-1 text-xs font-medium text-muted-foreground">Owner</p>
+                <p className="mb-1 text-[11px] font-medium text-muted-foreground">Owner</p>
                 <SearchSelect
                   options={[
                     { value: '', label: 'Unassigned' },
@@ -835,12 +841,12 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
                 />
               </div>
               <div>
-                <p className="mb-1 text-xs font-medium text-muted-foreground">Budget</p>
-                <Input type="number" value={form.budgetAmount} onChange={(e) => setForm((f) => ({ ...f, budgetAmount: e.target.value }))} placeholder="0" />
+                <p className="mb-1 text-[11px] font-medium text-muted-foreground">Budget</p>
+                <Input type="number" value={form.budgetAmount} onChange={(e) => setForm((f) => ({ ...f, budgetAmount: e.target.value }))} placeholder="0.00" />
               </div>
             </div>
             <div>
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Customer account</p>
+              <p className="mb-1 text-[11px] font-medium text-muted-foreground">Customer account</p>
               <SearchSelect
                 options={[
                   { value: UNASSIGNED, label: 'None — internal project' },
@@ -855,8 +861,8 @@ export function ProjectsTab({ initialProjectId }: { initialProjectId?: string } 
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={createProject}>Create</Button>
+            <Button variant="ghost" size="sm" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={createProject} disabled={!form.name.trim()}>Create project</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

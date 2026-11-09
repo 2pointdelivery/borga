@@ -4,6 +4,7 @@ import { sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
 import { getUserById } from '@/lib/auth/queries';
 import { workspaceSmtp } from '@/lib/borga/smtp-server';
+import { takeRouteLimit } from '@/lib/borga/route-limits';
 
 export const runtime = 'nodejs';
 
@@ -15,6 +16,14 @@ export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
   const userId = await sessionUserId(req);
   if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  // Self-addressed only, but each test still burns shared-sender quota: cap it.
+  const limit = takeRouteLimit('emailTest', `smtp-test:${userId}`);
+  if (limit.limited) {
+    return NextResponse.json(
+      { ok: false, error: 'Test emails are limited. Try again later.' },
+      { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec) } },
+    );
+  }
   const me = await getUserById(userId);
   if (!me) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   let body: { to?: string; ws?: unknown } = {};

@@ -20,10 +20,20 @@ export function AgentAvatar({
     .join('')
     .slice(0, 2)
     .toUpperCase();
+  const radiusClass = size <= 22 ? 'rounded-md' : 'rounded-lg';
   return (
     <div
-      className={cn('flex shrink-0 items-center justify-center rounded-full font-semibold text-white', className)}
-      style={{ width: size, height: size, background: `linear-gradient(135deg, ${color}, ${color}99)`, fontSize: size * 0.36 }}
+      className={cn(
+        'flex shrink-0 items-center justify-center font-semibold tracking-tight text-white shadow-2xs ring-1 ring-inset ring-white/25 select-none',
+        radiusClass,
+        className,
+      )}
+      style={{
+        width: size,
+        height: size,
+        background: `linear-gradient(145deg, ${color}, ${color}cc)`,
+        fontSize: Math.max(9, Math.round(size * 0.36)),
+      }}
     >
       {initials}
     </div>
@@ -31,16 +41,16 @@ export function AgentAvatar({
 }
 
 export function StatusPill({ status }: { status: Agent['status'] }) {
-  const map: Record<Agent['status'], { label: string; cls: string }> = {
-    active: { label: 'Active', cls: 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30' },
-    idle: { label: 'Idle', cls: 'bg-muted text-muted-foreground ring-border' },
-    learning: { label: 'Learning', cls: 'bg-sky-500/10 text-sky-600 ring-sky-500/30' },
-    offline: { label: 'Offline', cls: 'bg-rose-500/10 text-rose-600 ring-rose-500/30' },
+  const map: Record<Agent['status'], { label: string; cls: string; dot: string }> = {
+    active: { label: 'Active', cls: 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/25', dot: 'bg-emerald-500' },
+    idle: { label: 'Idle', cls: 'bg-muted/60 text-muted-foreground ring-border/80', dot: 'bg-muted-foreground/60' },
+    learning: { label: 'Learning', cls: 'bg-sky-500/10 text-sky-600 ring-sky-500/25', dot: 'bg-sky-500' },
+    offline: { label: 'Offline', cls: 'bg-rose-500/10 text-rose-600 ring-rose-500/25', dot: 'bg-rose-500' },
   };
   const s = map[status];
   return (
-    <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1', s.cls)}>
-      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+    <span className={cn('inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset', s.cls)}>
+      <span className={cn('h-1.5 w-1.5 rounded-full', s.dot)} />
       {s.label}
     </span>
   );
@@ -71,17 +81,17 @@ export function Sparkline({
   const area = `${d} L${width},${height} L0,${height} Z`;
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="overflow-visible">
-      <path d={area} fill={stroke} opacity={0.12} />
-      <path d={d} fill="none" stroke={stroke} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={area} fill={stroke} opacity={0.1} />
+      <path d={d} fill="none" stroke={stroke} strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
 export function SectionTitle({ title, sub }: { title: string; sub?: string }) {
   return (
-    <div>
-      <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
-      {sub && <p className="text-sm text-muted-foreground">{sub}</p>}
+    <div className="space-y-0.5">
+      <h2 className="text-base font-semibold tracking-tight text-foreground sm:text-lg">{title}</h2>
+      {sub && <p className="text-xs leading-relaxed text-muted-foreground">{sub}</p>}
     </div>
   );
 }

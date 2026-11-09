@@ -1,11 +1,15 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getConnection } from '@/lib/borga/connections-server';
 import { guardEngineUrl } from '@/lib/borga/engine-http';
-import { sessionUserId } from '@/lib/borga/features-server';
+import { requireWorkspace, tooManyRequests } from '@/lib/borga/request-guard';
 import { paymentRequired } from '@/lib/borga/billing-server';
-import { userWsKey } from '@/lib/borga/keys';
+import { takeRouteLimit } from '@/lib/borga/route-limits';
+import { enqueueRun, getJob } from '@/lib/borga/run-queue';
+import { isTerminal } from '@/lib/borga/run-queue-core';
+import { workflowDispatch } from '@/lib/borga/workflow-dispatch';
 import { getApiKey } from '@/lib/borga/secrets';
 import { getBorgaState } from '@/lib/borga/persistence';
+import { userWsKey } from '@/lib/borga/keys';
 import type { SettingsState } from '@/lib/borga/data';
 
 export const runtime = 'nodejs';
@@ -13,15 +17,13 @@ export const runtime = 'nodejs';
 // Per-tenant engine resolution: each company workspace configures its own
 // engine endpoint + key in workspace settings; env vars are the global fallback.
 const DEFAULT_ENGINE_URL = (process.env.BORGA_ENGINE_URL ?? '').replace(/\/$/, '');
-
-function isValidWsId(ws: unknown): ws is string {
-  return typeof ws === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(ws);
-}
+const ENGINE_TIMEOUT = 30000; // 30 seconds for engine operations
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
 
 /**
  * Per-company engine resolution: the company's saved Company Engine connection first, then its legacy
- * workspace settings, then deployment-wide env. (This used to read an un-prefixed settings key that the
- * dashboard never writes, so a company's own endpoint was never actually used.)
+ * workspace settings, then deployment-wide env.
  */
 async function resolveEngine(wsId: string | null, userId: string | null): Promise<{ engineUrl: string; token: string | null }> {
   let engineUrl = DEFAULT_ENGINE_URL;
@@ -47,19 +49,6 @@ async function resolveEngine(wsId: string | null, userId: string | null): Promis
   }
   return { engineUrl, token };
 }
-const ENGINE_TIMEOUT = 30000; // 30 seconds for engine operations
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
-
-type WorkflowStep = { step: string; output: string; status: 'done' | 'skipped' };
-type LocalResult = {
-  ok: boolean;
-  mode: 'local';
-  workflow: string;
-  agent: string;
-  steps: WorkflowStep[];
-  summary: string;
-};
 
 // Validate engine URL format
 function isValidEngineUrl(url: string): boolean {
@@ -77,21 +66,21 @@ async function retryWithBackoff<T>(
   operationName: string
 ): Promise<T> {
   let lastError: Error | null = null;
-  
+
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       return await operation();
     } catch (error) {
       lastError = error as Error;
       console.warn(`Engine ${operationName} attempt ${attempt}/${MAX_RETRIES} failed:`, error);
-      
+
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_DELAY_MS * attempt;
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }
-  
+
   console.error(`Engine ${operationName} failed after ${MAX_RETRIES} attempts:`, lastError);
   throw lastError;
 }
@@ -117,9 +106,9 @@ async function validateEngineAuth(engineUrl: string, adminToken: string | null):
 
     return { valid: true };
   } catch (error) {
-    return { 
-      valid: false, 
-      error: error instanceof Error ? error.message : 'Engine unreachable' 
+    return {
+      valid: false,
+      error: error instanceof Error ? error.message : 'Engine unreachable'
     };
   }
 }
@@ -144,9 +133,9 @@ async function executeWorkflow(
           'Authorization': `Bearer ${adminToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          action, 
-          workflow: workflowName, 
+        body: JSON.stringify({
+          action,
+          workflow: workflowName,
           agent,
           timestamp: new Date().toISOString(),
         }),
@@ -158,12 +147,12 @@ async function executeWorkflow(
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
       console.error('Engine workflow error:', response.status, errorText.slice(0, 200));
-      
+
       try {
         const errorData = JSON.parse(errorText);
-        return { 
-          success: false, 
-          error: errorData.error?.message || `Engine returned ${response.status}` 
+        return {
+          success: false,
+          error: errorData.error?.message || `Engine returned ${response.status}`
         };
       } catch {
         return { success: false, error: `Engine returned ${response.status}` };
@@ -174,9 +163,9 @@ async function executeWorkflow(
     return { success: true, data };
   } catch (error) {
     console.error('Engine execution error:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Engine execution failed' 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Engine execution failed'
     };
   }
 }
@@ -206,219 +195,143 @@ async function getWorkflowStatus(engineUrl: string, adminToken: string | null, w
     }
 
     const data = await response.json() as Record<string, unknown>;
-    return { 
-      success: true, 
+    return {
+      success: true,
       status: data.status as string,
       progress: data.progress as number,
     };
   } catch (error) {
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Failed to get workflow status' 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to get workflow status'
     };
   }
 }
 
-// Enhanced local engine fallback with production-ready logic
-function runLocalEngine(workflowName: string, agent: string): LocalResult {
-  const wf = workflowName.toLowerCase();
-  const steps: WorkflowStep[] = [];
-
-  if (/lead|outreach|sales|prospect/.test(wf)) {
-    steps.push({ step: 'Load lead pipeline', output: 'Fetched 12 leads — 3 P0, 5 P1 — sorted by engagement signal', status: 'done' });
-    steps.push({ step: 'Score & prioritize', output: 'Ranked by deal size × urgency × last-touch recency', status: 'done' });
-    steps.push({ step: 'Generate outreach', output: 'Drafted 5 personalized messages using KB context', status: 'done' });
-    steps.push({ step: 'Queue delivery', output: 'Outreach queued for 09:00 AM optimal send window', status: 'done' });
-    return { ok: true, mode: 'local', workflow: workflowName, agent, steps, summary: `Lead outreach complete. 5 messages queued by ${agent}.` };
-  }
-
-  if (/content|social|post|linkedin|twitter/.test(wf)) {
-    steps.push({ step: 'Audit recent performance', output: 'Last 7 posts averaged 4.2% engagement — Thursday 10AM is peak', status: 'done' });
-    steps.push({ step: 'Draft posts', output: 'Created 3 LinkedIn posts and 2 Twitter/X threads from KB insights', status: 'done' });
-    steps.push({ step: 'Schedule publication', output: 'Posts queued: Tue 10AM, Wed 2PM, Thu 9AM', status: 'done' });
-    return { ok: true, mode: 'local', workflow: workflowName, agent, steps, summary: `Content workflow complete. 5 posts scheduled by ${agent}.` };
-  }
-
-  if (/fleet|brief|morning|daily|standup/.test(wf)) {
-    steps.push({ step: 'Gather KPI snapshot', output: 'Pulled metrics from all 6 departments — 2 KPIs below target', status: 'done' });
-    steps.push({ step: 'Flag anomalies', output: 'Ops delivery rate 78% (target 90%); Sales close rate 18% (target 25%)', status: 'done' });
-    steps.push({ step: 'Generate briefing', output: 'Morning brief compiled — 4 actions recommended, 2 escalations flagged', status: 'done' });
-    steps.push({ step: 'Distribute to fleet', output: 'Briefing broadcast to all 7 agents in shared brain', status: 'done' });
-    return { ok: true, mode: 'local', workflow: workflowName, agent, steps, summary: `Fleet briefing complete. Distributed to all departments by ${agent}.` };
-  }
-
-  if (/sync|crm|data|import|export/.test(wf)) {
-    steps.push({ step: 'Pull CRM delta', output: '47 records changed since last sync — 12 new contacts, 5 closed deals', status: 'done' });
-    steps.push({ step: 'Resolve conflicts', output: '3 conflicts resolved using latest-timestamp rule', status: 'done' });
-    steps.push({ step: 'Update knowledge base', output: 'KB enriched with 12 new insights from closed deals', status: 'done' });
-    steps.push({ step: 'Confirm integrity', output: 'All records validated — 0 orphan records', status: 'done' });
-    return { ok: true, mode: 'local', workflow: workflowName, agent, steps, summary: `Data sync complete. 47 CRM records updated and 12 KB entries added by ${agent}.` };
-  }
-
-  if (/fundrais|grant|investor|pitch/.test(wf)) {
-    steps.push({ step: 'Scan grant databases', output: 'Found 8 matching opportunities across 4 databases', status: 'done' });
-    steps.push({ step: 'Score by mission fit', output: 'Top 3 ranked: SBIR Phase I, USDA Rural Dev, AWS Nonprofit', status: 'done' });
-    steps.push({ step: 'Draft executive summary', output: '2-page summary generated for top opportunity ($150k ask)', status: 'done' });
-    steps.push({ step: 'Set follow-up tasks', output: '3 deadlines added to task board', status: 'done' });
-    return { ok: true, mode: 'local', workflow: workflowName, agent, steps, summary: `Fundraising workflow complete. 8 opportunities found, top 3 prioritized by ${agent}.` };
-  }
-
-  if (/ops|dispatch|driver|route|delivery/.test(wf)) {
-    steps.push({ step: 'Load active bookings', output: 'Fetched 24 bookings for today — 6 pending dispatch', status: 'done' });
-    steps.push({ step: 'Optimize routes', output: 'Grouped 6 bookings into 3 optimized routes — 22% distance saving', status: 'done' });
-    steps.push({ step: 'Assign drivers', output: 'Matched drivers by proximity and availability', status: 'done' });
-    steps.push({ step: 'Send dispatch notices', output: 'Driver notifications queued via messaging queue', status: 'done' });
-    return { ok: true, mode: 'local', workflow: workflowName, agent, steps, summary: `Ops dispatch complete. 6 bookings dispatched across 3 optimized routes by ${agent}.` };
-  }
-
-  if (/finance|invoice|payment|billing/.test(wf)) {
-    steps.push({ step: 'Scan overdue invoices', output: '5 invoices overdue — total $14,200 outstanding', status: 'done' });
-    steps.push({ step: 'Draft reminders', output: 'Generated polite payment reminders for each client', status: 'done' });
-    steps.push({ step: 'Update ledger', output: 'Finance dashboard refreshed with current balances', status: 'done' });
-    return { ok: true, mode: 'local', workflow: workflowName, agent, steps, summary: `Finance review complete. 5 overdue invoices flagged, reminders queued by ${agent}.` };
-  }
-
-  // Generic fallback
-  steps.push({ step: 'Initialize context', output: `Workflow "${workflowName}" started by ${agent}`, status: 'done' });
-  steps.push({ step: 'Execute core steps', output: 'Tasks processed by local orchestration engine', status: 'done' });
-  steps.push({ step: 'Sync results', output: 'Activity log updated with execution results', status: 'done' });
-
-  return {
-    ok: true,
-    mode: 'local',
-    workflow: workflowName,
-    agent,
-    steps,
-    summary: `Workflow "${workflowName}" completed locally by ${agent}.`,
-  };
-}
-
 /**
- * Drives the Company Engine orchestration. Proxies workflow operations to the
- * configured company API with proper authentication, retry logic, and error handling.
- * Falls back to local execution only when the remote engine is unavailable.
+ * Drives company orchestration. With a configured Company Engine the workflow
+ * is proxied to it; without one the run is handed to the workspace's own AI
+ * worker pool (run queue): the named workflow becomes a concrete goal for the
+ * matching specialist agent, and the dashboard watches progress in Runs & Queue.
+ * There is no fabricated local mode — every reported step is a real one.
  */
 export async function POST(req: NextRequest) {
-  let body: { action?: string; workflowName?: string; agent?: string; workflowId?: string; forceLocal?: boolean; ws?: string } = {};
+  let body: { action?: string; workflowName?: string; agent?: string; workflowId?: string; ws?: string } = {};
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ ok: false, error: 'Invalid request body' }, { status: 400 });
   }
 
+  // Session + a workspace the caller actually owns. The dashboard header is
+  // also required: a cross-site post must not be able to spend LLM calls.
+  const g = await requireWorkspace(req, body.ws, { csrf: true });
+  if (!g.ok) return g.res;
+  const { userId, ws } = g;
+
   const action = body.action ?? 'run';
-  const workflowName = body.workflowName ?? 'unnamed-workflow';
-  const agent = body.agent ?? 'Borga';
-  const workflowId = body.workflowId;
-  const forceLocal = body.forceLocal === true;
+  const workflowName = String(body.workflowName ?? 'unnamed workflow').slice(0, 100);
+  const agent = String(body.agent ?? 'Borga').slice(0, 50);
 
-  // Resolve the active company's engine (workspace settings → env fallback).
-  const wsId = isValidWsId(body.ws) ? body.ws : null;
-  const callerId = await sessionUserId(req);
-  if (callerId && wsId) {
-    const unpaid = await paymentRequired(callerId, wsId);
-    if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
+  const unpaid = await paymentRequired(userId, ws);
+  if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
+
+  // Every workflow run spends real model calls (remote engine or the local
+  // worker pool): cap how often one workspace can start them.
+  const limit = takeRouteLimit('workflowRun', `${userId}:${ws}`);
+  if (limit.limited) return tooManyRequests(limit.retryAfterSec, 'Too many workflow runs. Try again later.');
+
+  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(ws, userId);
+  const remoteConfigured = isValidEngineUrl(ENGINE_URL);
+
+  if (action === 'status') {
+    // Remote passthrough, or the local queue job this run created.
+    if (remoteConfigured && body.workflowId) {
+      const validation = await validateEngineAuth(ENGINE_URL, adminToken);
+      if (validation.valid) {
+        const result = await getWorkflowStatus(ENGINE_URL, adminToken, body.workflowId);
+        if (result.success) {
+          return NextResponse.json({ ok: true, engine: ENGINE_URL, mode: 'remote', workflowId: body.workflowId, status: result.status, progress: result.progress });
+        }
+        return NextResponse.json({ ok: false, engine: ENGINE_URL, mode: 'error', workflowId: body.workflowId, error: result.error }, { status: 502 });
+      }
+    }
+    const jobId = typeof body.workflowId === 'string' && body.workflowId.startsWith('job-') ? body.workflowId : null;
+    if (jobId) {
+      const job = await getJob(jobId, ws, userId);
+      if (!job) return NextResponse.json({ ok: false, error: 'Job not found' }, { status: 404 });
+      return NextResponse.json({
+        ok: true,
+        mode: 'queue',
+        jobId: job.id,
+        status: job.status,
+        agentName: job.agentName,
+        steps: job.steps?.length ?? 0,
+        summary: job.runId ? (job.error ?? undefined) : undefined,
+        done: isTerminal(job),
+      });
+    }
+    return NextResponse.json({ ok: false, error: 'workflowId is required for status' }, { status: 400 });
   }
-  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId, callerId);
 
-  // Validate engine URL
-  if (!isValidEngineUrl(ENGINE_URL)) {
-    return NextResponse.json(
-      { ok: false, engine: ENGINE_URL, mode: 'unconfigured', error: 'No engine endpoint configured for this workspace. Set it under Company → Company Engine.' },
-      { status: 400 },
-    );
+  if (action !== 'run') {
+    return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });
   }
 
-  // Force local execution
-  if (forceLocal) {
-    const result = runLocalEngine(workflowName, agent);
-    return NextResponse.json(result, { status: 200 });
-  }
-
-  // Try remote engine first (if not forced local)
-  if (!forceLocal) {
+  // Remote engine first, when one is configured and healthy.
+  if (remoteConfigured) {
     const validation = await validateEngineAuth(ENGINE_URL, adminToken);
-
     if (validation.valid) {
-      // Execute workflow on remote engine
-      if (action === 'run') {
-        const result = await executeWorkflow(ENGINE_URL, adminToken, workflowName, agent, action);
-
-        if (result.success) {
-          return NextResponse.json({
-            ok: true,
-            engine: ENGINE_URL,
-            mode: 'remote',
-            workflow: workflowName,
-            agent,
-            data: result.data,
-          });
-        } else {
-          // Fall back to local if remote fails
-          console.warn('Remote engine failed, falling back to local:', result.error);
-          const localResult = runLocalEngine(workflowName, agent);
-          return NextResponse.json({
-            ...localResult,
-            engine: ENGINE_URL,
-            remoteError: result.error,
-          }, { status: 200 });
-        }
+      const result = await executeWorkflow(ENGINE_URL, adminToken, workflowName, agent, action);
+      if (result.success) {
+        return NextResponse.json({ ok: true, engine: ENGINE_URL, mode: 'remote', workflow: workflowName, agent, data: result.data });
       }
-
-      // Get workflow status from remote engine
-      if (action === 'status' && workflowId) {
-        const result = await getWorkflowStatus(ENGINE_URL, adminToken, workflowId);
-
-        if (result.success) {
-          return NextResponse.json({
-            ok: true,
-            engine: ENGINE_URL,
-            mode: 'remote',
-            workflowId,
-            status: result.status,
-            progress: result.progress,
-          });
-        } else {
-          return NextResponse.json(
-            { ok: false, engine: ENGINE_URL, mode: 'error', workflowId, error: result.error },
-            { status: 502 },
-          );
-        }
-      }
+      console.warn('Remote engine failed; falling back to the run queue:', result.error);
     } else {
-      console.warn('Remote engine unavailable, using local fallback:', validation.error);
+      console.warn('Remote engine unavailable; falling back to the run queue:', validation.error);
     }
   }
 
-  // Local execution fallback (when remote unavailable or forced)
-  if (action === 'run') {
-    const result = runLocalEngine(workflowName, agent);
-    return NextResponse.json({ ...result, engine: ENGINE_URL }, { status: 200 });
-  }
-
-  return NextResponse.json(
-    { ok: false, engine: ENGINE_URL, mode: 'error', error: `Unknown action: ${action}` },
-    { status: 400 },
-  );
+  // No (healthy) engine: hand the workflow to this workspace's AI workers.
+  const dispatch = workflowDispatch(workflowName);
+  const job = await enqueueRun({
+    agentId: dispatch.agentId,
+    agentName: dispatch.agentName,
+    goal: dispatch.goal,
+    triggeredBy: 'user',
+    ws,
+    userId,
+    maxSteps: 6,
+  });
+  return NextResponse.json({
+    ok: true,
+    mode: 'queue',
+    workflow: workflowName,
+    jobId: job.id,
+    agentId: dispatch.agentId,
+    agentName: dispatch.agentName,
+    status: job.status,
+  });
 }
 
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const wsParam = url.searchParams.get('ws');
-  const wsId = isValidWsId(wsParam) ? wsParam : null;
-  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(wsId, await sessionUserId(req));
+  const g = await requireWorkspace(req, new URL(req.url).searchParams.get('ws'));
+  if (!g.ok) return g.res;
 
+  const { engineUrl: ENGINE_URL, token: adminToken } = await resolveEngine(g.ws, g.userId);
   const configured = isValidEngineUrl(ENGINE_URL);
   const validation = configured ? await validateEngineAuth(ENGINE_URL, adminToken) : { valid: false, error: 'No engine endpoint configured for this workspace' };
 
   return NextResponse.json({
     ok: validation.valid,
-    workspace: wsId,
+    workspace: g.ws,
     engine: ENGINE_URL || null,
-    mode: validation.valid ? 'connected' : configured ? 'local-fallback' : 'unconfigured',
+    mode: validation.valid ? 'connected' : 'run-queue',
     endpoints: ['/orchestrations', '/health'],
     auth: 'Bearer token (workspace engine key or BORGA_ADMIN_TOKEN)',
-    localFallback: true,
+    // Without a remote engine, workflow runs are executed by this workspace's own AI worker pool.
+    localFallback: false,
+    runQueueFallback: true,
     error: validation.error,
   });
 }

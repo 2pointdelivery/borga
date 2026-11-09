@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Megaphone,
   AlertTriangle,
+  Check,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -49,7 +50,33 @@ export function AdvertisingTab() {
   const [adOpen, setAdOpen] = useState(false);
   const [confirmThinRunway, setConfirmThinRunway] = useState(false);
   const [editCampaign, setEditCampaign] = useState<AdCampaign | null>(null);
-  const [adForm, setAdForm] = useState<{ name: string; platform: AdPlatform; budget: string; spent: string; status: AdCampaign['status']; draft?: AdCampaign['draft'] }>({ name: '', platform: 'google', budget: '', spent: '', status: 'active' });
+  const [adForm, setAdForm] = useState<{
+    name: string;
+    platforms: AdPlatform[];
+    budgetMode: 'per-platform' | 'split';
+    budget: string;
+    spent: string;
+    status: AdCampaign['status'];
+    draft?: AdCampaign['draft'];
+  }>({
+    name: '',
+    platforms: ['google'],
+    budgetMode: 'per-platform',
+    budget: '',
+    spent: '',
+    status: 'active',
+  });
+
+  const allPlatforms = useMemo(() => Object.keys(AD_PLATFORM_LABEL) as AdPlatform[], []);
+
+  const togglePlatform = (p: AdPlatform) => {
+    setAdForm((s) => {
+      const exists = s.platforms.includes(p);
+      if (exists && s.platforms.length === 1) return s; // keep at least 1 selected
+      const next = exists ? s.platforms.filter((x) => x !== p) : [...s.platforms, p];
+      return { ...s, platforms: next };
+    });
+  };
 
   // Cash-runway guard: paid media is the first lever pulled when runway thins.
   const { months: runwayMonths } = computeCashRunway(finance, bankAccounts);
@@ -69,7 +96,7 @@ export function AdvertisingTab() {
   const convRate = totalClicks ? (totalConv / totalClicks) * 100 : 0;
 
   const submitCampaign = () => {
-    if (!adForm.name.trim()) return;
+    if (!adForm.name.trim() || adForm.platforms.length === 0) return;
     if (adForm.status === 'active' && runwayMonths < 6) {
       setConfirmThinRunway(true);
       return;
@@ -84,21 +111,45 @@ export function AdvertisingTab() {
     const draft = adForm.draft?.headline || adForm.draft?.body || adForm.draft?.link || adForm.draft?.imageText
       ? { headline: adForm.draft.headline.trim(), body: adForm.draft.body.trim(), link: adForm.draft.link.trim(), imageText: adForm.draft.imageText?.trim() }
       : undefined;
-    addCampaign({
-      id: `ad-${Date.now()}`,
-      name: adForm.name.trim(),
-      platform: adForm.platform,
-      budget: Number(adForm.budget) || 0,
-      spent: Number(adForm.spent) || 0,
-      impressions: 0,
-      clicks: 0,
-      conversions: 0,
-      roas: 0,
-      status: adForm.status,
-      draft,
+
+    const selected = adForm.platforms.length > 0 ? adForm.platforms : (['google'] as AdPlatform[]);
+    const rawBudget = Number(adForm.budget) || 0;
+    const rawSpent = Number(adForm.spent) || 0;
+    const perPlatformBudget =
+      adForm.budgetMode === 'split' && selected.length > 1
+        ? Math.round((rawBudget / selected.length) * 100) / 100
+        : rawBudget;
+    const perPlatformSpent =
+      adForm.budgetMode === 'split' && selected.length > 1
+        ? Math.round((rawSpent / selected.length) * 100) / 100
+        : rawSpent;
+
+    const now = Date.now();
+    selected.forEach((platform, idx) => {
+      addCampaign({
+        id: `ad-${now}-${idx}`,
+        name: adForm.name.trim(),
+        platform,
+        budget: perPlatformBudget,
+        spent: perPlatformSpent,
+        impressions: 0,
+        clicks: 0,
+        conversions: 0,
+        roas: 0,
+        status: adForm.status,
+        draft,
+      });
     });
-    log({ agentId: 'a-paidmedia', agentName: 'Paige', actor: 'user', kind: 'task', message: `Paid campaign launched: ${adForm.name.trim()} (${AD_PLATFORM_LABEL[adForm.platform]}).` });
-    setAdForm({ name: '', platform: 'google', budget: '', spent: '', status: 'active' });
+
+    const platformLabels = selected.map((p) => AD_PLATFORM_LABEL[p]).join(', ');
+    log({
+      agentId: 'a-paidmedia',
+      agentName: 'Paige',
+      actor: 'user',
+      kind: 'task',
+      message: `Paid campaign launched: ${adForm.name.trim()} (${platformLabels}).`,
+    });
+    setAdForm({ name: '', platforms: ['google'], budgetMode: 'per-platform', budget: '', spent: '', status: 'active' });
     setAdOpen(false);
   };
 
@@ -281,30 +332,24 @@ export function AdvertisingTab() {
 
       {/* New paid campaign dialog */}
       <Dialog open={adOpen} onOpenChange={setAdOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Launch a paid campaign</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Campaign name</label>
-              <Input value={adForm.name} onChange={(e) => setAdForm((s) => ({ ...s, name: e.target.value }))} placeholder="e.g. Q4 Retargeting" className="mt-1" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">              <div>
-                <label className="text-xs font-medium text-muted-foreground">Platform</label>
-                <Select value={adForm.platform} onValueChange={(v) => setAdForm((s) => ({ ...s, platform: v as AdPlatform }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {(Object.keys(AD_PLATFORM_LABEL) as AdPlatform[]).map((p) => (
-                      <SelectItem key={p} value={p}>{AD_PLATFORM_LABEL[p]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          <div className="space-y-3.5">
+            <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Campaign name</label>
+                <Input
+                  value={adForm.name}
+                  onChange={(e) => setAdForm((s) => ({ ...s, name: e.target.value }))}
+                  placeholder="e.g. Q4 Retargeting"
+                />
               </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Status</label>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Initial status</label>
                 <Select value={adForm.status} onValueChange={(v) => setAdForm((s) => ({ ...s, status: v as AdCampaign['status'] }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="paused">Paused</SelectItem>
@@ -313,41 +358,170 @@ export function AdvertisingTab() {
                 </Select>
               </div>
             </div>
+
+            {/* Multi-select Ad Platforms */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-medium text-muted-foreground">
+                  Ad platforms ({adForm.platforms.length} selected)
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAdForm((s) => ({
+                      ...s,
+                      platforms: s.platforms.length === allPlatforms.length ? ['google'] : [...allPlatforms],
+                    }))
+                  }
+                  className="text-[11px] font-medium text-primary hover:underline"
+                >
+                  {adForm.platforms.length === allPlatforms.length ? 'Reset to Google' : 'Select all'}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                {allPlatforms.map((p) => {
+                  const active = adForm.platforms.includes(p);
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => togglePlatform(p)}
+                      className={cn(
+                        'flex items-center justify-between gap-1.5 rounded-md border px-2.5 py-1.5 text-left text-xs font-medium transition-all',
+                        active
+                          ? 'border-primary bg-primary/10 text-foreground shadow-2xs ring-1 ring-primary/25'
+                          : 'border-border/80 bg-background text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+                      )}
+                    >
+                      <span className="truncate">{AD_PLATFORM_LABEL[p]}</span>
+                      <span
+                        className={cn(
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-xs border',
+                          active ? 'border-primary bg-primary text-primary-foreground' : 'border-border',
+                        )}
+                      >
+                        {active && <Check className="h-2.5 w-2.5" />}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {adForm.platforms.length > 1 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/80 bg-muted/20 px-3 py-2 text-xs">
+                <span className="text-[11px] font-medium text-muted-foreground">Budget allocation</span>
+                <div className="inline-flex rounded-md border border-border/80 bg-background p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setAdForm((s) => ({ ...s, budgetMode: 'per-platform' }))}
+                    className={cn(
+                      'rounded px-2 py-0.5 font-medium transition',
+                      adForm.budgetMode === 'per-platform' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
+                    )}
+                  >
+                    Per platform
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdForm((s) => ({ ...s, budgetMode: 'split' }))}
+                    className={cn(
+                      'rounded px-2 py-0.5 font-medium transition',
+                      adForm.budgetMode === 'split' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
+                    )}
+                  >
+                    Split total evenly
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Budget ($)</label>
-                <Input type="number" value={adForm.budget} onChange={(e) => setAdForm((s) => ({ ...s, budget: e.target.value }))} placeholder="5000" className="mt-1" />
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">
+                  {adForm.platforms.length > 1 && adForm.budgetMode === 'split'
+                    ? `Total budget across ${adForm.platforms.length} (${currency})`
+                    : `Budget per platform (${currency})`}
+                </label>
+                <Input
+                  type="number"
+                  value={adForm.budget}
+                  onChange={(e) => setAdForm((s) => ({ ...s, budget: e.target.value }))}
+                  placeholder="5000"
+                  className="font-mono tabular-nums"
+                />
               </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Spent so far ($)</label>
-                <Input type="number" value={adForm.spent} onChange={(e) => setAdForm((s) => ({ ...s, spent: e.target.value }))} placeholder="0" className="mt-1" />
-              </div>
-            </div>
-            <div className="rounded-xl border p-3 space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Ad draft</p>
-              <p className="text-[11px] text-muted-foreground">Draft the actual ad copy; it lives on the campaign until it runs.</p>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Headline</label>
-                <Input className="mt-1" value={adForm.draft?.headline ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: e.target.value, body: s.draft?.body ?? '', link: s.draft?.link ?? '' } }))} placeholder="Fast, reliable freight across Europe" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Body</label>
-                <Textarea rows={2} className="mt-1" value={adForm.draft?.body ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: e.target.value, link: s.draft?.link ?? '' } }))} placeholder="Door-to-door with fixed time windows. Request a freight quote today." />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Link</label>
-                  <Input className="mt-1" value={adForm.draft?.link ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: s.draft?.body ?? '', link: e.target.value } }))} placeholder="https://…/quote" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">Image alt text (optional)</label>
-                  <Input className="mt-1" value={adForm.draft?.imageText ?? ''} onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: s.draft?.body ?? '', link: s.draft?.link ?? '', imageText: e.target.value } }))} placeholder="Fleet on the road" />
-                </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Spent so far ({currency})</label>
+                <Input
+                  type="number"
+                  value={adForm.spent}
+                  onChange={(e) => setAdForm((s) => ({ ...s, spent: e.target.value }))}
+                  placeholder="0"
+                  className="font-mono tabular-nums"
+                />
               </div>
             </div>
-            <Button className="w-full gap-1.5" onClick={submitCampaign}>
-              <Megaphone className="h-4 w-4" /> Launch campaign
-            </Button>
+
+            {adForm.platforms.length > 1 && Number(adForm.budget) > 0 && (
+              <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                {adForm.budgetMode === 'per-platform'
+                  ? `${adForm.platforms.length} campaigns × ${fmtMoney(Number(adForm.budget), currency)} = ${fmtMoney(Number(adForm.budget) * adForm.platforms.length, currency)} total committed`
+                  : `${fmtMoney(Number(adForm.budget), currency)} split across ${adForm.platforms.length} platforms = ${fmtMoney(Math.round((Number(adForm.budget) / adForm.platforms.length) * 100) / 100, currency)} each`}
+              </p>
+            )}
+
+            <div className="space-y-2.5 rounded-lg border border-border/80 bg-muted/15 p-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Ad creative draft</p>
+                <p className="text-[11px] text-muted-foreground">Shared across the selected platform campaigns; customize anytime after launch.</p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Headline</label>
+                <Input
+                  value={adForm.draft?.headline ?? ''}
+                  onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: e.target.value, body: s.draft?.body ?? '', link: s.draft?.link ?? '' } }))}
+                  placeholder="Fast, reliable freight across Europe"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-muted-foreground">Body copy</label>
+                <Textarea
+                  rows={2}
+                  value={adForm.draft?.body ?? ''}
+                  onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: e.target.value, link: s.draft?.link ?? '' } }))}
+                  placeholder="Door-to-door with fixed time windows. Request a freight quote today."
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">Destination URL</label>
+                  <Input
+                    value={adForm.draft?.link ?? ''}
+                    onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: s.draft?.body ?? '', link: e.target.value } }))}
+                    placeholder="https://…/quote"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">Image alt / visual note</label>
+                  <Input
+                    value={adForm.draft?.imageText ?? ''}
+                    onChange={(e) => setAdForm((s) => ({ ...s, draft: { ...s.draft, headline: s.draft?.headline ?? '', body: s.draft?.body ?? '', link: s.draft?.link ?? '', imageText: e.target.value } }))}
+                    placeholder="Fleet on the road"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-border/70 pt-3">
+              <Button variant="ghost" size="sm" onClick={() => setAdOpen(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" className="gap-1.5" onClick={submitCampaign} disabled={!adForm.name.trim() || adForm.platforms.length === 0}>
+                <Megaphone className="h-4 w-4" />
+                {adForm.platforms.length > 1 ? `Launch on ${adForm.platforms.length} platforms` : 'Launch campaign'}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

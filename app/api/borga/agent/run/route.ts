@@ -6,6 +6,7 @@ import { getBorgaState, scopedKey } from '@/lib/borga/persistence';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWsKey } from '@/lib/borga/keys';
 import { paymentRequired } from '@/lib/borga/billing-server';
+import { ownsWorkspaceStrict } from '@/lib/borga/workspace-access';
 import type { AgentRun, RunJob, AgentRunStep } from '@/lib/borga/data';
 
 function isValidWsId(ws: unknown): ws is string {
@@ -71,6 +72,11 @@ export async function POST(req: NextRequest) {
 
   if (!goal) {
     return NextResponse.json({ ok: false, error: 'goal is required' }, { status: 400 });
+  }
+
+  // The workspace must belong to the signed-in user before an agent may act on it.
+  if (ws && !(await ownsWorkspaceStrict(userId, ws))) {
+    return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
   }
 
   // An unpaid workspace may not spend LLM calls: the paywall in the dashboard is not the only gate.

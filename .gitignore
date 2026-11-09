@@ -37,10 +37,6 @@ yarn-error.log*
 .pnpm-debug.log*
 /serve*.log
 
-# env files (can opt-in for committing if needed)
-!.env.example
-.env
-
 # vercel
 .vercel
 
@@ -61,11 +57,10 @@ next-env.d.ts
 .vscode/*
 .idea/*
 
-# Remote Control runtime data
-/remote-control/data/
-!/remote-control/data/.gitkeep
-
-
 # Local database dumps (contain user data): never commit
 /backups/
 deploy/backups/
+*.sql
+!drizzle/**/*.sql
+*.dump
+*.bak

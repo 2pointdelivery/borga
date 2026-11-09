@@ -6,6 +6,14 @@ import { userWsKey } from '@/lib/borga/keys';
 import { operatorFromRequest } from '@/lib/auth/operator';
 import { type WhatsAppConfig } from '@/lib/borga/data';
 import { featureGate, sessionUserId } from '@/lib/borga/features-server';
+import { assertPublicUrl } from '@/lib/borga/safe-url';
+import {
+  buildWaMeUrl,
+  buildWhatsAppWebUrl,
+  cleanWhatsAppPhone,
+  renderQrDataUrl,
+  renderQrSvg,
+} from '@/lib/borga/whatsapp-qr';
 
 export const runtime = 'nodejs';
 
@@ -94,16 +102,10 @@ async function sendWhatsAppMessage(message: WhatsAppMessage, userId: string, ws:
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
       console.error('WhatsApp API error:', response.status, errorText);
-      
-      try {
-        const errorData = JSON.parse(errorText);
-        return { 
-          success: false, 
-          error: errorData.error?.message || `WhatsApp API error: ${response.status}` 
-        };
-      } catch {
-        return { success: false, error: `WhatsApp API error: ${response.status}` };
-      }
+      return {
+        success: false,
+        error: `WhatsApp API rejected the message (HTTP ${response.status}). Check your WhatsApp credentials under Integrations → Connections.`,
+      };
     }
 
     const data = await response.json() as WhatsAppApiResponse;
@@ -112,9 +114,9 @@ async function sendWhatsAppMessage(message: WhatsAppMessage, userId: string, ws:
     return { success: true, messageId };
   } catch (error) {
     console.error('WhatsApp send error:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Unknown error' 
+    return {
+      success: false,
+      error: 'Could not reach the WhatsApp API.',
     };
   }
 }
@@ -137,7 +139,7 @@ async function verifyWhatsAppNumber(userId: string, ws: string | null): Promise<
     });
 
     if (!response.ok) {
-      return { verified: false, error: `Failed to verify phone number: ${response.status}` };
+      return { verified: false, error: `Failed to verify phone number (HTTP ${response.status})` };
     }
 
     const data = await response.json();
@@ -146,9 +148,9 @@ async function verifyWhatsAppNumber(userId: string, ws: string | null): Promise<
     return { verified: true, phone };
   } catch (error) {
     console.error('WhatsApp verification error:', error);
-    return { 
-      verified: false, 
-      error: error instanceof Error ? error.message : 'Verification failed' 
+    return {
+      verified: false,
+      error: 'Verification failed — could not reach the WhatsApp API.',
     };
   }
 }
@@ -159,7 +161,10 @@ export async function POST(req: NextRequest) {
   let body: {
     action?: string;
     to?: string;
+    phone?: string;
     text?: string;
+    bridgeUrl?: string;
+    pairedDevice?: string;
     templateName?: string;
     templateLanguage?: string;
     templateParameters?: Array<{ type: string; text?: string }>;
@@ -251,6 +256,50 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
+    if (config.mode === 'qr-web') {
+      const normalized = normalizePhoneNumber(to);
+      const webUrl = buildWhatsAppWebUrl(normalized, text);
+      const waMeUrl = buildWaMeUrl(normalized, text);
+      const bridgeUrl = (config.bridgeUrl || process.env.WHATSAPP_WEB_BRIDGE_URL || '').trim().replace(/\/+$/, '');
+      if (bridgeUrl) {
+        try {
+          const safeTarget = await assertPublicUrl(`${bridgeUrl}/send`);
+          const bridgeRes = await fetch(safeTarget.href, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to: cleanWhatsAppPhone(normalized), text: text || '' }),
+            redirect: 'manual',
+            signal: AbortSignal.timeout(8000),
+          });
+          if (bridgeRes.ok) {
+            const bridgeData = (await bridgeRes.json().catch(() => ({}))) as { messageId?: string };
+            return NextResponse.json({
+              ok: true,
+              action: 'send',
+              mode: 'qr-web',
+              deliveredVia: 'bridge',
+              messageId: bridgeData.messageId || `wa-bridge-${Date.now()}`,
+              webUrl,
+              waMeUrl,
+              message: 'Message dispatched via WhatsApp Web bridge',
+            });
+          }
+        } catch {
+          // Fall back to WhatsApp Web deep-link handoff
+        }
+      }
+      return NextResponse.json({
+        ok: true,
+        action: 'send',
+        mode: 'qr-web',
+        deliveredVia: 'web-handoff',
+        messageId: `wa-web-${Date.now()}`,
+        webUrl,
+        waMeUrl,
+        message: 'Ready for WhatsApp Web dispatch',
+      });
+    }
+
     const message: WhatsAppMessage = {
       to: normalizePhoneNumber(to),
     };
@@ -323,6 +372,77 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  if (action === 'qr-session') {
+    const targetPhone = cleanWhatsAppPhone(body.phone || body.to || '');
+    const targetText = (body.text || '').trim();
+    const waMeUrl = buildWaMeUrl(targetPhone, targetText);
+    const webUrl = buildWhatsAppWebUrl(targetPhone, targetText);
+    const sessionId = `WA-QR-${Date.now().toString(36).toUpperCase()}`;
+    const qrPayload = targetPhone ? waMeUrl : webUrl;
+    const qrSvg = renderQrSvg(qrPayload);
+    const qrDataUrl = renderQrDataUrl(qrPayload);
+    return NextResponse.json({
+      ok: true,
+      action: 'qr-session',
+      sessionId,
+      qrPayload,
+      qrSvg,
+      qrDataUrl,
+      webUrl,
+      waMeUrl,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    });
+  }
+
+  if (action === 'pair-qr') {
+    const phoneDigits = cleanWhatsAppPhone(body.phone || '');
+    const displayPhone = phoneDigits ? `+${phoneDigits}` : (body.phone?.trim() || 'Linked WhatsApp Web');
+    const pairedDevice = (body.pairedDevice || 'WhatsApp Web (QR Linked)').trim().slice(0, 80);
+    const bridgeUrl = (body.bridgeUrl || '').trim().slice(0, 200);
+    if (bridgeUrl) {
+      try {
+        await assertPublicUrl(bridgeUrl);
+      } catch {
+        return NextResponse.json(
+          { ok: false, error: 'Bridge URL must be a public https address (internal/private network addresses are blocked).' },
+          { status: 400 },
+        );
+      }
+    }
+    const nowLabel = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const nextConfig: WhatsAppConfig = {
+      connected: true,
+      phone: displayPhone,
+      waId: `WA-QR-${phoneDigits.slice(-6) || 'WEB'}`,
+      lastSync: nowLabel,
+      mode: 'qr-web',
+      pairedDevice,
+      bridgeUrl: bridgeUrl || undefined,
+    };
+    await saveWhatsAppConfig(nextConfig, userId, ws);
+    return NextResponse.json({
+      ok: true,
+      action: 'pair-qr',
+      config: nextConfig,
+      webUrl: buildWhatsAppWebUrl(phoneDigits),
+      waMeUrl: buildWaMeUrl(phoneDigits),
+    });
+  }
+
+  if (action === 'disconnect') {
+    const resetConfig: WhatsAppConfig = {
+      connected: false,
+      phone: '',
+      waId: '',
+      lastSync: 'Disconnected',
+      mode: undefined,
+      bridgeUrl: undefined,
+      pairedDevice: undefined,
+    };
+    await saveWhatsAppConfig(resetConfig, userId, ws);
+    return NextResponse.json({ ok: true, action: 'disconnect', config: resetConfig });
+  }
+
   if (action === 'status') {
     const config = await loadWhatsAppConfig(userId, ws);
     const credentials = await getWhatsAppCredentials(userId, ws);
@@ -333,7 +453,11 @@ export async function POST(req: NextRequest) {
       config: {
         connected: config.connected,
         phone: config.phone,
+        waId: config.waId,
         lastSync: config.lastSync,
+        mode: config.mode,
+        bridgeUrl: config.bridgeUrl,
+        pairedDevice: config.pairedDevice,
         hasCredentials: !!credentials,
       }
     });
@@ -358,7 +482,11 @@ export async function GET(req: NextRequest) {
     config: {
       connected: config.connected,
       phone: config.phone,
+      waId: config.waId,
       lastSync: config.lastSync,
+      mode: config.mode,
+      bridgeUrl: config.bridgeUrl,
+      pairedDevice: config.pairedDevice,
       hasCredentials: !!credentials,
     }
   });

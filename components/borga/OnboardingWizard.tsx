@@ -89,7 +89,7 @@ export function OnboardingWizard() {
     // the first required step that is not done: optional steps are never what "resume" lands on
     const first = ORDER.find((id) => !OPTIONAL.has(id) && !onboarding.steps.find((s) => s.id === id)?.completed);
     if (first) setStep(first);
-  }, [ws, wantedStep]);
+  }, [ws, wantedStep, onboarding.steps]);
 
   function markComplete(ids: StepId[]) {
     if (!ws) return;
@@ -109,7 +109,7 @@ export function OnboardingWizard() {
 
   const valFacts = useMemo(
     () => (ws ? deriveValuation(finance, knowledge, ws) : null),
-    [ws, finance, knowledge, step],
+    [ws, finance, knowledge],
   );
 
   if (!ws) {

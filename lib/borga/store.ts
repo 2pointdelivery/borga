@@ -263,6 +263,8 @@ let ACTIVE_WS: string | null = null;
 // slow response for a previously-selected workspace can never clobber the
 // freshly-selected company's data (the workspace-switch isolation bug).
 let hydrateSeq = 0;
+/** Monotonic suffix for activity event ids, so two events in the same millisecond stay distinct. */
+let logSeq = 0;
 
 // -- Per-workspace localStorage fallback -------------------------------------
 // The server is the source of truth, but when the database is unavailable the
@@ -822,6 +824,8 @@ interface BorgaStore {
   delegateApproval: (id: string, to: string, note?: string) => string | null;
   /** Edits routing fields (assignee, due date, escalation target) without deciding. */
   updateApproval: (id: string, patch: Partial<Pick<Approval, 'assignee' | 'dueAt' | 'escalateTo'>>) => void;
+  /** Records the outcome of executing an approved action, so the receipt is visible and retryable. */
+  recordApprovalResult: (id: string, result: { ok: boolean; detail: string }) => void;
 
   finance: FinanceEntry[];
 
@@ -986,144 +990,6 @@ interface BorgaStore {
   addPosSale: (sale: PosSale) => void;
   /** Marks a sale refunded and appends the reversing stock movements. */
   refundPosSale: (id: string) => void;
-}
-
-let logSeq = 0;
-
-// Intelligent task distribution based on workflow type. Returns one follow-up
-// task spec per relevant agent � the caller creates them with addTask, so a
-// finished workflow visibly fans out instead of vanishing into a dead event.
-interface DistributedTask { agentId: string; agentName: string; task: string; priority: Priority; }
-
-function distributeWorkflowTasks(workflowName: string, agents: Agent[]): DistributedTask[] {
-  const wf = workflowName.toLowerCase();
-  const tasksToDistribute: Array<{ agentId: string; task: string; priority: string }> = [];
-
-  // Sales-related workflows
-  if (/lead|outreach|sales|prospect/.test(wf)) {
-    const salesAgent = agents.find(a => a.department === 'Sales');
-    const marketingAgent = agents.find(a => a.department === 'Marketing');
-    
-    if (salesAgent) {
-      tasksToDistribute.push({ 
-        agentId: salesAgent.id, 
-        task: `Qualify and follow up on leads from ${workflowName}`, 
-        priority: 'P0' 
-      });
-    }
-    if (marketingAgent) {
-      tasksToDistribute.push({ 
-        agentId: marketingAgent.id, 
-        task: `Create outreach content for ${workflowName}`, 
-        priority: 'P1' 
-      });
-    }
-  }
-
-  // Content/social workflows
-  if (/content|social|post|linkedin|twitter/.test(wf)) {
-    const marketingAgent = agents.find(a => a.department === 'Marketing');
-    const designAgent = agents.find(a => a.department === 'Design');
-    
-    if (marketingAgent) {
-      tasksToDistribute.push({ 
-        agentId: marketingAgent.id, 
-        task: `Schedule and publish content from ${workflowName}`, 
-        priority: 'P0' 
-      });
-    }
-    if (designAgent) {
-      tasksToDistribute.push({ 
-        agentId: designAgent.id, 
-        task: `Create visual assets for ${workflowName}`, 
-        priority: 'P1' 
-      });
-    }
-  }
-
-  // Operations workflows
-  if (/ops|dispatch|driver|route|delivery/.test(wf)) {
-    const opsAgent = agents.find(a => a.name === 'Borga' || a.department === 'Command');
-    
-    if (opsAgent) {
-      tasksToDistribute.push({ 
-        agentId: opsAgent.id, 
-        task: `Coordinate dispatch operations for ${workflowName}`, 
-        priority: 'P0' 
-      });
-    }
-  }
-
-  // Finance workflows
-  if (/finance|invoice|payment|billing/.test(wf)) {
-    const financeAgent = agents.find(a => a.department === 'Finance');
-    
-    if (financeAgent) {
-      tasksToDistribute.push({ 
-        agentId: financeAgent.id, 
-        task: `Process financial review from ${workflowName}`, 
-        priority: 'P0' 
-      });
-    }
-  }
-
-  // Fundraising workflows
-  if (/fundrais|grant|investor|pitch/.test(wf)) {
-    const fundraisingAgent = agents.find(a => a.id === 'a-fundraising');
-    const financeAgent = agents.find(a => a.department === 'Finance');
-    
-    if (fundraisingAgent) {
-      tasksToDistribute.push({ 
-        agentId: fundraisingAgent.id, 
-        task: `Process funding opportunities from ${workflowName}`, 
-        priority: 'P0' 
-      });
-    }
-    if (financeAgent) {
-      tasksToDistribute.push({ 
-        agentId: financeAgent.id, 
-        task: `Review financial implications of ${workflowName}`, 
-        priority: 'P1' 
-      });
-    }
-  }
-
-  // Data/sync workflows
-  if (/sync|crm|data|import|export/.test(wf)) {
-    const integrationsAgent = agents.find(a => a.department === 'Integrations');
-    
-    if (integrationsAgent) {
-      tasksToDistribute.push({ 
-        agentId: integrationsAgent.id, 
-        task: `Execute data synchronization for ${workflowName}`, 
-        priority: 'P0' 
-      });
-    }
-  }
-
-  // Fleet/briefing workflows
-  if (/fleet|brief|morning|daily|standup/.test(wf)) {
-    // No agent carries a 'Leadership' skill, so without a fallback this whole
-    // branch silently produced nothing � the orchestrator owns the briefing.
-    const departmentLeads = agents.filter(a => a.status === 'active' && a.skills.includes('Leadership'));
-    const targets = departmentLeads.length ? departmentLeads : agents.filter(a => a.status === 'active' && a.id === 'a-borga');
-
-    targets.forEach(agent => {
-      tasksToDistribute.push({
-        agentId: agent.id,
-        task: `Review and act on fleet briefing from ${workflowName}`,
-        priority: 'P1'
-      });
-    });
-  }
-
-  // Resolve agent names and clamp priorities, then hand the specs back � the
-  // caller persists them as real tasks.
-  return tasksToDistribute.map((t) => {
-    const agent = agents.find((a) => a.id === t.agentId);
-    const priority: Priority = t.priority === 'P0' || t.priority === 'P1' || t.priority === 'P2' || t.priority === 'P3' ? t.priority : 'P1';
-    return { agentId: t.agentId, agentName: agent?.name ?? 'Borga', task: t.task, priority };
-  });
 }
 
 export const useBorga = create<BorgaStore>((set, get) => ({
@@ -3042,6 +2908,11 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set((s) => ({ approvals: s.approvals.map((a) => (a.id === id && a.status === 'pending' ? { ...a, ...patch } : a)) }));
     persist('approvals', get().approvals);
   },
+  recordApprovalResult: (id, result) => {
+    const at = new Date().toISOString();
+    set((s) => ({ approvals: s.approvals.map((a) => (a.id === id ? { ...a, lastResult: { at, ok: result.ok, detail: result.detail.slice(0, 400) } } : a)) }));
+    persist('approvals', get().approvals);
+  },
 
   finance: INITIAL_FINANCE,
 
@@ -3093,10 +2964,12 @@ export const useBorga = create<BorgaStore>((set, get) => ({
 
   composio: DEFAULT_COMPOSIO,
   setComposio: (patch) => {
-    set((s) => ({ composio: { ...s.composio, ...patch, configured: true } }));
-    // Never persist the API key in plaintext � store only a mask.
-    const clean = { ...get().composio };
-    if ('apiKey' in clean && clean.apiKey) clean.apiKey = '[stored server-side]';
+    // The API key is a server-side secret: it lives encrypted in the connection
+    // store and never enters the dashboard state or this persisted document.
+    const safe = { ...patch };
+    delete safe.apiKey;
+    set((s) => ({ composio: { ...s.composio, ...safe, apiKey: '', configured: true } }));
+    const clean = { ...get().composio, apiKey: '' };
     persist('composio', clean);
   },
   
@@ -3766,14 +3639,13 @@ export const useBorga = create<BorgaStore>((set, get) => ({
     set((s) => ({ workflows: s.workflows.map((w) => (w.id === id ? { ...w, ...patch } : w)) })),
   runWorkflow: (id) => {
     const workflowName = get().workflows.find((w) => w.id === id)?.name ?? id;
-    const agents = get().agents;
     const workflowId = id;
-    
+
     set((s) => ({ workflows: s.workflows.map((w) => (w.id === id ? { ...w, status: 'running', progress: 4 } : w)) }));
 
-    // Climb toward (but never claim) completion while the real request is in
-    // flight � an honest "still working" indicator, not a fake finish. The
-    // fetch's own resolution is what actually marks the workflow complete/error.
+    // Climb toward (but never claim) completion while the real work runs —
+    // an honest "still working" indicator. The run queue's job resolution is
+    // what actually marks the workflow complete/error.
     let progress = 4;
     const climber = setInterval(() => {
       progress = Math.min(90, progress + 6);
@@ -3785,75 +3657,71 @@ export const useBorga = create<BorgaStore>((set, get) => ({
       set((s) => ({ workflows: s.workflows.map((w) => (w.id === workflowId ? { ...w, status, progress: status === 'complete' ? 100 : w.progress } : w)) }));
     };
 
-    // Fire the real orchestration API with proper task distribution.
-    // Scoped to the active company so each tenant drives its own engine.
+    // Real orchestration: the server either proxies a configured Company
+    // Engine or hands the workflow to this workspace's AI workers (run queue).
+    // No step list or follow-up tasks are invented here — the agent's own
+    // tool calls create the real tasks, visible in Runs & Queue.
+    type RunResponse = { ok?: boolean; mode?: string; jobId?: string; agentName?: string; error?: string };
     fetch('/api/borga/orchestrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
       body: JSON.stringify({ action: 'run', workflowName, agent: 'Borga', ws: ACTIVE_WS }),
     })
-      .then((r) => r.json())
-      .then((d: { ok?: boolean; mode?: string; steps?: Array<{ step: string; output: string; status: string }>; summary?: string }) => {
-        const mode = d.mode === 'remote' ? 'company engine' : 'local fallback';
-        get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow "${workflowName}" dispatched to ${mode}.` });
+      .then(async (r) => ({ status: r.status, data: (await r.json().catch(() => ({}))) as RunResponse }))
+      .then(({ status, data: d }) => {
+        if (!d.ok) {
+          throw new Error(d.error ?? `The orchestration request failed (${status}).`);
+        }
+        if (d.mode === 'remote') {
+          get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow "${workflowName}" dispatched to the company engine.` });
+          get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow completed: ${workflowName}` });
+          finish('complete');
+          return;
+        }
+        // mode === 'queue': real AI workers took the job. Follow the job to
+        // its terminal state so the workflow card reflects the real outcome.
+        const jobId = d.jobId ?? '';
+        const agentName = d.agentName ?? 'an AI worker';
+        get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow "${workflowName}" handed to ${agentName} — the run is live in Runs & Queue (job ${jobId}).` });
 
-        // If local execution, process the steps
-        if (d.mode === 'local' && d.steps) {
-          const steps = d.steps;
-          steps.forEach((step, index) => {
-            setTimeout(() => {
-              get().log({
-                agentId: 'a-borga',
-                agentName: 'Borga',
-                actor: 'agent',
-                kind: 'task',
-                message: `Step ${index + 1}/${steps.length}: ${step.step} � ${step.output}`
+        const POLL_MS = 2500;
+        const POLL_DEADLINE = Date.now() + 10 * 60_000;
+        const poll = async () => {
+          while (Date.now() < POLL_DEADLINE) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            try {
+              const res = await fetch(`/api/borga/orchestrate?ws=${encodeURIComponent(ACTIVE_WS ?? '')}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+                body: JSON.stringify({ action: 'status', ws: ACTIVE_WS, workflowId: jobId }),
               });
-            }, (index + 1) * 1000);
-          });
-        }
-
-        // Fan out follow-up tasks to the relevant agents so the workflow has visible output.
-        const specs = distributeWorkflowTasks(workflowName, agents);
-        for (const spec of specs) {
-          get().addTask({
-            id: `t-wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-            title: spec.task,
-            detail: `Follow-up from workflow "${workflowName}".`,
-            priority: spec.priority,
-            status: 'todo',
-            bucket: 'week',
-            assignee: spec.agentName,
-            tags: ['workflow'],
-            due: 'This week',
-            progress: 0,
-          });
-        }
-        if (specs.length) {
-          get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'task', message: `Workflow "${workflowName}" created ${specs.length} follow-up task${specs.length === 1 ? '' : 's'}.` });
-        }
-        get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow completed: ${workflowName}` });
-        finish('complete');
+              const j = (await res.json().catch(() => ({}))) as { ok?: boolean; done?: boolean; status?: string; error?: string };
+              if (j.ok && j.done) {
+                if (j.status === 'error') {
+                  toast({ title: `Workflow "${workflowName}" failed`, description: j.error ?? 'The AI worker hit an error — retry from Runs & Queue.', variant: 'error' });
+                  get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" run failed: ${j.error ?? 'unknown error'}.` });
+                  finish('error');
+                } else if (j.status === 'cancelled' || j.status === 'stopped') {
+                  get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" run was stopped.` });
+                  finish('error');
+                } else {
+                  get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'agent', kind: 'sync', message: `Workflow completed: ${workflowName}` });
+                  finish('complete');
+                }
+                return;
+              }
+              if (res.status === 401) return; // signed out — stop polling
+            } catch {
+              // transient network error — keep polling until the deadline
+            }
+          }
+          get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" is still running — follow it in Runs & Queue.` });
+        };
+        void poll();
       })
       .catch((error) => {
-        toast({ title: `Workflow "${workflowName}" failed to reach the engine`, description: (error as Error)?.message ?? 'Falling back to local task distribution.', variant: 'error' });
-        get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" failed to reach the engine � falling back to local task distribution.` });
-
-        // Fallback to local task distribution � the dispatch itself still failed, so mark it accordingly.
-        for (const spec of distributeWorkflowTasks(workflowName, agents)) {
-          get().addTask({
-            id: `t-wf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-            title: spec.task,
-            detail: `Follow-up from workflow "${workflowName}" (engine unreachable).`,
-            priority: spec.priority,
-            status: 'todo',
-            bucket: 'week',
-            assignee: spec.agentName,
-            tags: ['workflow'],
-            due: 'This week',
-            progress: 0,
-          });
-        }
+        toast({ title: `Workflow "${workflowName}" could not start`, description: (error as Error)?.message ?? 'Open Runs & Queue and start it manually.', variant: 'error' });
+        get().log({ agentId: 'a-borga', agentName: 'Borga', actor: 'system', kind: 'system', message: `Workflow "${workflowName}" could not start: ${(error as Error)?.message ?? 'unknown error'}.` });
         finish('error');
       });
   },

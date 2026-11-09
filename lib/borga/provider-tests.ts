@@ -2,6 +2,7 @@ import type { ProviderId } from './providers';
 import { smBase } from './supermemory-core';
 import { createSaltEdgeClient, SaltEdgeError } from './saltedge';
 import { parseSmtp } from './smtp-core';
+import { EXPLEE_API_BASE, EXPLEE_PROJECTS_PATH, expleeHeaders, parseProjects } from './explee-core';
 
 /**
  * Live credential checks. Pure (fetch is injected) so they are unit-tested with
@@ -184,6 +185,23 @@ async function testStripe(v: Record<string, string>, f: Fetch): Promise<TestResu
   return { ok: true, message: 'Connected to Stripe (this workspace merchant).' };
 }
 
+async function testExplee(v: Record<string, string>, f: Fetch): Promise<TestResult> {
+  const r = await getJson(f, EXPLEE_API_BASE + EXPLEE_PROJECTS_PATH, { headers: expleeHeaders(v.apiKey) });
+  if (r.status === 401 || r.status === 403) return { ok: false, message: 'Explee rejected the API key.' };
+  if (r.status === 429) return { ok: false, message: 'Key is valid but Explee is rate limiting us right now. Try again shortly.' };
+  if (r.status !== 200) return { ok: false, message: `Explee answered HTTP ${r.status}.` };
+  const projects = parseProjects(r.json);
+  const details = projects.length
+    ? [`Projects: ${projects.map((p) => (p.domain ? `${p.domain} (${p.id})` : String(p.id))).join(', ')}.`]
+    : ['No projects yet — create one in Explee and the sync will still work.'];
+  if (v.projectId) {
+    const match = projects.find((p) => String(p.id) === v.projectId.trim());
+    if (!match) return { ok: false, message: `The key works, but project ${v.projectId} is not in this Explee organization.`, details };
+    details.unshift(`Project ${v.projectId} found.`);
+  }
+  return { ok: true, message: 'Connected to Explee.', details };
+}
+
 export async function runProviderTest(id: ProviderId, values: Record<string, string>, f: Fetch = fetch): Promise<TestResult> {
   try {
     switch (id) {
@@ -200,6 +218,9 @@ export async function runProviderTest(id: ProviderId, values: Record<string, str
       case 'company_engine': return { ok: false, message: 'Tested through the Company Engine client (see connections-server).' };
       case 'chatgpt_ads': return { ok: false, message: 'No live check yet: the ChatGPT Ads API specification is pending.' };
       case 'stripe': return await testStripe(values, f);
+      case 'explee': return await testExplee(values, f);
+      case 'composio': return { ok: false, message: 'Verified by the Composio catalog call — save the key and use a toolkit card.' };
+      default: return { ok: false, message: 'No live check for this provider yet.' };
     }
   } catch (e) {
     const name = (e as Error).name;

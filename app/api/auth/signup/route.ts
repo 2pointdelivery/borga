@@ -7,9 +7,12 @@ import { createSessionToken, sessionCookieName, sessionMaxAge, isSecureContext }
 import { hashPassword } from '@/lib/auth/password';
 import { createUser, getUserByEmail } from '@/lib/auth/queries';
 import { setBorgaState, getBorgaState, insertBorgaStateIfAbsent, deleteBorgaState } from '@/lib/borga/persistence';
-import { checkInvite, decideSignup, hashInviteCode, inviteKey, inviteUsedKey, signupMode, type InviteRecord } from '@/lib/auth/signup-policy';
+import { checkInvite, decideSignup, hashInviteCode, inviteKey, inviteUsedKey, isOperator, signupMode, type InviteRecord } from '@/lib/auth/signup-policy';
+import { evaluateLoginRailGuard, normalizeLoginRail, resolveRailRedirect } from '@/lib/auth/login-rails';
+import { upsertAdvisorProfile } from '@/lib/borga/shared-services-server';
 import { userWorkspacesKey } from '@/lib/borga/keys';
 import { makeOnboarding, type Workspace } from '@/lib/borga/data';
+import { takeRouteLimit } from '@/lib/borga/route-limits';
 
 export const runtime = 'nodejs';
 
@@ -31,6 +34,15 @@ export async function POST(req: Request) {
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return NextResponse.json({ ok: false, error: 'A valid email is required.' }, { status: 400 });
     }
+    // The welcome mail goes to an address the visitor chooses: cap it per address
+    // so signup cannot be used to send someone a stream of welcome messages.
+    const welcomeLimit = takeRouteLimit('signup', email);
+    if (welcomeLimit.limited) {
+      return NextResponse.json(
+        { ok: false, error: 'Too many signup attempts for this address. Try again later.' },
+        { status: 429, headers: { 'Retry-After': String(welcomeLimit.retryAfterSec) } },
+      );
+    }
     if (password.length > 200) {
       return NextResponse.json({ ok: false, error: 'Password must be at most 200 characters.' }, { status: 400 });
     }
@@ -39,6 +51,13 @@ export async function POST(req: Request) {
     }
     if (!name) {
       return NextResponse.json({ ok: false, error: 'Your name is required.' }, { status: 400 });
+    }
+
+    const rail = normalizeLoginRail(body?.role, body?.next);
+    const op = isOperator(email, process.env);
+    const railGuard = evaluateLoginRailGuard({ rail, isOperator: op, advisorStatus: null });
+    if (!railGuard.allowed) {
+      return NextResponse.json({ ok: false, error: railGuard.error, rail }, { status: railGuard.status });
     }
 
     // Decide access before looking the email up, so an uninvited visitor cannot probe which emails have accounts.
@@ -87,6 +106,16 @@ export async function POST(req: Request) {
     };
     await setBorgaState(userWorkspacesKey(user.id), [ws]);
 
+    let advisorStatus: string | null = null;
+    if (rail === 'advisor') {
+      const profile = await upsertAdvisorProfile(user.id, user.email, {
+        name: user.name,
+        agencyName: typeof body?.agencyName === 'string' ? body.agencyName : undefined,
+        autoApproveIfOperator: true,
+      }).catch(() => null);
+      advisorStatus = profile?.status ?? null;
+    }
+
     // A short welcome, in the background: a mail server being slow or absent must never hold up or fail signup.
     const appUrl = appOrigin(req);
     if (appUrl) {
@@ -98,9 +127,12 @@ export async function POST(req: Request) {
     }
 
     const token = await createSessionToken(user.id);
+    const redirectTo = resolveRailRedirect(rail, 'signup', body?.next);
     const res = NextResponse.json({
       ok: true,
-      user: { id: user.id, email: user.email, name: user.name },
+      rail,
+      redirectTo,
+      user: { id: user.id, email: user.email, name: user.name, isOperator: op, advisorStatus },
       workspaceId: ws.id,
     });
     res.cookies.set(sessionCookieName(), token, {

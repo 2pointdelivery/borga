@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
 import { getSyncStates, listSyncJobs, runSyncJob } from '@/lib/borga/sync-jobs';
+import { resolveExpleeCredentials } from '@/lib/borga/explee-server';
 import '@/lib/borga/sync-registry';
 
 export const runtime = 'nodejs';
@@ -12,7 +13,12 @@ export async function GET(req: NextRequest) {
   if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const ws = new URL(req.url).searchParams.get('ws');
   if (!isValidWsId(ws)) return NextResponse.json({ ok: false, error: 'ws required' }, { status: 400 });
-  return NextResponse.json({ ok: true, jobs: await getSyncStates(userId, ws) });
+  const explee = await resolveExpleeCredentials(userId, ws);
+  return NextResponse.json({
+    ok: true,
+    jobs: await getSyncStates(userId, ws),
+    explee: { configured: !!explee, source: explee?.source ?? null },
+  });
 }
 
 export async function POST(req: NextRequest) {

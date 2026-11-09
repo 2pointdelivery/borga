@@ -92,10 +92,18 @@ test('rotating a spoofed X-Forwarded-For value does not escape the sign-in limit
   assert.notEqual((await proxy(req('/api/auth/login', { method: 'POST', ip: '203.0.113.100' }))).status, 429);
 });
 
-test('/app pages redirect to login without a session', async () => {
+test('/app, /admin and /services pages redirect to login on their guarded rail without a session', async () => {
   const r = await proxy(req('/app/finance'));
   assert.equal(r.status, 307);
   assert.match(r.headers.get('location') ?? '', /\/login\?next=%2Fapp%2Ffinance/);
+
+  const adminRes = await proxy(req('/admin'));
+  assert.equal(adminRes.status, 307);
+  assert.match(adminRes.headers.get('location') ?? '', /\/login\?next=%2Fadmin&role=admin/);
+
+  const svcRes = await proxy(req('/services'));
+  assert.equal(svcRes.status, 307);
+  assert.match(svcRes.headers.get('location') ?? '', /\/login\?next=%2Fservices&role=advisor/);
 });
 
 test('sign-in and sign-up are rate limited per IP, per route', async () => {
