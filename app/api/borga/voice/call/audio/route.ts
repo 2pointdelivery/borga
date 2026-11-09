@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getBorgaState } from '@/lib/borga/persistence';
-import { getApiKey, verifyPayloadSignature } from '@/lib/borga/secrets';
+import { verifyPayloadSignature } from '@/lib/borga/secrets';
+import { elevenLabsKey } from '@/lib/borga/provider-keys';
 
 export const runtime = 'nodejs';
 
@@ -20,12 +21,12 @@ export async function GET(req: Request) {
   if (!id || !sig || !verifyPayloadSignature(id, sig)) {
     return NextResponse.json({ error: 'Invalid or expired call audio link.' }, { status: 403 });
   }
-  const payload = await getBorgaState<{ message: string; voiceId: string }>(`voice_call_payload:${id}`);
+  const payload = await getBorgaState<{ message: string; voiceId: string; userId?: string; ws?: string | null }>(`voice_call_payload:${id}`);
   if (!payload) {
     return NextResponse.json({ error: 'Call audio not found — it may have already been played.' }, { status: 404 });
   }
 
-  const apiKey = await getApiKey('ELEVENLABS_API_KEY');
+  const apiKey = await elevenLabsKey(payload.userId ?? null, payload.ws ?? null);
   if (!apiKey) {
     return NextResponse.json({ error: 'ElevenLabs is not configured.' }, { status: 501 });
   }

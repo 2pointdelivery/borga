@@ -1,3 +1,5 @@
+import type { ConfigTargetId } from './borga/config-deeplink';
+
 export type ToastVariant = 'default' | 'success' | 'error' | 'info' | 'warning';
 
 export interface ToastMsg {
@@ -6,6 +8,11 @@ export interface ToastMsg {
   description?: string;
   variant?: ToastVariant;
   duration?: number;
+  configTarget?: ConfigTargetId;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 }
 
 type Listener = (t: ToastMsg) => void;

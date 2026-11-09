@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { randomBytes, createHash } from 'crypto';
 import { getBorgaState, setBorgaState } from '@/lib/borga/persistence';
 import { encryptSecret, decryptSecret } from '@/lib/borga/secrets';
+import { getApiKey } from '@/lib/borga/secrets';
 import { mcpListTools, discoverMcpOAuth, registerMcpOAuthClient } from '@/lib/borga/mcp-client';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
@@ -34,6 +35,21 @@ async function loadServers(userId: string, ws: string): Promise<McpServer[]> {
   return (await getBorgaState<McpServer[]>(serversKey(userId, ws))) ?? [];
 }
 
+/**
+ * Token for talking to a server. Composio-provisioned entries (provider
+ * 'composio') use the server-side COMPOSIO_API_KEY as the x-api-key header,
+ * so the project key is never stored on the workspace record or sent to the
+ * browser. Everything else uses its saved bearer token (or none).
+ */
+async function tokenFor(userId: string, ws: string, server: McpServer): Promise<string | undefined> {
+  if (server.provider === 'composio') {
+    const key = await getApiKey('COMPOSIO_API_KEY').catch(() => '');
+    return key || undefined;
+  }
+  if (server.authType === 'none') return undefined;
+  return decryptSecret((await getBorgaState<string>(tokenKey(userId, ws, server.id))) ?? '') || undefined;
+}
+
 async function saveServers(userId: string, ws: string, servers: McpServer[]): Promise<void> {
   await setBorgaState(serversKey(userId, ws), servers);
 }
@@ -61,6 +77,7 @@ export async function POST(req: NextRequest) {
     token?: string;
     tool?: string;
     params?: Record<string, unknown>;
+    provider?: string;
     oauth?: { authorizationEndpoint: string; tokenEndpoint: string; clientId: string; scope?: string };
   } = {};
   try {
@@ -78,10 +95,14 @@ export async function POST(req: NextRequest) {
 
   try {
     // Test an MCP server before saving it — no persistence, just a live check.
+    // provider 'composio' authenticates with the server-side COMPOSIO_API_KEY.
     if (action === 'test') {
       const url = (body.url ?? '').trim();
       if (!url) return NextResponse.json({ ok: false, error: 'url is required.' }, { status: 400 });
-      const result = await mcpListTools(url, body.token?.trim() || undefined);
+      const token = body.provider === 'composio'
+        ? (await getApiKey('COMPOSIO_API_KEY').catch(() => '') || undefined)
+        : body.token?.trim() || undefined;
+      const result = await mcpListTools(url, token);
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 502 });
       return NextResponse.json({ ok: true, tools: result.tools });
     }
@@ -91,7 +112,7 @@ export async function POST(req: NextRequest) {
       const servers = await loadServers(userId, ws);
       const server = servers.find((s) => s.id === body.serverId);
       if (!server) return NextResponse.json({ ok: false, error: 'Server not found.' }, { status: 404 });
-      const token = server.authType === 'none' ? undefined : decryptSecret((await getBorgaState<string>(tokenKey(userId, ws, server.id))) ?? '') || undefined;
+      const token = await tokenFor(userId, ws, server);
       const result = await mcpListTools(server.url, token);
       const updated = servers.map((s) => (s.id === server.id
         ? result.ok
@@ -189,8 +210,8 @@ export async function POST(req: NextRequest) {
       const servers = await loadServers(userId, ws);
       const server = servers.find((s) => s.name.toLowerCase() === name);
       if (!server) return NextResponse.json({ ok: false, error: `No MCP server named "${name}".` }, { status: 404 });
-      const token = server.authType === 'none' ? undefined : decryptSecret((await getBorgaState<string>(tokenKey(userId, ws, server.id))) ?? '') || undefined;
-      if (server.authType !== 'none' && !token) {
+      const token = await tokenFor(userId, ws, server);
+      if (server.provider !== 'composio' && server.authType !== 'none' && !token) {
         return NextResponse.json({ ok: false, error: `"${server.name}" has no token saved.` }, { status: 400 });
       }
       const result = await mcpCallTool(server.url, token, tool, params);

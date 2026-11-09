@@ -18,12 +18,12 @@ function b64url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function b64urlDecode(s: string): Uint8Array {
-  const b = s.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+/** Constant-time string compare so signature checks do not leak prefix matches. */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 async function hmac(data: string): Promise<string> {
@@ -71,17 +71,57 @@ export async function createSessionToken(userId: string): Promise<string> {
   return `${payload}.${sig}`;
 }
 
+/**
+ * The database-backed checks that make a signed cookie revocable and make a
+ * deleted account lose access immediately. Injected so the rules are tested
+ * hermetically; production callers omit it and get the real modules.
+ */
+export interface SessionChecks {
+  /** True when the account no longer exists. Must be uncached so deletion is immediate. */
+  userGone(userId: string): Promise<boolean>;
+  /** True when the token was signed out or predates a global sign-out. */
+  revoked(userId: string, token: string, expiresAt: number, lifetimeMs: number): Promise<boolean>;
+}
+
+async function defaultSessionChecks(): Promise<SessionChecks> {
+  const { sessionUserGone } = await import('./session-guard');
+  return {
+    userGone: sessionUserGone,
+    // Loaded lazily, as before: a deleted account is refused without touching revocation storage.
+    revoked: async (userId, token, expiresAt, lifetimeMs) => {
+      const { isSessionRevoked } = await import('./session-revocation');
+      return isSessionRevoked(userId, token, expiresAt, lifetimeMs);
+    },
+  };
+}
+
 /** Verify a token's signature + expiry. Returns the userId or null. */
-export async function verifySessionToken(token: string | undefined | null): Promise<string | null> {
+export async function verifySessionToken(
+  token: string | undefined | null,
+  checks?: SessionChecks,
+): Promise<string | null> {
   if (!token) return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const [userId, expStr, sig] = parts;
   if (!userId || !expStr || !sig) return null;
   const expected = await hmac(`${userId}.${expStr}`);
-  if (expected !== sig) return null;
+  if (!safeEqual(expected, sig)) return null;
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp < Date.now()) return null;
+  // A signed-out or reset session is refused here, so every route and the proxy honour it. Needs the database, so it is skipped
+  // where there is none; a database error never locks everyone out (the signature and expiry above already held).
+  if (typeof window === 'undefined' && process.env.DATABASE_URL) {
+    try {
+      const resolved = checks ?? (await defaultSessionChecks());
+      // A deleted account must lose access on its next request rather than when the 30-day cookie expires. Checked first
+      // because it is a primary-key lookup and a deleted UUID can never come back.
+      if (await resolved.userGone(userId)) return null;
+      if (await resolved.revoked(userId, token, exp, MAX_AGE_MS)) return null;
+    } catch {
+      /* fail open on infrastructure errors */
+    }
+  }
   return userId;
 }
 

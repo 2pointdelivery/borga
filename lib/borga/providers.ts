@@ -3,7 +3,9 @@
  * (bring-your-own app/token). Shared by client (forms) and server (validation).
  */
 
-export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory';
+import { MAILDOG_HOST, MAILDOG_URL } from './maildog';
+
+export type ProviderId = 'company_engine' | 'twilio' | 'meta' | 'google_ads' | 'linkedin' | 'chatgpt_ads' | 'supermemory' | 'saltedge' | 'smtp' | 'elevenlabs' | 'deepgram' | 'fish' | 'stripe' | 'explee' | 'composio';
 
 export interface FieldDef {
   key: string;
@@ -28,15 +30,22 @@ export interface ProviderDef {
   testable: boolean;
   /** Webhook path suffix, when the provider calls us back. */
   webhook?: 'meta' | 'twilio';
+  /** A service the company can create an account with to get these details, shown at the top of the form. */
+  signup?: { title: string; text: string; label: string; url: string };
+  /** Ready-made values for a known service: one click fills the fields that are the same for everybody. */
+  presets?: Array<{ id: string; label: string; values: Record<string, string>; note: string }>;
 }
 
 const E164 = '^\\+[1-9]\\d{6,14}$';
+
+/** The one Explee sign-up link, used by the Connections card and the sales-pipeline strip. */
+export const EXPLEE_SIGNUP_URL = 'https://explee.com/?utm_source=Lawrence+Ansah-Addo&utm_medium=affiliate&utm_campaign=Explee&ref=pointdelivery73';
 
 export const PROVIDERS: ProviderDef[] = [
   {
     id: 'company_engine',
     label: 'Company Engine (your CRM / company API)',
-    description: "This company's own API portal. Pulls customers and deals straight from your CRM into Borga, and runs engine workflows. Configure it under AI Platform → Company Engine.",
+    description: "This company's own API portal. Pulls customers and deals straight from your CRM into Borga, and runs engine workflows. Configure it under Company → Company Engine.",
     fields: [
       { key: 'baseUrl', label: 'API base URL', secret: false, required: true, placeholder: 'https://crm.yourcompany.com/api/v1', hint: 'https only (public address)', pattern: '^https?://\\S+' + '$' },
       { key: 'apiKey', label: 'API key / token', secret: true, required: true },
@@ -150,6 +159,89 @@ export const PROVIDERS: ProviderDef[] = [
     testable: true,
   },
   {
+    id: 'smtp',
+    label: 'Email (your own SMTP server)',
+    description: "Send this company's mail (ticket replies, update emails) from its own address through its own mail server, instead of the shared sender. Optional: without it, mail goes out from the deployment's shared sender if there is one.",
+    fields: [
+      { key: 'host', label: 'SMTP server', secret: false, required: true, placeholder: 'smtp.gmail.com', hint: 'A host name, not an IP address' },
+      { key: 'port', label: 'Port', secret: false, required: false, placeholder: '587', hint: '587 (STARTTLS) is the usual one; 465 is always encrypted. Allowed: 25, 465, 587, 2525.', pattern: '^\\d{2,5}' + '$' },
+      { key: 'secure', label: 'Encrypted from the start', secret: false, required: false, placeholder: 'no', hint: 'yes for port 465, no for 587. The connection is always encrypted either way.' },
+      { key: 'user', label: 'User name', secret: false, required: false, placeholder: 'you@yourcompany.com' },
+      { key: 'password', label: 'Password or app password', secret: true, required: false, hint: 'Gmail and Microsoft need an app password. Stored encrypted; never shown again.' },
+      { key: 'fromAddress', label: 'Send from', secret: false, required: true, placeholder: 'billing@yourcompany.com', hint: 'An address your mail provider lets this account send as' },
+      { key: 'fromName', label: 'Sender name', secret: false, required: false, placeholder: 'Your Company' },
+    ],
+    steps: [
+      `No mail server yet? Create a MailDog account at ${MAILDOG_URL}: it gives you your email address and SMTP details, with a sending domain that is already verified.`,
+      'Otherwise ask your mail provider (Google Workspace, Microsoft 365, Zoho, your host) for its SMTP server name and port, and create an app password if it requires one.',
+      'Enter them here with the address mail should come from, then press Test connection.',
+      'Press Send me a test email to see it arrive in your own inbox.',
+    ],
+    docsUrl: MAILDOG_URL,
+    testable: true,
+    signup: {
+      title: 'No mail server? Get one with MailDog',
+      text: 'MailDog gives your company its own email address and the SMTP details to send from it, on a domain that is already set up so your mail is trusted. Create an account, then come back and fill in the user name, password and address it gives you.',
+      label: 'Create a MailDog account',
+      url: MAILDOG_URL,
+    },
+    presets: [
+      {
+        id: 'maildog',
+        label: 'Use MailDog settings',
+        values: { host: MAILDOG_HOST, port: '587', secure: 'no' },
+        note: 'Fills in the server and port. Then add your MailDog user name, password and the address mail should come from (it must be on your MailDog domain).',
+      },
+    ],
+  },
+  {
+    id: 'saltedge',
+    label: 'Salt Edge (bank statements)',
+    description: "Connects the company's bank accounts and imports their transactions for reconciliation. Optional: a deployment-wide SALTEDGE_APP_ID and SALTEDGE_SECRET also work, so each company does not need its own.",
+    fields: [
+      { key: 'appId', label: 'App ID', secret: false, required: true, placeholder: 'Salt Edge App-id', pattern: '^\\S{6,64}' + '$' },
+      { key: 'secret', label: 'Secret', secret: true, required: true, hint: 'Stored encrypted; never shown again.' },
+    ],
+    steps: [
+      'Create a Salt Edge client (the test client is free) and copy its App ID and Secret from the Salt Edge dashboard.',
+      'Paste them here and press Test connection.',
+      "Press Connect a bank and sign in to the bank on Salt Edge's page. Borga never sees the bank password.",
+      'A Live client also needs request signing: set SALTEDGE_PRIVATE_KEY on the server and upload the matching public key in the Salt Edge dashboard.',
+    ],
+    docsUrl: 'https://docs.saltedge.com/v6/',
+    testable: true,
+  },
+  {
+    id: 'elevenlabs',
+    label: 'ElevenLabs (voices)',
+    description: "Gives this company's agents a spoken voice, in the dashboard and on phone calls. Bring your own key: the usage is billed to your ElevenLabs account.",
+    fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
+    steps: ['Open elevenlabs.io/app/api-key and create an API key.', 'Copy the secret key (it starts with sk_ and is shown once when created). The key ID shown in the list is not the key.', 'Paste it here and press Test connection.'],
+    docsUrl: 'https://elevenlabs.io/docs/api-reference',
+    testable: true,
+  },
+  {
+    id: 'deepgram',
+    label: 'Deepgram (speech to text)',
+    description: 'Turns push-to-talk recordings into text. Without it the browser built-in recognition is used. Bring your own key.',
+    fields: [{ key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' }],
+    steps: ['Open console.deepgram.com and create an API key.', 'Paste it here and press Test connection.'],
+    docsUrl: 'https://developers.deepgram.com/docs',
+    testable: true,
+  },
+  {
+    id: 'fish',
+    label: 'Fish Audio (voices)',
+    description: 'An alternative spoken voice for the dashboard assistant and agent replies. Phone calls still use ElevenLabs. Bring your own key: usage is billed to your Fish Audio account.',
+    fields: [
+      { key: 'apiKey', label: 'API key', secret: true, required: true, hint: 'Stored encrypted; never shown again.' },
+      { key: 'voiceId', label: 'Voice ID (reference model)', secret: false, required: false, hint: 'The model id from the voice page on fish.audio (the long hex code in its address). Leave empty to use the default voice.', placeholder: '802e3bc2b27e49c2995d23ef70e6ac89', pattern: '^[A-Za-z0-9]{8,64}$' },
+    ],
+    steps: ['Open fish.audio, go to your API keys and create a key.', 'Open a voice you like on fish.audio and copy the id from its address (or from your own cloned voice).', 'Paste both here and press Test connection.'],
+    docsUrl: 'https://docs.fish.audio/api-reference/introduction',
+    testable: true,
+  },
+  {
     id: 'chatgpt_ads',
     label: 'ChatGPT Ads',
     description: 'Awaiting the API specification. Until then, import reports as CSV.',
@@ -159,6 +251,63 @@ export const PROVIDERS: ProviderDef[] = [
     ],
     steps: ['The connector is built once the API spec and a test credential are supplied. You can store credentials now.'],
     docsUrl: '',
+    testable: false,
+  },
+  {
+    id: 'stripe',
+    label: 'Stripe (this workspace merchant)',
+    description: 'Separate Stripe account per workspace for customer payments (invoices, quotes). Platform subscription billing stays deployment-wide. Usage is billed to this Stripe account.',
+    fields: [
+      { key: 'secretKey', label: 'Secret key', secret: true, required: true, hint: 'sk_live_… or sk_test_… — stored encrypted, never shown again.', pattern: '^sk_(live|test)_[A-Za-z0-9]+$' },
+      { key: 'publishableKey', label: 'Publishable key', secret: false, required: false, placeholder: 'pk_live_…', pattern: '^pk_(live|test)_[A-Za-z0-9]+$' },
+      { key: 'webhookSecret', label: 'Webhook signing secret', secret: true, required: false, hint: 'whsec_… from Developers → Webhooks for invoice.paid auto-posting.' },
+    ],
+    steps: [
+      'Create a separate Stripe account for this workspace (one merchant per company).',
+      'Copy the secret key from Developers → API keys (use a restricted key: Checkout Sessions + Payment Links write).',
+      'Create a webhook endpoint to /api/borga/hooks/stripe with events checkout.session.completed + payment_intent.succeeded, then paste its signing secret here.',
+      'Press Test connection, then create a payment link from an invoice.',
+    ],
+    docsUrl: 'https://docs.stripe.com/',
+    testable: true,
+  },
+  {
+    id: 'explee',
+    label: 'Explee (B2B outreach & hot leads)',
+    description: "Explee finds B2B leads, emails them and flags the ones who reply with real interest as hot leads. Each new hot lead lands in this company's sales pipeline on its own — no copy-pasting. Optional: a deployment-wide EXPLEE_API_KEY also works, so each company does not need its own.",
+    fields: [
+      { key: 'apiKey', label: 'API key', secret: true, required: true, placeholder: 'sk_explee_…', hint: 'Stored encrypted; never shown again.', pattern: '^sk_explee_[A-Za-z0-9]{16,}$' },
+      { key: 'projectId', label: 'Project ID', secret: false, required: false, placeholder: '42836', hint: 'Optional — shown in Explee under Auto-GTM → Projects. Checked when you press Test connection.' },
+    ],
+    steps: [
+      'Create an Explee account with the button above — it finds the leads and emails them for you.',
+      'In Explee, open Settings → API keys (explee.com/app-auto-gtm/api-keys) and create a key.',
+      'Paste the key here and press Test connection.',
+      'New hot leads appear under Sales → Leads about every 10 minutes — while the app is open, or on a schedule when the server cron runs.',
+    ],
+    docsUrl: 'https://api.explee.com/public/api/docs',
+    testable: true,
+    signup: {
+      title: 'Find and close customers with Explee',
+      text: 'Explee finds B2B leads for your product, emails them, and flags the ones who reply with real interest as hot leads. Create an account, copy its API key, and every new hot lead lands in your sales pipeline automatically.',
+      label: 'Create an Explee account',
+      url: EXPLEE_SIGNUP_URL,
+    },
+  },
+  {
+    id: 'composio',
+    label: 'Composio (toolkits & connected apps)',
+    description: 'The Composio API key for this company. Stored encrypted with the other connection secrets and used by the server; it is never returned to a browser or kept in the dashboard state.',
+    fields: [
+      { key: 'apiKey', label: 'Composio API key', secret: true, required: true, hint: 'Create one at composio.dev → API keys. Stored encrypted; never shown again.' },
+      { key: 'baseUrl', label: 'API base URL', secret: false, required: false, placeholder: 'https://backend.composio.dev', hint: 'Only change for a self-hosted proxy.' },
+    ],
+    steps: [
+      'Create an account at composio.dev and copy an API key from its dashboard.',
+      'Paste the key here and press Test connection (a read-only toolkits call verifies it).',
+      'Connect the accounts you need under Integrations → Toolkits. The server resolves the key on every call.',
+    ],
+    docsUrl: 'https://docs.composio.dev/',
     testable: false,
   },
 ];

@@ -3,7 +3,7 @@ import { getBorgaState } from '@/lib/borga/persistence';
 import { userWsKey, isValidWsId } from '@/lib/borga/keys';
 import { sessionUserId } from '@/lib/borga/features-server';
 import { assertPublicHttpsUrl } from '@/lib/borga/safe-url';
-import { loadQueue, processQueue, saveQueue, type Delivery } from '@/lib/borga/webhook-queue';
+import { loadQueue, loadWebhookSecret, processQueue, saveQueue, saveWebhookSecret, type Delivery } from '@/lib/borga/webhook-queue';
 import type { Webhook } from '@/lib/borga/data';
 
 export const runtime = 'nodejs';
@@ -57,6 +57,34 @@ export async function POST(req: NextRequest) {
     const q = await loadQueue(userId, ws);
     const n = (s: Delivery['status']) => q.filter((d) => d.status === s).length;
     return NextResponse.json({ ok: true, action: 'status', queue: { total: q.length, pending: n('pending'), failed: n('failed'), delivered: n('delivered') } });
+  }
+
+  if (action === 'deliveries') {
+    const q = await loadQueue(userId, ws);
+    return NextResponse.json({ ok: true, action: 'deliveries', deliveries: q.slice(-30).reverse() });
+  }
+
+  if (action === 'saveSecret' || action === 'deleteSecret') {
+    const { webhookId, secret } = body as { webhookId?: string; secret?: string };
+    if (!webhookId || !hooks.some((h) => h.id === webhookId)) {
+      return NextResponse.json({ ok: false, error: 'Webhook not found.' }, { status: 404 });
+    }
+    if (action === 'saveSecret') {
+      if (typeof secret !== 'string' || !secret || secret.length > 512) {
+        return NextResponse.json({ ok: false, error: 'A non-empty secret (max 512 chars) is required.' }, { status: 400 });
+      }
+      // Stored encrypted server-side only — the dashboard entity keeps a mask and can never leak it.
+      await saveWebhookSecret(userId, ws, webhookId, secret);
+      return NextResponse.json({ ok: true, action: 'saveSecret', hasSecret: true });
+    }
+    await saveWebhookSecret(userId, ws, webhookId, '');
+    return NextResponse.json({ ok: true, action: 'deleteSecret', hasSecret: false });
+  }
+
+  if (action === 'secretState') {
+    const { webhookId } = body as { webhookId?: string };
+    if (!webhookId) return NextResponse.json({ ok: false, error: 'webhookId is required.' }, { status: 400 });
+    return NextResponse.json({ ok: true, action: 'secretState', hasSecret: (await loadWebhookSecret(userId, ws, webhookId)) !== null });
   }
 
   return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });

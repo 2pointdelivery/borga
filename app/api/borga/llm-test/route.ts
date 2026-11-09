@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
-import { resolveProviderConfig } from '@/lib/borga/llm-providers';
-import { getApiKey } from '@/lib/borga/secrets';
+import { resolveProviderConfig, resolveApiKey } from '@/lib/borga/llm-providers';
 import { callLlm } from '@/lib/borga/agent-context';
 
 export const runtime = 'nodejs';
@@ -24,12 +23,11 @@ export async function POST(req: NextRequest) {
   if (!isValidWsId(ws) || typeof providerId !== 'string' || typeof model !== 'string' || !model) {
     return NextResponse.json({ ok: false, error: 'ws, providerId and model are required' }, { status: 400 });
   }
-  if (providerId === 'llm-demo') return NextResponse.json({ ok: true, latencyMs: 0, note: 'Built-in demo needs no key.' });
 
   const cfg = await resolveProviderConfig(providerId, ws, userId);
   if (!cfg.baseUrl) return NextResponse.json({ ok: false, error: 'No base URL configured for this provider.' });
-  const apiKey = cfg.envVar ? await getApiKey(cfg.envVar) : '';
-  if (cfg.envVar && !apiKey) return NextResponse.json({ ok: false, error: `No API key saved (${cfg.envVar}).` });
+  const apiKey = await resolveApiKey(cfg);
+  if (cfg.envVar && !apiKey && !cfg.optionalKey) return NextResponse.json({ ok: false, error: `No API key saved (${cfg.envVar}).` });
 
   const t0 = Date.now();
   try {

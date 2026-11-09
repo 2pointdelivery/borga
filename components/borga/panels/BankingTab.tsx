@@ -1,9 +1,16 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
+import { useFeature } from '@/lib/borga/features-client';
+import { BankFeedCard } from './BankFeedCard';
+import { FxCard } from './FxCard';
+import { PdfStatementDialog } from './PdfStatementDialog';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Landmark,
   Upload,
+  FileText,
   Link2,
   Unplug,
   Check,
@@ -14,6 +21,7 @@ import {
   RefreshCw,
   Pencil,
   Hand,
+  BookOpen,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,6 +30,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -34,37 +43,42 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  fmtNum, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, normalizeReconciliationPattern,
+  PAYMENT_METHODS, PAYMENT_METHOD_LABEL, normalizeReconciliationPattern,
   type BankAccount, type BankTxn, type BankSource, type PaymentMethod, type ReconciliationRule,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL, BANK_ACCOUNT_KINDS, BANK_ACCOUNT_KIND_LABEL } from '@/lib/borga/data';
+import { BANK_ACCOUNT_KINDS, BANK_ACCOUNT_KIND_LABEL } from '@/lib/borga/data';
+import { rankCandidates, AUTO_MATCH_SCORE, type ReconCandidate } from '@/lib/borga/reconcile';
 import { useBorga } from '@/lib/borga/store';
+import { useComposioReady } from '../use-composio-ready';
 import { SectionTitle } from '../bits';
-import { DateInput, Field } from '../form-widgets';
+import { DateInput, Field, AccountSelect } from '../form-widgets';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 /**
- * Reconciliation engine — deterministic two-pass matcher:
- *  1. exact amount match (± date proximity bonus)
- *  2. same-amount candidates within the ledger regardless of description
- * Candidates come from the transaction ledger (revenue = inflow, expense =
- * outflow) plus posted journal entries (cash account lines).
+ * Reconciliation engine — deterministic three-signal matcher (lib/borga/reconcile.ts):
+ * amount (exact → 1% → 5% band), date window (same week → 7 → 14 days) and
+ * payee tokens. Suggestions at or above AUTO_MATCH_SCORE apply by themselves;
+ * the 55–84 band is shown to the human. Candidates come from the transaction
+ * ledger (revenue = inflow, expense = outflow) plus posted journal entries
+ * (cash account lines); confirmed rule memory outranks everything.
  */
 function buildCandidates(
-  finance: { label: string; amount: number; kind: string }[],
-  journals: { id: string; memo: string; status: string; lines: { accountId: string; debit: number; credit: number }[] }[],
+  finance: { label: string; amount: number; kind: string; dateIso?: string }[],
+  journals: { id: string; memo: string; status: string; dateIso?: string; lines: { accountId: string; debit: number; credit: number }[] }[],
   cashAccountIds: Set<string>,
-): { ref: string; amount: number; matchedTo?: string[] }[] {
-  const out: { ref: string; amount: number; matchedTo?: string[] }[] = [];
+): ReconCandidate[] {
+  const out: ReconCandidate[] = [];
   for (const f of finance) {
     const signed = f.kind === 'expense' ? -f.amount : f.amount;
-    out.push({ ref: `Ledger — ${f.label}`, amount: signed });
+    out.push({ ref: `Ledger — ${f.label}`, label: f.label, amount: signed, dateIso: f.dateIso });
   }
   for (const j of journals.filter((j) => j.status === 'posted')) {
     for (const line of j.lines) {
       if (!cashAccountIds.has(line.accountId)) continue;
       const signed = line.debit > 0 ? line.debit : -line.credit;
-      out.push({ ref: `Journal — ${j.memo}`, amount: signed });
+      out.push({ ref: `Journal — ${j.memo}`, label: j.memo, amount: signed, dateIso: j.dateIso });
       break; // only the cash-side line per entry
     }
   }
@@ -75,45 +89,61 @@ interface MatchSuggestion {
   ref: string;
   accountId?: string;
   fromRule?: boolean;
+  /** 0–100 from the scored matcher (absent for rule matches). */
+  score?: number;
+  reasons?: string[];
 }
 
 /**
- * Rule memory takes priority over amount coincidence: a description pattern
- * the user has confirmed before is a stronger signal than two transactions
- * happening to share an amount. Falls back to the existing amount matcher.
+ * Rule memory first: a description pattern the user confirmed before is a
+ * stronger signal than any scoring. Then the scored matcher ranks the
+ * candidates; suggestions below the 55 bar are not shown at all.
  */
-function suggestMatch(txn: BankTxn, candidates: ReturnType<typeof buildCandidates>, rules: ReconciliationRule[]): MatchSuggestion | null {
+function suggestMatch(txn: BankTxn, candidates: ReconCandidate[], rules: ReconciliationRule[]): MatchSuggestion | null {
   const pattern = normalizeReconciliationPattern(txn.description);
   if (pattern) {
     const rule = rules.find((r) => r.pattern && (pattern.includes(r.pattern) || r.pattern.includes(pattern)));
     if (rule) return { ref: `Rule match — "${rule.pattern}"`, accountId: rule.accountId, fromRule: true };
   }
-  // Pass 1: exact amount
-  const exact = candidates.find((c) => Math.abs(c.amount - txn.amount) < 0.005 && !txn.matchedRef);
-  if (exact) return { ref: exact.ref };
-  // Pass 2: closest amount within 5% for larger txns
-  const near = candidates
-    .filter((c) => c.amount !== 0 && Math.abs(c.amount - txn.amount) / Math.abs(txn.amount) < 0.05)
-    .sort((a, b) => Math.abs(a.amount - txn.amount) - Math.abs(b.amount - txn.amount))[0];
-  if (near) return { ref: `${near.ref} (≈ ${fmtNum(Math.abs(near.amount))})` };
-  return null;
+  const ranked = rankCandidates(txn, candidates);
+  const best = ranked[0];
+  if (!best) return null;
+  return {
+    ref: `${best.candidate.ref} — ${best.score}% match`,
+    score: best.score,
+    reasons: best.reasons,
+  };
+}
+
+/** Normalise a suggestion into the "Ledger — X — ≈ 12,345" display form (no stray parens). */
+function matchedRefFor(ref: string): string {
+  return ref.replace(/\s*\(≈\s*/, ' — ≈ ').replace(/\)$/, '');
 }
 
 export function BankingTab() {
   const {
-    bankAccounts, addBankAccount, updateBankAccount, deleteBankAccount,
-    bankTxns, addBankTxns, matchBankTxn, setBankTxnAccount, unmatchBankTxn, excludeBankTxn, deleteBankTxn, updateBankTxn, setSettings,
+    bankAccounts, addBankAccount, updateBankAccount, deleteBankAccount, activeWorkspaceId,
+    bankTxns, addBankTxns, matchBankTxn, bookBankLine, setBankTxnAccount, unmatchBankTxn, excludeBankTxn, deleteBankTxn, updateBankTxn, setSettings,
     reconciliationRules, recordReconciliationMatch, deleteReconciliationRule,
-    finance, journals, coa, composio, log, activeWorkspace, settings,
+    finance, journals, coa, composio, log, activeWorkspace, settings, syncToolkitConnection,
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [selectedAccountId, setSelectedAccountId] = useState<string>(bankAccounts[0]?.id ?? '');
   const [addOpen, setAddOpen] = useState(false);
+  const [editAccount, setEditAccount] = useState<BankAccount | null>(null);
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState<BankAccount | null>(null);
+  const [confirmDeleteTxn, setConfirmDeleteTxn] = useState<BankTxn | null>(null);
+  const [confirmDeleteRule, setConfirmDeleteRule] = useState<ReconciliationRule | null>(null);
+  const lineCountFor = (accountId: string) => bankTxns.filter((t) => t.accountId === accountId).length;
   const [newForm, setNewForm] = useState({ name: '', institution: '', last4: '', kind: 'checking' as BankAccount['kind'], balance: '' });
   const [importOpen, setImportOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const bankFeeds = useFeature('bankFeeds');
+  const { ready: composioReady } = useComposioReady();
+  const hasComposioKey = !!composio.apiKey || composioReady;
   const [csvText, setCsvText] = useState('');
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -123,6 +153,8 @@ export function BankingTab() {
   const [editForm, setEditForm] = useState({ date: '', description: '', amount: '0', method: 'cash' as PaymentMethod });
   const [matchTarget, setMatchTarget] = useState<BankTxn | null>(null);
   const [manualAccountId, setManualAccountId] = useState('');
+  const [bookTarget, setBookTarget] = useState<BankTxn | null>(null);
+  const [bookAccountId, setBookAccountId] = useState('');
 
   const activeAccount = bankAccounts.find((b) => b.id === selectedAccountId) ?? bankAccounts[0] ?? null;
   const accountTxns = useMemo(
@@ -134,8 +166,10 @@ export function BankingTab() {
     [accountTxns, methodFilter],
   );
 
+  // Cash accounts only: the match candidates are ledger postings that move cash.
+  // (Fixed Assets and other non-cash asset accounts must never be offered.)
   const cashAccountIds = useMemo(
-    () => new Set(coa.filter((a) => a.type === 'asset').map((a) => a.id)),
+    () => new Set(coa.filter((a) => a.isCash).map((a) => a.id)),
     [coa],
   );
   const candidates = useMemo(
@@ -175,33 +209,34 @@ export function BankingTab() {
     let count = 0;
     for (const t of bankTxns.filter((x) => x.status === 'unmatched')) {
       const suggestion = suggestMatch(t, candidates, reconciliationRules);
-      if (suggestion) {
-        matchBankTxn(t.id, suggestion.ref.replace(' (≈', ' — ≈').replace('))', ')'), suggestion.accountId);
+      // Only near-certain matches apply without a human; the rest wait for review.
+      if (suggestion && (suggestion.fromRule || (suggestion.score ?? 0) >= AUTO_MATCH_SCORE)) {
+        matchBankTxn(t.id, matchedRefFor(suggestion.ref), suggestion.accountId);
         if (suggestion.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
         count++;
       }
     }
     setSettings({ lastAutoMatchAt: new Date().toISOString() });
     if (count > 0) {
-      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'agent', kind: 'sync', message: `End-of-day auto-reconciliation matched ${count} bank transaction(s).` });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'agent', kind: 'sync', message: `End-of-day auto-reconciliation matched ${count} bank transaction(s) (high-confidence only).` });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bankTxns, candidates]);
 
-  /** Auto-match every unmatched txn that has a deterministic suggestion. */
+  /** Auto-match every unmatched txn that has a high-confidence suggestion. */
   const autoMatchAll = () => {
     let count = 0;
     for (const t of accountTxns.filter((x) => x.status === 'unmatched')) {
       const suggestion = suggestMatch(t, candidates, reconciliationRules);
-      if (suggestion) {
-        matchBankTxn(t.id, suggestion.ref.replace(' (≈', ' — ≈').replace('))', ')'), suggestion.accountId);
+      if (suggestion && (suggestion.fromRule || (suggestion.score ?? 0) >= AUTO_MATCH_SCORE)) {
+        matchBankTxn(t.id, matchedRefFor(suggestion.ref), suggestion.accountId);
         if (suggestion.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
         count++;
       }
     }
     log({
       agentId: 'a-finance', agentName: 'Ledger', actor: 'agent', kind: 'task',
-      message: `Auto-reconciliation matched ${count} of ${accountTxns.filter((x) => x.status === 'unmatched').length + count} bank transactions.`,
+      message: `Auto-reconciliation matched ${count} high-confidence bank transaction(s); the rest stay for review.`,
     });
   };
 
@@ -264,7 +299,6 @@ export function BankingTab() {
           action: 'connect',
           appName: 'plaid',
           entityId: `banking-${activeWorkspace()?.id ?? 'default'}`,
-          apiKey: composio.apiKey,
         }),
       });
       const d = (await res.json()) as { ok?: boolean; connection?: { redirectUrl?: string }; error?: string };
@@ -283,9 +317,9 @@ export function BankingTab() {
             const pr = await fetch('/api/borga/composio', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-              body: JSON.stringify({ action: 'accounts', apiKey: composio.apiKey }),
+              body: JSON.stringify({ action: 'accounts' }),
             });
-            const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { appName?: string; status?: string }[] };
+            const pd = await pr.json() as { ok?: boolean; error?: string; accounts?: { id?: string; appName?: string; status?: string }[] };
             if (!pd.ok) {
               clearInterval(timer);
               updateBankAccount(account.id, { status: 'disconnected' });
@@ -295,6 +329,8 @@ export function BankingTab() {
           if (found) {
             clearInterval(timer);
             updateBankAccount(account.id, { status: 'connected', source: 'composio-plaid' });
+            // Single mirror-sync so Tools cards reflect the link too.
+            syncToolkitConnection('plaid', true, found.id);
             log({
               agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync',
               message: `${account.institution} connected through composio.dev (Plaid). Statement sync is live.`,
@@ -312,19 +348,31 @@ export function BankingTab() {
 
   const submitNewAccount = () => {
     if (!newForm.name.trim()) return;
-    addBankAccount({
-      id: `bank-${Date.now()}`,
-      name: newForm.name.trim(),
-      institution: newForm.institution.trim() || 'Manual',
-      currency,
-      last4: newForm.last4.trim() || '0000',
-      kind: newForm.kind,
-      balance: Number(newForm.balance) || 0,
-      source: 'manual' as BankSource,
-      status: 'disconnected',
-    });
-    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bank account registered: ${newForm.name.trim()}.` });
+    if (editAccount) {
+      updateBankAccount(editAccount.id, {
+        name: newForm.name.trim(),
+        institution: newForm.institution.trim() || editAccount.institution,
+        last4: newForm.last4.trim() || editAccount.last4,
+        kind: newForm.kind,
+        balance: Number(newForm.balance) || editAccount.balance,
+      });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bank account updated: ${newForm.name.trim()}.` });
+    } else {
+      addBankAccount({
+        id: `bank-${Date.now()}`,
+        name: newForm.name.trim(),
+        institution: newForm.institution.trim() || 'Manual',
+        currency,
+        last4: newForm.last4.trim() || '0000',
+        kind: newForm.kind,
+        balance: Number(newForm.balance) || 0,
+        source: 'manual' as BankSource,
+        status: 'disconnected',
+      });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bank account registered: ${newForm.name.trim()}.` });
+    }
     setNewForm({ name: '', institution: '', last4: '', kind: 'checking', balance: '' });
+    setEditAccount(null);
     setAddOpen(false);
   };
 
@@ -364,10 +412,29 @@ export function BankingTab() {
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SectionTitle title="Banking & reconciliation" sub="Connect accounts, import statements and reconcile against the books" />
-        <Button variant="outline" onClick={() => setImportOpen(true)} disabled={!activeAccount}>
-          <Upload className="h-4 w-4" /> Import statement
+        <div className="flex gap-2">
+        <Button variant="outline" onClick={() => setPdfOpen(true)} disabled={bankAccounts.length === 0}>
+          <FileText className="h-4 w-4" /> Import PDF
         </Button>
+        <Button variant="outline" onClick={() => setImportOpen(true)} disabled={!activeAccount}>
+          <Upload className="h-4 w-4" /> Import CSV
+        </Button>
+        </div>
       </div>
+
+      {bankFeeds && <BankFeedCard />}
+      <FxCard />
+      {pdfOpen && (
+        <PdfStatementDialog
+          ws={activeWorkspaceId} accounts={bankAccounts} activeId={activeAccount?.id} existing={bankTxns} currency={currency}
+          onClose={() => setPdfOpen(false)}
+          onImport={(txns, name) => {
+            addBankTxns(txns);
+            log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `Imported ${txns.length} lines from a PDF statement into ${name}.` });
+            setPdfOpen(false);
+          }}
+        />
+      )}
 
       {/* Bank cards */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -384,7 +451,7 @@ export function BankingTab() {
                 </span>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{b.name}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{b.institution} — ——{b.last4} — {BANK_ACCOUNT_KIND_LABEL[b.kind] ?? b.kind}</p>
+                  <p className="truncate text-[11px] text-muted-foreground">{b.institution} ··{b.last4} — {BANK_ACCOUNT_KIND_LABEL[b.kind] ?? b.kind}</p>
                 </div>
               </div>
               <Badge className={cn('shrink-0 text-[9px]', b.status === 'connected' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-muted text-muted-foreground')}>
@@ -402,8 +469,8 @@ export function BankingTab() {
                     size="sm"
                     variant="outline"
                     className="h-7 gap-1"
-                    disabled={!composio.apiKey}
-                    title={composio.apiKey ? 'Link via composio.dev (Plaid)' : 'Requires composio.dev API key'}
+                    disabled={!hasComposioKey}
+                    title={hasComposioKey ? 'Link via composio.dev (Plaid)' : 'Requires composio.dev API key'}
                     onClick={(e) => { e.stopPropagation(); void connectViaComposio(b); }}
                   >
                     <Link2 className="h-3 w-3" /> Link
@@ -412,7 +479,14 @@ export function BankingTab() {
                   <Badge className="gap-1 bg-emerald-500/10 text-emerald-600 text-[9px]"><Zap className="h-2.5 w-2.5" /> live</Badge>
                 )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); deleteBankAccount(b.id); }}
+                  onClick={(e) => { e.stopPropagation(); setEditAccount(b); setNewForm({ name: b.name, institution: b.institution, last4: b.last4, kind: b.kind, balance: String(b.balance) }); setAddOpen(true); }}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                  title="Edit account"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteAccount(b); }}
                   className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                   title="Remove account"
                 >
@@ -431,10 +505,13 @@ export function BankingTab() {
           Add bank account
         </button>
       </div>
-      {!composio.apiKey && (
-        <p className="rounded-lg border border-dashed bg-muted/20 p-2.5 text-[11px] text-muted-foreground">
-          Live feed linking uses composio.dev (Plaid toolkit) — add your API key under Integrations → AI &amp; Voice to enable it. Meanwhile, statements import via CSV and reconcile fully offline.
-        </p>
+      {!hasComposioKey && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed bg-muted/20 p-2.5 text-[11px] text-muted-foreground">
+          <span>
+            Live feed linking uses composio.dev (Plaid toolkit) — add your API key under Integrations → Composio Toolkits to enable it. Meanwhile, statements import via CSV and reconcile fully offline.
+          </span>
+          <ConfigDeepLinkButton target="composio" label="Configure Composio" />
+        </div>
       )}
 
       {/* Reconciliation summary */}
@@ -497,15 +574,18 @@ export function BankingTab() {
           <tbody>
              {visibleTxns.map((t) => {
                const suggestion = t.status === 'unmatched' ? suggestMatch(t, candidates, reconciliationRules) : null;
-               const linkedAccount = coa.find((a) => a.id === t.accountId);
                return (
                 <tr key={t.id} className={cn('border-b last:border-0 hover:bg-muted/20', t.status === 'excluded' && 'opacity-50')}>
                   <td className="whitespace-nowrap px-4 py-2.5 text-xs">{t.date}</td>
                   <td className="px-4 py-2.5">
                     <p className="font-medium">{t.description}</p>
                     {suggestion && (
-                      <p className={cn('text-[10px]', suggestion.fromRule ? 'text-emerald-600' : 'text-sky-600')}>
-                        {suggestion.fromRule ? '🧠 learned: ' : 'suggested: '}{suggestion.ref}
+                      <p
+                        className={cn('text-[10px]', suggestion.fromRule || (suggestion.score ?? 0) >= AUTO_MATCH_SCORE ? 'text-emerald-600' : 'text-sky-600')}
+                        title={(suggestion.reasons ?? []).join(', ')}
+                      >
+                        {suggestion.fromRule ? 'learned: ' : 'suggested: '}{suggestion.ref}
+                        {!suggestion.fromRule && (suggestion.score ?? 0) < AUTO_MATCH_SCORE && ' — review me'}
                       </p>
                     )}
                   </td>
@@ -519,17 +599,11 @@ export function BankingTab() {
                     {t.matchedRef ?? '…'}
                   </td>
                   <td className="px-4 py-2.5">
-                    <Select
-                      value={t.accountId ?? ''}
-                      onValueChange={(v) => setBankTxnAccount(t.id, v)}
-                    >
-                      <SelectTrigger className={cn('h-7 w-40 text-xs', !linkedAccount && 'text-amber-600 border-amber-500/40')}>
-                        <SelectValue placeholder="Unlinked" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {coa.map((a) => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <AccountSelect
+                      value={t.accountId ?? undefined}
+                      onChange={(v) => setBankTxnAccount(t.id, v ?? '')}
+                      placeholder="Unlinked"
+                    />
                   </td>
                   <td className="px-4 py-2.5">
                     <span className={cn(
@@ -545,19 +619,29 @@ export function BankingTab() {
                   </td>
                    <td className="px-2 py-2.5">
                      <div className="flex justify-end gap-0.5">
-                       {t.status === 'unmatched' && (
-                         <button
-                           onClick={() => {
-                             const ref = suggestion?.ref ?? `Manual — ${t.description}`;
-                             matchBankTxn(t.id, ref, suggestion?.accountId);
-                             if (suggestion?.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
-                           }}
-                           className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground enabled:hover:bg-primary/10 enabled:hover:text-primary"
-                           title={suggestion ? `Accept suggestion: ${suggestion.ref}` : 'Mark as matched'}
-                         >
-                           <Check className="h-3 w-3" />
-                         </button>
-                       )}
+                        {t.status === 'unmatched' && (
+                          <button
+                            onClick={() => {
+                              const ref = suggestion?.ref ?? `Manual — ${t.description}`;
+                              matchBankTxn(t.id, ref, suggestion?.accountId);
+                              if (suggestion?.accountId) recordReconciliationMatch(t.description, suggestion.accountId);
+                            }}
+                            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground enabled:hover:bg-primary/10 enabled:hover:text-primary disabled:opacity-30"
+                            disabled={!suggestion}
+                            title={suggestion ? `Accept suggestion: ${suggestion.ref} (${(suggestion.reasons ?? []).join(', ')})` : 'No confident suggestion — book it to the ledger or match by hand'}
+                          >
+                            <Check className="h-3 w-3" />
+                          </button>
+                        )}
+                        {t.status === 'unmatched' && (
+                          <button
+                            onClick={() => { setBookTarget(t); setBookAccountId(t.accountId ?? ''); }}
+                            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-600"
+                            title="Book this bank line straight into the ledger (creates the entry + journal)"
+                          >
+                            <BookOpen className="h-3 w-3" />
+                          </button>
+                        )}
                        {t.status === 'unmatched' && (
                          <button
                            onClick={() => { setManualAccountId(''); setMatchTarget(t); }}
@@ -590,13 +674,13 @@ export function BankingTab() {
                        >
                          <EyeOff className="h-3 w-3" />
                        </button>
-                       <button
-                         onClick={() => deleteBankTxn(t.id)}
-                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                         title="Delete line"
-                       >
-                         <Trash2 className="h-3 w-3" />
-                       </button>
+                        <button
+                          onClick={() => setConfirmDeleteTxn(t)}
+                          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          title="Delete line"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
                      </div>
                    </td>
                 </tr>
@@ -613,7 +697,7 @@ export function BankingTab() {
       {reconciliationRules.length > 0 && (
         <Card className="overflow-hidden">
           <div className="border-b bg-muted/40 px-4 py-2.5">
-            <p className="text-sm font-semibold">🧠 Auto-reconcile rule memory</p>
+            <p className="text-sm font-semibold">Auto-reconcile rule memory</p>
             <p className="text-[11px] text-muted-foreground">Learned from every manual match — new statement lines with a similar description auto-suggest these accounts.</p>
           </div>
           <table className="w-full text-sm">
@@ -637,7 +721,7 @@ export function BankingTab() {
                     <td className="hidden px-4 py-2 text-[11px] text-muted-foreground sm:table-cell">{new Date(r.lastMatchedAt).toLocaleDateString()}</td>
                     <td className="px-2 py-2">
                       <button
-                        onClick={() => deleteReconciliationRule(r.id)}
+                        onClick={() => setConfirmDeleteRule(r)}
                         className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         title="Forget this rule"
                       >
@@ -652,11 +736,11 @@ export function BankingTab() {
         </Card>
       )}
 
-      {/* Add bank account */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      {/* Add / edit bank account */}
+      <Dialog open={addOpen} onOpenChange={(o) => { setAddOpen(o); if (!o) setEditAccount(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add bank account</DialogTitle>
+            <DialogTitle>{editAccount ? `Edit ${editAccount.name}` : 'Add bank account'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
@@ -692,7 +776,8 @@ export function BankingTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={submitNewAccount} disabled={!newForm.name.trim()}>Add account</Button>
+            <Button variant="outline" onClick={() => { setAddOpen(false); setEditAccount(null); }}>Cancel</Button>
+            <Button onClick={submitNewAccount} disabled={!newForm.name.trim()}>{editAccount ? 'Save changes' : 'Add account'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -765,15 +850,13 @@ export function BankingTab() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Match line #{matchTarget?.id.slice(-4)} manually</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
+          </DialogHeader>          <div className="space-y-3">
             <Field label="GL account" hint="Choosing an account here teaches the auto-reconciler this description next time.">
-              <Select value={manualAccountId} onValueChange={setManualAccountId}>
-                <SelectTrigger><SelectValue placeholder="Select an account…" /></SelectTrigger>
-                <SelectContent>
-                  {coa.map((a) => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <AccountSelect
+                value={manualAccountId || undefined}
+                onChange={(v) => setManualAccountId(v ?? '')}
+                placeholder="Select an account…"
+              />
             </Field>
             <div className="max-h-60 space-y-1.5 overflow-y-auto pr-1">
               {candidates.length === 0 && (
@@ -804,6 +887,76 @@ export function BankingTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Book an unmatched line straight into the ledger */}
+      <Dialog open={!!bookTarget} onOpenChange={(o) => { if (!o) setBookTarget(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Book “{bookTarget?.description}” into the ledger</DialogTitle>
+            <DialogDescription>
+              {bookTarget && (bookTarget.amount > 0
+                ? 'Money in: creates a receipt entry and posts DR Cash / CR the income account you pick.'
+                : 'Money out: creates a payment entry and posts DR the expense account you pick / CR Cash.')}
+            </DialogDescription>
+          </DialogHeader>
+          <Field label={bookTarget && bookTarget.amount > 0 ? 'Income account' : 'Expense account'}>
+            <AccountSelect
+              value={bookAccountId || undefined}
+              onChange={(v) => setBookAccountId(v ?? '')}
+              types={bookTarget && bookTarget.amount > 0 ? ['revenue'] : ['expense', 'cost']}
+              placeholder="Pick the account…"
+            />
+          </Field>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBookTarget(null)}>Cancel</Button>
+            <Button disabled={!bookAccountId} onClick={() => { if (bookTarget) { bookBankLine(bookTarget.id, bookAccountId); setBookTarget(null); } }}>
+              Book {bookTarget ? money(Math.abs(bookTarget.amount)) : ''}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteAccount}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteAccount(null); }}
+        title={`Remove ${confirmDeleteAccount?.name ?? 'account'}?`}
+        description={confirmDeleteAccount
+          ? `The account, its imported statement lines (${lineCountFor(confirmDeleteAccount.id)}), and all reconciliation history are deleted permanently.`
+          : ''}
+        confirmLabel="Remove account"
+        onConfirm={() => {
+          if (!confirmDeleteAccount) return;
+          deleteBankAccount(confirmDeleteAccount.id);
+          log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bank account ${confirmDeleteAccount.name} removed with its statement lines.` });
+          setConfirmDeleteAccount(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteTxn}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteTxn(null); }}
+        title="Delete this statement line?"
+        description={confirmDeleteTxn ? `"${confirmDeleteTxn.description}" (${confirmDeleteTxn.amount}) is removed from the statement.` : ''}
+        confirmLabel="Delete line"
+        onConfirm={() => {
+          if (!confirmDeleteTxn) return;
+          deleteBankTxn(confirmDeleteTxn.id);
+          setConfirmDeleteTxn(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDeleteRule}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteRule(null); }}
+        title="Forget this auto-reconcile rule?"
+        description={confirmDeleteRule ? `Pattern "${confirmDeleteRule.pattern}" will no longer auto-suggest matches.` : ''}
+        confirmLabel="Forget rule"
+        onConfirm={() => {
+          if (!confirmDeleteRule) return;
+          deleteReconciliationRule(confirmDeleteRule.id);
+          setConfirmDeleteRule(null);
+        }}
+      />
     </div>
   );
 }
@@ -818,7 +971,7 @@ function TextareaImport({
 }) {
   return (
     <div className="space-y-2">
-      <textarea
+      <Textarea
         rows={7}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -836,7 +989,7 @@ function TextareaImport({
         }}
       />
       <Button size="sm" variant="outline" className="gap-1" onClick={() => fileRef.current?.click()}>
-        <Upload className="h-3 w-3" /> Choose .csv file—
+        <Upload className="h-3 w-3" /> Choose .csv file…
       </Button>
     </div>
   );

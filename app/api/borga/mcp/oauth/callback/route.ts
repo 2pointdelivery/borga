@@ -1,16 +1,22 @@
 import { NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
 import { getBorgaState, setBorgaState } from '@/lib/borga/persistence';
 import { encryptSecret } from '@/lib/borga/secrets';
 import { exchangeMcpOAuthCode } from '@/lib/borga/mcp-client';
 import { userWsKey } from '@/lib/borga/keys';
+import { verifySessionToken } from '@/lib/auth/session';
+import { sessionCookieName } from '@/lib/auth/session';
 import type { McpServer } from '@/lib/borga/data';
 
 export const runtime = 'nodejs';
 
 function popupPage(message: string, ok: boolean): string {
+  // The message can carry provider text (e.g. ?error=...), so escape it: this
+  // page runs on our own origin, where injected markup could read the session.
+  const safe = message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return `<!doctype html><html><body style="font-family:system-ui;background:#0a0a0a;color:#f5f5f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
 <div style="text-align:center;max-width:360px;padding:24px;">
-  <p style="font-size:15px;color:${ok ? '#34d399' : '#f87171'};">${message}</p>
+  <p style="font-size:15px;color:${ok ? '#34d399' : '#f87171'};">${safe}</p>
   <p style="font-size:12px;color:#a3a3a3;">This window will close automatically.</p>
 </div>
 <script>setTimeout(() => window.close(), 1500);</script>
@@ -27,7 +33,7 @@ export async function GET(req: Request) {
   if (errorParam) {
     return new NextResponse(popupPage(`Authorization was not completed: ${errorParam}`, false), { headers: { 'Content-Type': 'text/html' } });
   }
-  if (!code || !state) {
+  if (!code || !state || !/^[A-Za-z0-9_-]{1,128}$/.test(state)) {
     return new NextResponse(popupPage('Missing authorization code.', false), { headers: { 'Content-Type': 'text/html' } });
   }
 
@@ -40,6 +46,17 @@ export async function GET(req: Request) {
   }
   if (Date.now() - record.createdAt > 10 * 60_000) {
     return new NextResponse(popupPage('This authorization request expired. Try connecting again.', false), { headers: { 'Content-Type': 'text/html' } });
+  }
+
+  // Defense in depth (vibe-check #4): when the browser still holds the
+  // dashboard session, it must be the same user who started the flow — so a
+  // leaked callback URL + provider code can't attach tokens to someone else.
+  // (No session at all — e.g. signed in elsewhere — keeps working.)
+  const jar = await cookies();
+  const token = jar.get(sessionCookieName())?.value;
+  const sessionUid = await verifySessionToken(token);
+  if (sessionUid && sessionUid !== record.userId) {
+    return new NextResponse(popupPage('This window is signed in as a different user. Sign in as the account that started the connection and try again.', false), { headers: { 'Content-Type': 'text/html' } });
   }
 
   const exchange = await exchangeMcpOAuthCode(record.tokenEndpoint, {

@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
@@ -23,21 +23,24 @@ import {
 } from '@/lib/borga/tickets';
 import { cn } from '@/lib/utils';
 import { SectionTitle } from '../bits';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 import { Field } from '../form-widgets';
 import { TicketDetailSheet } from '../TicketDetailSheet';
+import { SearchSelect } from '../SearchSelect';
 import { PriorityPill, SlaBadge, StatusPill, slaFor } from '../ticket-bits';
 
 const ALL = '__all__';
 const NONE = '__none__';
 const UNASSIGNED = '__unassigned__';
-const BOARD_COLUMNS: TicketStatus[] = ['open', 'in-progress', 'pending', 'resolved'];
+const BOARD_COLUMNS: TicketStatus[] = ['open', 'in-progress', 'pending', 'resolved', 'closed'];
 const POLL_MS = 20_000;
 const PRIORITY_RANK: Record<TicketPriority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-const EMPTY_FORM = { subject: '', description: '', requesterName: '', requesterEmail: '', type: 'request' as TicketType, priority: 'medium' as TicketPriority, assignee: NONE, projectId: NONE };
+const EMPTY_FORM = { subject: '', description: '', requesterName: '', requesterEmail: '', customerId: NONE, type: 'request' as TicketType, priority: 'medium' as TicketPriority, assignee: NONE, projectId: NONE };
 
 export function TicketsTab() {
-  const { activeWorkspaceId: ws, employees, projects } = useBorga();
+  const { activeWorkspaceId: ws, employees, projects, customers, userName } = useBorga();
+  const actor = userName?.trim() ? userName.trim() : 'Agent';
   const [tickets, setTickets] = useState<TicketSummary[]>([]);
   const [settings, setSettings] = useState<ClientSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,12 +122,14 @@ export function TicketsTab() {
         description: form.description,
         requesterName: form.requesterName,
         requesterEmail: form.requesterEmail,
+        customerId: form.customerId === NONE ? undefined : form.customerId,
         type: form.type,
         priority: form.priority,
         assignee: form.assignee === NONE ? '' : form.assignee,
+        assigneeId: employees.find((e) => e.name === form.assignee)?.id,
         projectId: form.projectId === NONE ? undefined : form.projectId,
       },
-      'Agent',
+      actor,
     );
     setCreating(false);
     if (!r.ok) return toast({ title: 'Could not create ticket', description: r.issues?.join('; ') ?? r.error, variant: 'error' });
@@ -150,7 +155,10 @@ export function TicketsTab() {
       <Card className="p-6 text-sm">
         <p className="font-medium">Support Desk is unavailable</p>
         <p className="mt-1 text-muted-foreground">{error ?? 'Unknown error'}. If the feature was switched off, re-enable it in Settings → Features.</p>
-        <Button size="sm" variant="outline" className="mt-3" onClick={refresh}>Retry</Button>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={refresh}>Retry</Button>
+          <ConfigDeepLinkButton target="features" />
+        </div>
       </Card>
     );
   }
@@ -204,14 +212,19 @@ export function TicketsTab() {
             {TICKET_PRIORITIES.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
-          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>Anyone</SelectItem>
-            <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
-            {assignees.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        <SearchSelect
+          options={[
+            { value: ALL, label: 'Anyone' },
+            { value: UNASSIGNED, label: 'Unassigned' },
+            ...assignees.map((a) => ({ value: a, label: a })),
+          ]}
+          value={assigneeFilter}
+          onChange={setAssigneeFilter}
+          placeholder="Anyone"
+          searchPlaceholder="Search assignees"
+          clearable={false}
+          className="w-40"
+        />
         <div className="flex rounded-md border">
           <Button variant={view === 'list' ? 'secondary' : 'ghost'} size="icon" onClick={() => setView('list')} title="List"><LayoutList className="h-4 w-4" /></Button>
           <Button variant={view === 'board' ? 'secondary' : 'ghost'} size="icon" onClick={() => setView('board')} title="Board"><Columns3 className="h-4 w-4" /></Button>
@@ -254,7 +267,7 @@ export function TicketsTab() {
           </div>
         </Card>
       ) : (
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
           {BOARD_COLUMNS.map((col) => {
             const items = rows.filter((t) => t.status === col);
             return (
@@ -288,13 +301,43 @@ export function TicketsTab() {
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>New ticket</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>New ticket</DialogTitle>
+            <DialogDescription>Open a ticket manually — mailbox emails create them automatically.</DialogDescription>
+          </DialogHeader>
           <div className="grid gap-3">
             <Field label="Subject"><Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} maxLength={200} autoFocus /></Field>
+            <Field label="Customer account (optional)" hint="Links the ticket to the account — pick, or leave on “No account”.">
+              <SearchSelect
+                options={[
+                  { value: NONE, label: 'No account' },
+                  ...customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry })),
+                ]}
+                value={form.customerId}
+                onChange={(v) => {
+                  const picked = customers.find((c) => c.id === v);
+                  setForm((f) => ({
+                    ...f,
+                    customerId: v,
+                    // Offer the account's details as a starting point — editable below.
+                    requesterName: f.requesterName || picked?.name || '',
+                    requesterEmail: f.requesterEmail || picked?.email || '',
+                  }));
+                }}
+                placeholder="No account"
+                searchPlaceholder="Search customers"
+                clearable={false}
+              />
+            </Field>
             <Field label="Description"><Textarea rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Requester name"><Input value={form.requesterName} onChange={(e) => setForm({ ...form, requesterName: e.target.value })} /></Field>
-              <Field label="Requester email" hint="Replies are emailed here"><Input type="email" value={form.requesterEmail} onChange={(e) => setForm({ ...form, requesterEmail: e.target.value })} /></Field>
+              <Field
+                label="Requester email"
+                hint={settings?.mailbox?.enabled ? 'Mailbox is on — replies go to this address' : 'Replies are emailed here'}
+              >
+                <Input type="email" value={form.requesterEmail} onChange={(e) => setForm({ ...form, requesterEmail: e.target.value })} />
+              </Field>
               <Field label="Type">
                 <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as TicketType })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -308,22 +351,30 @@ export function TicketsTab() {
                 </Select>
               </Field>
               <Field label="Assignee">
-                <Select value={form.assignee} onValueChange={(v) => setForm({ ...form, assignee: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>Unassigned</SelectItem>
-                    {employees.map((e) => <SelectItem key={e.id} value={e.name}>{e.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={[
+                    { value: NONE, label: 'Unassigned' },
+                    ...employees.map((e) => ({ value: e.name, label: e.name })),
+                  ]}
+                  value={form.assignee}
+                  onChange={(v) => setForm({ ...form, assignee: v || NONE })}
+                  placeholder="Unassigned"
+                  searchPlaceholder="Search team"
+                  clearable={false}
+                />
               </Field>
               <Field label="Project">
-                <Select value={form.projectId} onValueChange={(v) => setForm({ ...form, projectId: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>No project</SelectItem>
-                    {projects.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={[
+                    { value: NONE, label: 'No project' },
+                    ...projects.map((p) => ({ value: p.id, label: p.name, detail: p.status })),
+                  ]}
+                  value={form.projectId}
+                  onChange={(v) => setForm({ ...form, projectId: v || NONE })}
+                  placeholder="No project"
+                  searchPlaceholder="Search projects"
+                  clearable={false}
+                />
               </Field>
             </div>
           </div>

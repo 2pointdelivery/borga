@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, Pause, Play, Trash2, Pencil, RefreshCw, Repeat } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -9,12 +10,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CURRENCY_SYMBOL, PAYMENT_METHOD_LABEL, fmtNum, type InvoiceLine, type PaymentMethod } from '@/lib/borga/data';
+import { PAYMENT_METHOD_LABEL, type InvoiceLine, type PaymentMethod } from '@/lib/borga/data';
 import { FREQUENCY_LABEL, isFinished, nextRunIso, type RecurringFrequency, type RecurringInvoice } from '@/lib/borga/recurring';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { SectionTitle } from '../bits';
 import { AccountSelect, DateInput, Field, ProjectSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { SearchSelect } from '../SearchSelect';
+import { documentTotals } from '@/lib/borga/pricing';
 
 const NONE = '__none__';
 type EndMode = 'never' | 'date' | 'count';
@@ -51,9 +54,9 @@ const emptyForm = (taxId?: string): Form => ({
 });
 
 export function RecurringInvoicesTab() {
-  const { recurringInvoices, addRecurringInvoice, updateRecurringInvoice, deleteRecurringInvoice, runRecurringInvoices, invoices, customers, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
+  const { recurringInvoices, addRecurringInvoice, updateRecurringInvoice, deleteRecurringInvoice, runRecurringServer, invoices, customers, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -61,17 +64,18 @@ export function RecurringInvoicesTab() {
   const [confirmDelete, setConfirmDelete] = useState<RecurringInvoice | null>(null);
 
   const taxRate = taxProfiles.filter((t) => form.taxProfileIds.includes(t.id)).reduce((s, t) => s + t.rate, 0);
-  const subtotal = form.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-  const total = subtotal + (subtotal * taxRate) / 100;
+  // Same arithmetic the server applies when the occurrence becomes an invoice.
+  const totals = documentTotals(form.lines, { taxRate, currency });
+  const subtotal = totals.subtotal;
+  const total = totals.total;
 
   const rows = useMemo(
     () => recurringInvoices.map((r) => {
       const generated = invoices.filter((i) => i.externalRef?.startsWith(`rec:${r.id}:`));
       const rate = taxProfiles.filter((t) => r.taxProfileIds.includes(t.id)).reduce((s, t) => s + t.rate, 0);
-      const sub = r.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-      return { r, generated, amount: sub + (sub * rate) / 100 };
+      return { r, generated, amount: documentTotals(r.lines, { taxRate: rate, currency }).total };
     }),
-    [recurringInvoices, invoices, taxProfiles],
+    [recurringInvoices, invoices, taxProfiles, currency],
   );
 
   const openCreate = () => {
@@ -131,14 +135,16 @@ export function RecurringInvoicesTab() {
     }
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Recurring invoice "${fields.name}" ${editingId ? 'updated' : 'created'}: ${cadence(fields)} from ${fields.startDateIso}.` });
     setOpen(false);
-    // A schedule starting today (or in the past) should bill right away, not on the next page load.
-    const r = runRecurringInvoices();
-    if (r.created) toast({ title: `${r.created} draft invoice${r.created === 1 ? '' : 's'} created`, description: r.invoices.join(', '), variant: 'success' });
+    // A schedule starting today (or in the past) should bill right away: the server generates it, then this tab reloads.
+    void runRecurringServer().then((r) => {
+      if (r.invoices.length) toast({ title: `${r.invoices.length} draft invoice${r.invoices.length === 1 ? '' : 's'} created`, description: r.invoices.join(', '), variant: 'success' });
+    });
   };
 
   const runNow = () => {
-    const r = runRecurringInvoices();
-    toast(r.created ? { title: `${r.created} draft invoice${r.created === 1 ? '' : 's'} created`, description: `${r.invoices.join(', ')}. Review and send them under Invoicing.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    void runRecurringServer().then((r) => {
+      toast(r.invoices.length ? { title: `${r.invoices.length} draft invoice${r.invoices.length === 1 ? '' : 's'} created`, description: `${r.invoices.join(', ')}. Review and send them under Invoicing.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    });
   };
 
   const setLine = (id: string, patch: Partial<InvoiceLine>) => setForm((f) => ({ ...f, lines: f.lines.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));
@@ -213,26 +219,34 @@ export function RecurringInvoicesTab() {
           <div className="grid gap-3">
             {!editingId && invoices.length > 0 && (
               <Field label="Copy from an existing invoice (optional)">
-                <Select value={NONE} onValueChange={(v) => v !== NONE && copyFrom(v)}>
-                  <SelectTrigger><SelectValue placeholder="Choose an invoice to copy client, lines and tax" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>Start blank</SelectItem>
-                    {invoices.filter((i) => !i.voidedAt).slice(0, 50).map((i) => <SelectItem key={i.id} value={i.id}>{i.number} · {i.client} · {money(i.amount)}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={[
+                    { value: NONE, label: 'Start blank' },
+                    ...invoices.filter((i) => !i.voidedAt).map((i) => ({ value: i.id, label: `${i.number} · ${i.client}`, detail: money(i.amount) })),
+                  ]}
+                  value={NONE}
+                  onChange={(v) => { if (v !== NONE) copyFrom(v); }}
+                  placeholder="Choose an invoice to copy client, lines and tax"
+                  searchPlaceholder="Search invoices"
+                  clearable={false}
+                />
               </Field>
             )}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Schedule name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Monthly hosting — Acme" /></Field>
-              <Field label="Client">
-                <Select value={form.customerId ?? NONE} onValueChange={(v) => { const c = customers.find((x) => x.id === v); setForm({ ...form, customerId: c?.id, client: c?.name ?? form.client }); }}>
-                  <SelectTrigger><SelectValue placeholder="Pick a customer or type below" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>Type a name…</SelectItem>
-                    {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Input className="mt-1.5" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value, customerId: undefined })} placeholder="Client name on the invoice" />
+              <Field label="Customer" hint="Search your customers — or type a name to use it just for this schedule.">
+                <SearchSelect
+                  options={customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry }))}
+                  value={form.customerId ?? form.client}
+                  onChange={(v, option) => {
+                    const c = customers.find((x) => x.id === v);
+                    if (c) setForm({ ...form, customerId: c.id, client: c.name });
+                    else setForm({ ...form, customerId: undefined, client: option?.label ?? v });
+                  }}
+                  placeholder="Search customers or type a name…"
+                  searchPlaceholder="Search customers"
+                  allowCustom
+                />
               </Field>
             </div>
             <div className="grid grid-cols-3 gap-3">
@@ -289,6 +303,9 @@ export function RecurringInvoicesTab() {
               <Field label="Project"><ProjectSelect value={form.projectId} onChange={(v) => setForm({ ...form, projectId: v })} /></Field>
               <Field label="Revenue account"><AccountSelect value={form.accountId} onChange={(v) => setForm({ ...form, accountId: v })} types={['revenue']} /></Field>
             </div>
+            <Field label="Description on each invoice" hint="Copied onto every generated invoice.">
+              <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. Monthly hosting — production support" />
+            </Field>
             <Field label="Notes on each invoice"><Textarea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           </div>
           <DialogFooter>

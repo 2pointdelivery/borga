@@ -1,0 +1,38 @@
+name: mobile-build
+
+# Manual cloud builds for the Expo app in mobile/.
+# Needs repo secrets: EXPO_TOKEN (expo.dev access token).
+# Run from the Actions tab → Run workflow → pick preview (APK) or production (AAB+iOS).
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'EAS build profile'
+        required: true
+        default: 'preview'
+        type: choice
+        options: [preview, production]
+      platform:
+        description: 'Platform'
+        required: true
+        default: 'android'
+        type: choice
+        options: [android, ios, all]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g eas-cli
+      - run: npm install --ignore-scripts
+      - run: npx expo-doctor
+      - run: eas build --platform ${{ inputs.platform }} --profile ${{ inputs.profile }} --non-interactive --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

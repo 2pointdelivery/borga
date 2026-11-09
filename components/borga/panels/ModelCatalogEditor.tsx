@@ -1,12 +1,15 @@
 'use client';
 
+import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useBorga } from '@/lib/borga/store';
+import { toast } from '@/lib/toast-bus';
 import type { LlmProvider, LlmModelInfo, LlmModelTier } from '@/lib/borga/data';
 import { SectionTitle } from '../bits';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 /**
  * Company-specific AI model catalog editor.
@@ -16,6 +19,7 @@ import { SectionTitle } from '../bits';
 export function ModelCatalogEditor() {
   const { llmCatalog, setLlmCatalog } = useBorga();
   const catalog = llmCatalog && llmCatalog.length ? llmCatalog : [];
+  const [confirmDelete, setConfirmDelete] = useState<{ kind: 'provider'; id: string } | { kind: 'model'; pid: string; mid: string } | null>(null);
 
   const update = (next: LlmProvider[]) => setLlmCatalog(next);
 
@@ -28,14 +32,23 @@ export function ModelCatalogEditor() {
       { id: `llm-${Date.now().toString(36)}`, label: 'New Provider', baseUrl: '', accent: '#64748B', envVar: '', models: [] },
     ]);
 
-  const removeProvider = (id: string) => update(catalog.filter((p) => p.id !== id));
+  const doRemoveProvider = (id: string) => {
+    update(catalog.filter((p) => p.id !== id));
+    setConfirmDelete(null);
+  };
 
-  const updateModel = (pid: string, mid: string, patch: Partial<LlmModelInfo>) =>
+  const updateModel = (pid: string, mid: string, patch: Partial<LlmModelInfo>) => {
+    const provider = catalog.find((p) => p.id === pid);
+    if (patch.id !== undefined && patch.id !== mid && provider?.models.some((m) => m.id === patch.id)) {
+      toast({ title: 'Model id already exists', description: `"${patch.id}" is already used by another model in this provider.`, variant: 'warning' });
+      return;
+    }
     update(
       catalog.map((p) =>
         p.id === pid ? { ...p, models: p.models.map((m) => (m.id === mid ? { ...m, ...patch } : m)) } : p,
       ),
     );
+  };
 
   const addModel = (pid: string) =>
     update(
@@ -46,10 +59,12 @@ export function ModelCatalogEditor() {
       ),
     );
 
-  const removeModel = (pid: string, mid: string) =>
+  const doRemoveModel = (pid: string, mid: string) => {
     update(
       catalog.map((p) => (p.id === pid ? { ...p, models: p.models.filter((m) => m.id !== mid) } : p)),
     );
+    setConfirmDelete(null);
+  };
 
   return (
     <div className="max-w-4xl space-y-4">
@@ -76,7 +91,7 @@ export function ModelCatalogEditor() {
               variant="ghost"
               size="icon"
               className="ml-auto h-8 w-8"
-              onClick={() => removeProvider(p.id)}
+              onClick={() => setConfirmDelete({ kind: 'provider', id: p.id })}
               title="Remove provider"
             >
               <Trash2 className="h-4 w-4 text-rose-500" />
@@ -150,7 +165,7 @@ export function ModelCatalogEditor() {
                   className="h-7 w-24 text-xs"
                   placeholder="tag"
                 />
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeModel(p.id, m.id)}>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setConfirmDelete({ kind: 'model', pid: p.id, mid: m.id })} title="Remove model">
                   <Trash2 className="h-3.5 w-3.5 text-rose-500" />
                 </Button>
               </div>
@@ -158,6 +173,23 @@ export function ModelCatalogEditor() {
           </div>
         </Card>
       ))}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onOpenChange={(o) => { if (!o) setConfirmDelete(null); }}
+        title={confirmDelete?.kind === 'model' ? 'Remove this model?' : 'Remove this provider?'}
+        description={
+          confirmDelete?.kind === 'model'
+            ? 'The model is removed from this provider. Anything referencing it falls back to the workspace default model.'
+            : 'The provider and all its models are removed. Anything referencing them falls back to the workspace default.'
+        }
+        confirmLabel={confirmDelete?.kind === 'model' ? 'Remove model' : 'Remove provider'}
+        onConfirm={() => {
+          if (!confirmDelete) return;
+          if (confirmDelete.kind === 'model') doRemoveModel(confirmDelete.pid, confirmDelete.mid);
+          else doRemoveProvider(confirmDelete.id);
+        }}
+      />
     </div>
   );
 }

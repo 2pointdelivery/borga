@@ -25,7 +25,7 @@ Vercel Hobby runs the Next app, but its terms are non-commercial and its cron is
 
 ## Required environment
 `DATABASE_URL`, `SESSION_SECRET`, `BORGA_SECRET_KEY` (64 hex chars), `CRON_SECRET`, `SMTP_*` + `EMAIL_FROM`.
-Optional: `BORGA_ADMIN_TOKEN`, `BORGA_FEATURES_OFF`. Run `pnpm db:migrate` once.
+Optional: `BORGA_ADMIN_TOKEN`, `BORGA_FEATURES_OFF`. Run `pnpm db:migrate` once (the Docker stack in `deploy/` does it automatically on every start; `pnpm db:migrate -- --dry-run` previews).
 Never bake `.env` into an image (the Dockerfile no longer does).
 
 ## Free-tier hardening checklist

@@ -2,6 +2,7 @@ import 'server-only';
 import { registerSyncJob } from './sync-jobs';
 import { runSupermemorySync } from './supermemory-sync';
 import { runEmailJobs } from './email-notify';
+import { runExpleeSync } from './explee-server';
 
 /**
  * Registers every background sync job. Each phase of docs/REAL_FEATURES_PLAN.md adds one
@@ -25,5 +26,18 @@ registerSyncJob({
   everyMs: 15 * 60_000,
   run: async ({ userId, ws }) => {
     await runEmailJobs(userId, ws);
+  },
+});
+
+// Explee hot leads: pull newly-hot leads into the pipeline every 10 minutes and
+// return what landed so the browser tick can refresh the dashboard.
+registerSyncJob({
+  id: 'explee-hot-leads',
+  feature: 'explee',
+  everyMs: 10 * 60_000,
+  run: async ({ userId, ws }) => {
+    const r = await runExpleeSync(userId, ws);
+    if (!r.ran) return;
+    return { added: r.added ?? 0, updated: r.updated ?? 0, cursor: r.cursor };
   },
 });

@@ -46,6 +46,7 @@ export async function GET(req: NextRequest) {
   const wsParam = searchParams.get('ws');
   const ws = isValidWsId(wsParam) ? wsParam : null;
   const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
   const memories = await loadMemories(ws, userId);
   const filtered = memories.filter((m) => {
@@ -66,6 +67,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Forbidden.' }, { status: 403 });
   }
   const userId = await getUserId(req);
+  if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
   let body: {
     action?: string;

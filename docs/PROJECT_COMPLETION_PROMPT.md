@@ -57,7 +57,7 @@ Be practical and execution-focused. No generic project-management advice. Identi
 
 **12. Known blockers, risks and unresolved decisions:** ChatGPT Ads API spec and credential not yet supplied; no real-account verification of Twilio/Meta/IMAP/SMTP/Supermemory/CRM; Oracle account and domain not confirmed **[FILL]**; accountant review for ASC 606 rules; counsel review of call-recording consent; Twilio Ghana number availability; whether launch is single-tenant or multi-tenant (several secrets are not yet per-tenant); data-loss risk from uncommitted work.
 
-**13. Existing project materials:** repository `C:\laragon\www\comprun` (see the docs listed in "How to work"); `.github/workflows/ci.yml`; `deploy/`; test scripts `scripts/smoke-supermemory.mjs`. **[FILL: links to Figma, contracts, customer feedback if any.]**
+**13. Existing project materials:** repository `C:\laragon\www\comprun` (see the docs listed in "How to work"); `.github/workflows/ci.yml`; `deploy/`. **[FILL: links to Figma, contracts, customer feedback if any.]**
 
 **14. Definition of success:** the project is successful only when **all** of these are true (edit freely):
 1. `main` is committed, CI (typecheck, lint, test, build) is green, and the repo has a tagged release.

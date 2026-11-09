@@ -3,17 +3,20 @@ import crypto from 'node:crypto';
 
 // Password hashing using Node's built-in scrypt (no extra dependency).
 // Storage format: `<saltHex>:<hashHex>` where both are 32+ byte hex strings.
+// Parameters are pinned (vibe-check #16) so every deployment hashes identically.
+
+const SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 } as const;
 
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64, SCRYPT_OPTS).toString('hex');
   return `${salt}:${hash}`;
 }
 
 export function verifyPassword(password: string, stored: string): boolean {
   const [salt, hash] = stored.split(':');
   if (!salt || !hash) return false;
-  const computed = crypto.scryptSync(password, salt, 64).toString('hex');
+  const computed = crypto.scryptSync(password, salt, 64, SCRYPT_OPTS).toString('hex');
   const a = Buffer.from(hash, 'hex');
   const b = Buffer.from(computed, 'hex');
   if (a.length !== b.length) return false;
@@ -24,10 +27,15 @@ export function verifyPassword(password: string, stored: string): boolean {
 // database dump can't be used to reset passwords. We use a keyed HMAC (rather
 // than scrypt) so the stored value is deterministic and can be looked up
 // directly in the database without iterating over every user.
-const RESET_SECRET = process.env.SESSION_SECRET ?? 'borga-reset-v1';
+function resetSecret(): string {
+  const s = process.env.SESSION_SECRET;
+  if (s && s.length >= 16) return s;
+  if (process.env.NODE_ENV === 'production') throw new Error('SESSION_SECRET (16+ chars) must be set in production');
+  return 'borga-reset-v1';
+}
 
 export function hashToken(token: string): string {
-  return crypto.createHmac('sha256', RESET_SECRET).update(token).digest('hex');
+  return crypto.createHmac('sha256', resetSecret()).update(token).digest('hex');
 }
 
 export function verifyToken(token: string, stored: string): boolean {

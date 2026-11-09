@@ -35,6 +35,13 @@ const eslintConfig = defineConfig([
     // Standalone static-export project with its own toolchain/tsconfig —
     // see landing-site/README.md.
     'landing-site/**',
+    // Expo React Native app with its own toolchain (npm, React 18) and CI
+    // path (.github/workflows/mobile-build.yml) — the Next.js web config
+    // misfires on it (e.g. react-hooks/purity false positives).
+    'mobile/**',
+    // Nested agent worktrees are separate checkouts with their own lifecycle,
+    // not part of this tree's lint/build.
+    '.claude/**',
   ]),
 ]);
 

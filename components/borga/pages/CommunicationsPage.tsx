@@ -1,26 +1,21 @@
 'use client';
 
-import { useState } from 'react';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { InboxTab } from '../panels/InboxTab';
-import { SecureChatTab } from '../panels/SecureChatTab';
-import { CallsTab } from '../panels/CallsTab';
+import { InboxWorkspace } from '../InboxWorkspace';
 import { useFeature } from '@/lib/borga/features-client';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 
 export function CommunicationsPage({ initialTab }: { initialTab?: string }) {
-  const [tab, setTab] = useState(initialTab ?? 'inbox');
-  const calls = useFeature('calls');
+  void initialTab;
+  const inbox = useFeature('inbox');
   const secure = useFeature('secureChat');
-  return (
-    <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
-      <TabsList>
-        <TabsTrigger value="inbox">Unified Inbox</TabsTrigger>
-        {secure && <TabsTrigger value="securechat">Encrypted Chat</TabsTrigger>}
-        {calls && <TabsTrigger value="calls">Calls</TabsTrigger>}
-      </TabsList>
-      <TabsContent value="inbox"><InboxTab /></TabsContent>
-      {secure && <TabsContent value="securechat"><SecureChatTab /></TabsContent>}
-      {calls && <TabsContent value="calls"><CallsTab /></TabsContent>}
-    </Tabs>
-  );
+  const calls = useFeature('calls');
+  if (!inbox && !secure && !calls) {
+    return (
+      <div className="flex flex-col items-center gap-3 p-10 text-center text-sm text-muted-foreground">
+        <p>All inbox features are switched off — enable them under Settings → Features.</p>
+        <ConfigDeepLinkButton target="features" />
+      </div>
+    );
+  }
+  return <InboxWorkspace mode="full" />;
 }

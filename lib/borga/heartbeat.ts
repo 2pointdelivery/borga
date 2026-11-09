@@ -1,23 +1,30 @@
 import 'server-only';
-import { getBorgaState, setBorgaState, listBorgaKeys, scopedKey } from './persistence';
+import { getBorgaState, getBorgaRowOrThrow, setBorgaState, setBorgaStateIfVersion, listBorgaKeys, scopedKey } from './persistence';
 import { userWsKey } from './keys';
-import { INITIAL_SCHEDULED_TASKS, INITIAL_NOTICES, type ScheduledTask, type ScheduleInterval, type SettingsState, type ProactiveNotice } from './data';
-import { buildAgentContext } from './agent-context';
-import { executeAgentRun, persistRun, auditRun } from './agent-runner';
+import { INITIAL_SCHEDULED_TASKS, type ScheduledTask, type ScheduleInterval, type ProactiveNotice } from './data';
+import { enqueueRun } from './run-queue';
+import { loadSettings, DEFAULT_QUIET } from './heartbeat-settings';
+import { addNotice } from './notices';
+import { claimScheduledSlot, releaseScheduledSlot, type ClaimDeps } from './schedule-claim';
+
+// Settings + notices moved to their own modules: the run queue needs both and
+// heartbeat needs the queue — re-exported here so every existing import keeps working.
+export { DEFAULT_QUIET, loadSettings, settingsKey } from './heartbeat-settings';
+export { noticesKey, loadNotices, addNotice } from './notices';
 
 /**
  * Always-on home: the heartbeat as a plain library. The browser tick, the
  * scheduler route, and the cron entrypoint are all thin callers of
  * tickWorkspace — the loop doesn't care which machine it's on. Relocation is
- * a new caller, not a rewrite.
+ * a new caller, not a rewrite. Due tasks no longer run inline: they enqueue
+ * on the run queue and the worker pool executes them (visible, cancellable,
+ * concurrency-bounded), then updates each task's stats when the run lands.
  */
 
-export const DEFAULT_QUIET = { start: '22:00', end: '07:00' };
 export const OVERLAP_STALE_MS = 15 * 60 * 1000;
 
-export function computeNextRun(interval: ScheduleInterval, fromNow = true): string {
-  const now = new Date();
-  const d = fromNow ? new Date(now) : new Date(now);
+export function computeNextRun(interval: ScheduleInterval): string {
+  const d = new Date();
   switch (interval) {
     case 'hourly': d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1); break;
     case 'daily': d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); break;
@@ -29,14 +36,6 @@ export function computeNextRun(interval: ScheduleInterval, fromNow = true): stri
 
 export function tasksKey(ws: string | null | undefined, userId: string | null | undefined): string {
   return ws && userId ? userWsKey(userId, ws, 'scheduledTasks') : scopedKey(ws, 'scheduledTasks');
-}
-
-export function noticesKey(ws: string | null | undefined, userId: string | null | undefined): string {
-  return ws && userId ? userWsKey(userId, ws, 'notices') : scopedKey(ws, 'notices');
-}
-
-export function settingsKey(ws: string | null | undefined, userId: string | null | undefined): string {
-  return ws && userId ? userWsKey(userId, ws, 'settings') : scopedKey(ws, 'settings');
 }
 
 export async function loadTasks(ws: string | null | undefined, userId: string | null | undefined): Promise<ScheduledTask[]> {
@@ -55,19 +54,19 @@ export async function saveTasks(tasks: ScheduledTask[], ws: string | null | unde
   await setBorgaState(tasksKey(ws, userId), tasks.slice(0, 50));
 }
 
-export async function loadNotices(ws: string | null | undefined, userId: string | null | undefined): Promise<ProactiveNotice[]> {
-  return (await getBorgaState<ProactiveNotice[]>(noticesKey(ws, userId))) ?? [...INITIAL_NOTICES];
+/**
+ * One claim row per scheduled task, in the workspace's own key space. The
+ * claim is what makes "enqueue this due task" single-winner across concurrent
+ * beats (autopilot + cron + another process), not just within one tick.
+ */
+export function scheduleClaimKey(ws: string | null | undefined, userId: string | null | undefined, taskId: string): string {
+  return ws && userId ? userWsKey(userId, ws, `scheduledClaim::${taskId}`) : scopedKey(ws, `scheduledClaim::${taskId}`);
 }
 
-export async function addNotice(notice: ProactiveNotice, ws: string | null | undefined, userId: string | null | undefined): Promise<void> {
-  const existing = await loadNotices(ws, userId);
-  await setBorgaState(noticesKey(ws, userId), [notice, ...existing].slice(0, 100));
-  if (notice.severity === 'urgent' && ws && userId) void import('./email-notify').then((m) => m.notifyEvent(userId, ws, 'agent_urgent', { title: notice.title, body: notice.body, at: notice.createdAt })).catch(() => undefined);
-}
-
-export async function loadSettings(ws: string | null | undefined, userId: string | null | undefined): Promise<SettingsState | null> {
-  return (await getBorgaState<SettingsState>(settingsKey(ws, userId))) ?? null;
-}
+const claimDeps: ClaimDeps = {
+  read: (key) => getBorgaRowOrThrow(key),
+  writeIfVersion: (key, value, expected) => setBorgaStateIfVersion(key, value, expected),
+};
 
 function toMinutes(hhmm: string): number | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
@@ -101,15 +100,22 @@ export interface TickResult {
 
 /**
  * One heartbeat beat for one workspace. Kill switch first, overlap-skip
- * second, quiet-hours defer third. In-process runs with explicit ws/userId —
- * no browser session required, so cron and laptop tick share this exactly.
+ * second, quiet-hours defer third. Due tasks are enqueued on the run queue —
+ * the pool executes them and updates the task row (runCount, lastResult) on
+ * completion, so a slow run never blocks the tick.
  */
-export async function tickWorkspace(ws: string | null, userId: string | null, companyName = 'the company'): Promise<TickResult> {
+export async function tickWorkspace(ws: string | null, userId: string | null): Promise<TickResult> {
   const now = new Date();
   const settings = await loadSettings(ws, userId);
   if (settings?.heartbeatPaused === true) {
     return { paused: true, triggered: [], held: [], skippedOverlap: [], checked: 0 };
   }
+  // Hand fresh work to the agents that own it (stale leads, overdue invoices, unowned tickets). Never blocks the beat.
+  if (ws && userId) void import('./automations').then((m) => m.runAutomations(userId, ws)).catch((e) => console.error('[automation] scan failed', e));
+  // User-built flows: due schedules/crons plus scan-derived events (stale leads, overdue invoices). Never blocks the beat.
+  if (ws && userId) void import('./flows-server').then((m) => m.beatFlows(userId, ws)).catch((e) => console.error('[flows] beat failed', e));
+  // Recurring billing: draft invoices and unpaid bills for due occurrences (single ownership — the dashboard no longer generates them).
+  if (ws && userId) void import('./recurring-server').then((m) => m.runRecurringDocs(userId, ws)).catch((e) => console.error('[recurring] beat failed', e));
   const tasks = await loadTasks(ws, userId);
   const due = tasks.filter((t) => t.enabled && t.nextRun && new Date(t.nextRun) <= now);
   if (!due.length) return { triggered: [], held: [], skippedOverlap: [], checked: tasks.length };
@@ -126,7 +132,7 @@ export async function tickWorkspace(ws: string | null, userId: string | null, co
     }
     if (quiet && !task.urgent) {
       held.push(task.id);
-      await addNotice({
+      const notice: ProactiveNotice = {
         id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         title: `Held for quiet hours — ${task.name}`,
         body: `Due at ${now.toLocaleTimeString()} but quiet hours are on. It will run after the window.`,
@@ -135,30 +141,32 @@ export async function tickWorkspace(ws: string | null, userId: string | null, co
         taskId: task.id,
         createdAt: now.toISOString(),
         readAt: null,
-      }, ws, userId);
+      };
+      await addNotice(notice, ws, userId);
       continue;
     }
-    await setBorgaState(tasksKey(ws, userId), (await loadTasks(ws, userId)).map((t) => (t.id === task.id ? { ...t, runningSince: now.toISOString() } : t)));
     try {
-      const ctx = await buildAgentContext(task.agentId, ws, userId, task.goal);
-      const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      const run = await executeAgentRun(runId, task.agentId, ctx?.agent.name ?? task.agentId, task.goal, 6, ctx, 'scheduler', now.toISOString(), ws, companyName, userId);
-      await persistRun(run, ws, userId);
-      await auditRun(run, ctx?.agent.model || null, null, task.goal.length, ws, userId);
+      // Conditional write first: two beats (the in-process autopilot and the cron
+      // endpoint, or two app processes) must never both enqueue this occurrence.
+      const slot = `${task.id}:${task.nextRun ?? ''}`;
+      const claimKey = scheduleClaimKey(ws, userId, task.id);
+      let claimed = false;
+      try {
+        claimed = await claimScheduledSlot(claimDeps, claimKey, slot);
+      } catch (error) {
+        console.error('[scheduler] could not claim a due task:', error);
+      }
+      if (!claimed) {
+        skippedOverlap.push(task.id);
+        continue;
+      }
+      await enqueueRun({ agentId: task.agentId, goal: task.goal, triggeredBy: 'scheduler', ws, userId, urgent: task.urgent, schedTaskId: task.id, maxSteps: 6 });
       triggered.push(task.id);
-      await addNotice({
-        id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        title: task.urgent ? `Urgent check ran — ${task.name}` : task.name,
-        body: (run.summary ?? `Ran at ${now.toLocaleTimeString()}.`).slice(0, 500),
-        severity: task.urgent ? 'urgent' : 'noteworthy',
-        source: 'scheduler',
-        taskId: task.id,
-        runId: run.id,
-        createdAt: now.toISOString(),
-        readAt: null,
-      }, ws, userId);
+      // Mark running + push nextRun now so the next tick can't double-fire a slow run.
+      await setBorgaState(tasksKey(ws, userId), (await loadTasks(ws, userId)).map((t) => (t.id === task.id ? { ...t, runningSince: now.toISOString(), nextRun: computeNextRun(t.interval) } : t)));
     } catch {
-      // Best-effort; marker cleared below
+      // Enqueue failed — release the claim and leave the marker clear so the next tick retries.
+      await releaseScheduledSlot(claimDeps, scheduleClaimKey(ws, userId, task.id), `${task.id}:${task.nextRun ?? ''}`).catch(() => false);
     }
   }
 
@@ -167,39 +175,23 @@ export async function tickWorkspace(ws: string | null, userId: string | null, co
     if (held.includes(t.id)) return { ...t, lastResult: `Held for quiet hours at ${now.toLocaleTimeString()} — runs after the window.` };
     if (skippedOverlap.includes(t.id)) return t;
     if (!triggered.includes(t.id)) return { ...t, runningSince: null };
-    return { ...t, lastRun: now.toISOString(), nextRun: computeNextRun(t.interval), runCount: t.runCount + 1, lastResult: `Triggered at ${now.toLocaleTimeString()}`, runningSince: null };
+    return t; // already marked runningSince + nextRun at enqueue time
   });
   await saveTasks(updated, ws, userId);
   return { triggered, held, skippedOverlap, checked: tasks.length };
 }
 
-/** Manual trigger: bypasses quiet hours (user is present), keeps overlap guard. */
-export async function triggerTask(ws: string | null, userId: string | null, id: string, companyName = 'the company'): Promise<{ ok: boolean; run?: { id?: string; summary?: string }; error?: string }> {
+/** Manual trigger: bypasses quiet hours (user is present), keeps overlap guard. Enqueues and returns immediately. */
+export async function triggerTask(ws: string | null, userId: string | null, id: string): Promise<{ ok: boolean; jobId?: string; error?: string }> {
   const tasks = await loadTasks(ws, userId);
   const task = tasks.find((t) => t.id === id);
   if (!task) return { ok: false, error: 'Task not found' };
   if (isRunning(task)) return { ok: false, error: 'That check is still running — skipped to avoid overlap.' };
+  const now = new Date();
+  await setBorgaState(tasksKey(ws, userId), tasks.map((t) => (t.id === id ? { ...t, runningSince: now.toISOString() } : t)));
   try {
-    await setBorgaState(tasksKey(ws, userId), tasks.map((t) => (t.id === id ? { ...t, runningSince: new Date().toISOString() } : t)));
-    const ctx = await buildAgentContext(task.agentId, ws, userId, task.goal);
-    const now = new Date();
-    const run = await executeAgentRun(`run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, task.agentId, ctx?.agent.name ?? task.agentId, task.goal, 6, ctx, 'scheduler', now.toISOString(), ws, companyName, userId);
-    await persistRun(run, ws, userId);
-    await auditRun(run, ctx?.agent.model || null, null, task.goal.length, ws, userId);
-    const latest = await loadTasks(ws, userId);
-    await saveTasks(latest.map((t) => (t.id === id ? { ...t, lastRun: now.toISOString(), runCount: t.runCount + 1, lastResult: run.summary ?? 'Completed', runningSince: null } : t)), ws, userId);
-    await addNotice({
-      id: `n-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      title: task.name,
-      body: (run.summary ?? 'Completed manually.').slice(0, 500),
-      severity: 'noteworthy',
-      source: 'scheduler',
-      taskId: id,
-      runId: run.id,
-      createdAt: now.toISOString(),
-      readAt: null,
-    }, ws, userId);
-    return { ok: true, run: { id: run.id, summary: run.summary } };
+    const job = await enqueueRun({ agentId: task.agentId, goal: task.goal, triggeredBy: 'scheduler', ws, userId, urgent: task.urgent, schedTaskId: id, maxSteps: 6 });
+    return { ok: true, jobId: job.id };
   } catch (e) {
     const latest = await loadTasks(ws, userId);
     await saveTasks(latest.map((t) => (t.id === id ? { ...t, runningSince: null } : t)), ws, userId);

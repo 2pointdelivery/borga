@@ -1,5 +1,6 @@
 'use client';
 
+import { MAILDOG_URL } from '@/lib/borga/maildog';
 import { useCallback, useEffect, useState } from 'react';
 import { Mail, Loader2, Send, X, Plus, AlertTriangle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -11,15 +12,40 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import type { DigestFrequency, EmailEventDef, EmailEventId, EmailSettings } from '@/lib/borga/email-core';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
+
+interface LogRow {
+  at: string;
+  event: string;
+  subject: string;
+  recipients: number;
+  sent: number;
+  ok: boolean;
+  note?: string;
+  detail?: boolean;
+  messageId?: string;
+  to?: string;
+  status?: 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'complained';
+  provider?: 'smtp' | 'postmark';
+}
+
+interface SuppressedRow {
+  email: string;
+  reason: string;
+  at: string;
+}
 
 interface State {
   featureOn: boolean;
   smtpConfigured: boolean;
+  provider: 'postmark' | 'smtp' | 'none';
   settings: EmailSettings;
   appUrl: string | null;
   ownerEmail: string | null;
   events: EmailEventDef[];
-  log: Array<{ at: string; event: string; subject: string; recipients: number; sent: number; ok: boolean; note?: string }>;
+  log: LogRow[];
+  suppressed: SuppressedRow[];
+  suppressionCount: number;
 }
 
 const HEADERS = { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' };
@@ -85,22 +111,35 @@ export function EmailUpdatesCard() {
   const wsName = activeWorkspace()?.name ?? 'this company';
 
   return (
-    <Card className="space-y-4 p-5">
+    <Card id="config-email-updates" className="space-y-4 p-5 scroll-mt-20">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Mail className="h-4 w-4 text-primary" /> Email updates for {wsName}
           <Badge variant={set.enabled ? 'secondary' : 'outline'}>{set.enabled ? 'On' : 'Off'}</Badge>
+          {s.provider === 'postmark' && <Badge variant="secondary">Postmark</Badge>}
+          {s.provider === 'smtp' && <Badge variant="outline">SMTP</Badge>}
         </div>
         <Switch checked={set.enabled} onCheckedChange={(v) => save({ enabled: v })} aria-label="Turn email updates on or off" />
       </div>
       <p className="text-xs text-muted-foreground">
         Transactional emails and a digest for this company only. Other companies on your account have their own recipients and switches. Nothing is sent while this is off.
+        {s.provider === 'postmark' && ' Sending through Postmark: bounces and complaints suppress automatically, opens and clicks are tracked.'}
       </p>
 
       {!s.smtpConfigured && (
-        <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-700">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Outgoing email (SMTP) is not configured, so nothing can be delivered. Add the SMTP settings under Integrations → AI &amp; Voice, then send a test email here.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-300">
+          <p className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              Outgoing email (SMTP) is not configured, so nothing can be delivered. Add the SMTP settings under Integrations → Connections, then send a test email here. No mail server?{' '}
+              <a href={MAILDOG_URL} target="_blank" rel="noopener noreferrer" className="font-medium underline">
+                Create a MailDog account
+              </a>{' '}
+              to get your email address and SMTP details.
+            </span>
+          </p>
+          <ConfigDeepLinkButton target="smtp" label="Configure SMTP →" />
+        </div>
       )}
       {!s.appUrl && <p className="text-[11px] text-muted-foreground">Links back to Borga appear in emails once the public address is known. It is remembered when you save here from your browser, or set <code>APP_URL</code> on the server.</p>}
 
@@ -126,6 +165,11 @@ export function EmailUpdatesCard() {
           <label className="text-xs text-muted-foreground" htmlFor="mail-replyto">Reply-to</label>
           <Input id="mail-replyto" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} onBlur={() => replyTo !== set.replyTo && (replyTo === '' || EMAIL_RE.test(replyTo)) && save({ replyTo })} placeholder="optional, e.g. finance@yourco.com" className="h-8 max-w-xs" />
         </div>
+        {s.provider === 'postmark' && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch checked={set.tracking ?? true} onCheckedChange={(v) => save({ tracking: v })} /> Track opens and clicks (Postmark only; SMTP mail is never tracked)
+          </label>
+        )}
       </div>
 
       <div className="divide-y rounded-lg border">
@@ -165,13 +209,37 @@ export function EmailUpdatesCard() {
         </label>
       </div>
 
+      {s.suppressed.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer font-medium">Suppressed addresses ({s.suppressed.length} of {s.suppressionCount} total)</summary>
+          <p className="mt-1 text-muted-foreground">Hard bounces and spam complaints stop delivery automatically — yours are listed here, shared across companies. Fixed a typo? Remove it to try again.</p>
+          <ul className="mt-2 divide-y rounded-lg border">
+            {s.suppressed.map((x) => (
+              <li key={x.email} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                <span className="min-w-0 truncate">{x.email} <span className="text-muted-foreground">· {x.reason.replace(/-/g, ' ')} · {new Date(x.at).toLocaleDateString()}</span></span>
+                <button
+                  type="button"
+                  className="shrink-0 text-muted-foreground hover:text-foreground hover:underline"
+                  onClick={() => post({ action: 'removeSuppression', email: x.email }).then(() => load())}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
       {s.log.length > 0 && (
         <details className="text-xs">
           <summary className="cursor-pointer font-medium">Recent emails ({s.log.length})</summary>
           <ul className="mt-2 divide-y rounded-lg border">
             {s.log.map((l) => (
-              <li key={l.at + l.subject} className="flex items-center justify-between gap-3 px-3 py-1.5">
-                <span className="min-w-0 truncate">{l.subject}</span>
+              <li key={(l.messageId ?? l.at) + (l.to ?? l.subject)} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                <span className="min-w-0 truncate">
+                  {l.detail ? <span className="text-muted-foreground">→ {l.to} · </span> : null}{l.subject}
+                  {l.status && l.status !== 'sent' && <span className={l.status === 'bounced' || l.status === 'complained' ? 'text-rose-600' : 'text-emerald-600'}> · {l.status}</span>}
+                </span>
                 <span className={l.ok ? 'shrink-0 text-muted-foreground' : 'shrink-0 text-rose-600'}>{new Date(l.at).toLocaleString()} · {l.sent}/{l.recipients}{l.note ? ` · ${l.note}` : ''}</span>
               </li>
             ))}

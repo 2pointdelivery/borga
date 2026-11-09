@@ -2,7 +2,7 @@
 
 An agentic, workspace-based (multi-company) business suite: a full-stack CRM covering sales,
 marketing, advertising, fundraising, finance & reporting, HR, company valuation and analytics —
-with unified messaging (email / SMS / WhatsApp / Telegram), end-to-end encrypted live chat, and
+with unified messaging (email / SMS / WhatsApp / Telegram) and
 composio.dev-powered OAuth integrations.
 
 ## Modules
@@ -12,8 +12,7 @@ Eleven top-level themes, each with a tabbed sub-menu:
 - **Overview** — Command Center — Analytics (health score, funnel, engagement) — KPIs & Reports
 - **Sales** — Pipeline (kanban) — Customers (accounts + contacts CRM with account intelligence) — Invoicing (full CRUD)
 - **Marketing** — Social Media scheduling — Advertising campaigns (spend / ROAS)
-- **Communications** — Unified Inbox (email / SMS / WhatsApp / Telegram with composio.dev OAuth) — E2E encrypted live chat — Calls
-- **Support Desk** — Tickets (list / board, Jira-style workflow, SLA timers) — SLA & Mailbox (policies, business hours, linked email inbox). See [docs/TICKETING.md](docs/TICKETING.md)
+- **Communications** — Unified Inbox (email / SMS / WhatsApp / Telegram with composio.dev OAuth) — Calls
 - **Support Desk** — Tickets (list / board, Jira-style workflow, SLA timers) — SLA & Mailbox (policies, business hours, linked email inbox). See [docs/TICKETING.md](docs/TICKETING.md)
 - **Finance** — Ledger — Accounting (chart of accounts, double-entry journal, trial balance) — Banking (CSV import, reconciliation engine, composio.dev/Plaid linking) — Vendors & AP (vendors + bills) — Reports (P&L, balance-sheet snapshot, CSV export)
 - **HR** — Directory — Time Off (leave approvals) — Teams
@@ -52,7 +51,7 @@ documents in MySQL (`u::<user>::ws::<id>::<entity>` keys in `borga_state`; ticke
 - `components/borga/` — dashboard shell, grouped navigation (`nav.ts`), workspace switcher &
   dialogs, voice assistant, command palette, and one panel per module in `panels/`
 - `lib/borga/` — domain types & seeds (`data.ts`), Zustand store (`store.ts`), MySQL
-  persistence, E2E crypto helpers (`crypto.ts`), agent context/tools/secrets
+  persistence, agent context/tools/secrets
 - `components/ui/` — shadcn-style primitives; `hooks/`, `utils/`, `scripts/`
 
 ## Deployment
@@ -80,17 +79,9 @@ features off for a whole deployment.
 
 Settings → Features switches modules on/off per workspace (registry: `lib/borga/features.ts`). Off = hidden from navigation and its API answers 404; data is kept. `BORGA_FEATURES_OFF=voice,calls` forces features off for a whole deployment.
 
-## More docs
-
-- [docs/TICKETING.md](docs/TICKETING.md): support desk design, email setup, wiring plan
-- [docs/HOSTING.md](docs/HOSTING.md): free hosting options
-- [docs/MATURITY.md](docs/MATURITY.md): what needs attention
-
 ## Security notes
 
 - API writes are gated by a CSRF custom header (`X-Borga-Client`) plus optional shared-secret
   (`BORGA_ADMIN_TOKEN`) and rate limiting in `proxy.ts`.
-- Encrypted chat stores only ciphertext + IV; private keys never leave the browser's local
-  storage. Verify peer fingerprints before trusting a channel.
 - Secrets pasted into Tools are stored server-side (env-first, then encrypted DB) and never
   returned to the client in plaintext.

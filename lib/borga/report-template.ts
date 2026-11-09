@@ -10,22 +10,28 @@
  */
 
 import type { Workspace, Invoice, InvoiceLine, Bill, BillLine } from './data';
-import { PAYMENT_METHOD_LABEL, fmtNum, CURRENCY_SYMBOL } from './data';
+import { PAYMENT_METHOD_LABEL } from './data';
+import { fmtMoney } from './currencies';
 
 const esc = (s: string) =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-const money = (ws: Workspace | null | undefined, n: number) => {
-  const symbol = CURRENCY_SYMBOL[ws?.currency ?? 'USD'];
-  return `${n < 0 ? '−' : ''}${symbol}${fmtNum(Math.abs(n))}`;
-};
+const money = (ws: Workspace | null | undefined, n: number) => fmtMoney(n, ws?.currency ?? 'USD');
 
 function logoBlock(ws: Workspace, size = 56): string {
-  if (ws.logoDataUrl) {
-    return `<img src="${ws.logoDataUrl}" alt="${esc(ws.name)} logo" style="height:${size}px;max-width:180px;object-fit:contain;" />`;
+  // Company-controlled values land in markup opened with document.write: never
+  // trust them raw (vibe-check #12). Logos must be small raster data-URLs;
+  // anything else (including giant blobs that would inflate every print) falls
+  // back to initials. Colors must be plain hex.
+  const logo = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]{1,700000}$/.test(ws.logoDataUrl ?? '')
+    ? (ws.logoDataUrl as string)
+    : null;
+  if (logo) {
+    return `<img src="${logo}" alt="${esc(ws.name)} logo" style="height:${size}px;max-width:180px;object-fit:contain;" />`;
   }
-  const initials = ws.name.slice(0, 2).toUpperCase();
-  return `<div style="height:${size}px;width:${size}px;border-radius:14px;background:${ws.color};color:#fff;display:flex;align-items:center;justify-content:center;font-size:${size / 2.4}px;font-weight:700;letter-spacing:1px;">${initials}</div>`;
+  const initials = esc(ws.name.slice(0, 2)).toUpperCase();
+  const color = /^#[0-9a-fA-F]{3,8}$/.test(ws.color ?? '') ? ws.color as string : '#111827';
+  return `<div style="height:${size}px;width:${size}px;border-radius:14px;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-size:${size / 2.4}px;font-weight:700;letter-spacing:1px;">${initials}</div>`;
 }
 
 function companyBlock(ws: Workspace): string {
@@ -65,6 +71,7 @@ export function brandedDocHtml(opts: {
   title: string;
   subtitle?: string;
   metaRight?: string[];
+  /** Trusted markup only: every caller must escape user content (esc()) before embedding. Raw user strings here are stored XSS via document.write. */
   bodyHtml: string;
   footerNote?: string;
 }): string {
@@ -106,6 +113,7 @@ export function openPrintWindow(html: string, title: string): void {
   win.document.open();
   win.document.write(html);
   win.document.close();
+  win.document.title = title;
   win.focus();
   setTimeout(() => {
     win.print();
@@ -119,7 +127,10 @@ export function csvWithHeader(
   periodLabel: string,
   rows: string[][],
 ): string {
-  const q = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+  // A cell a spreadsheet would run as a formula (= + - @) is defused with a
+  // leading apostrophe (vibe-check #12 — same rule as the filing CSV export).
+  const safe = (v: string) => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
+  const q = (v: string) => `"${safe(String(v)).replace(/"/g, '""')}"`;
   const head: string[][] = [
     [ws.legalName || ws.name],
     [docTitle],

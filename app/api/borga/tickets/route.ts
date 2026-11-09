@@ -2,14 +2,17 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
+import { TenantAccessError } from '@/lib/borga/tenant-guard';
 import { TICKET_STATUSES, type TicketStatus } from '@/lib/borga/tickets';
 import {
   addComment,
   createInputSchema,
   createTicket,
+  deleteTicket,
   getTicket,
   listTickets,
   loadSettings,
+  mergeTickets,
   pollMailbox,
   saveSettings,
   settingsPatchSchema,
@@ -49,6 +52,8 @@ const bodySchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('pollMailbox') }),
   z.object({ action: z.literal('similar'), id: z.string().max(40) }),
   z.object({ action: z.literal('sweep') }),
+  z.object({ action: z.literal('delete'), id: z.string().max(40), actor: actorSchema }),
+  z.object({ action: z.literal('merge'), id: z.string().max(40), duplicateId: z.string().max(40), actor: actorSchema }),
 ]);
 
 function inboundUrl(req: NextRequest, userId: string, ws: string): string {
@@ -129,8 +134,21 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(await pollMailbox(userId, g.ws));
       case 'sweep':
         return NextResponse.json({ ok: true, ...(await sweepSla(userId, g.ws)) });
+      case 'delete': {
+        const r = await deleteTicket(userId, g.ws, b.id);
+        return r.ok
+          ? NextResponse.json({ ok: true, deleted: b.id })
+          : NextResponse.json({ ok: false, error: r.error }, { status: r.error === 'Ticket not found' ? 404 : 400 });
+      }
+      case 'merge': {
+        const r = await mergeTickets(userId, g.ws, b.id, b.duplicateId, b.actor);
+        return r.error
+          ? NextResponse.json({ ok: false, error: r.error }, { status: r.error.includes('not found') ? 404 : 400 })
+          : NextResponse.json({ ok: true, primary: summarize(r.primary!), duplicate: summarize(r.duplicate!) });
+      }
     }
   } catch (e) {
+    if (e instanceof TenantAccessError) return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
     console.error('[tickets] action failed', e);
     return NextResponse.json({ ok: false, error: 'Request failed' }, { status: 500 });
   }

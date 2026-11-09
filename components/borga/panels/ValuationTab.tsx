@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, BarChart3 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -25,6 +25,7 @@ import { SectionTitle } from '../bits';
 import { cn } from '@/lib/utils';
 import { useBorga } from '@/lib/borga/store';
 import { deriveValuation, industryProfile, VALUATION_CONFIG_SEED } from '@/lib/borga/data';
+import { CompsCard } from './CompsCard';
 import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 
 const HISTORY_1Y = [
@@ -116,11 +117,10 @@ export function ValuationTab() {
     { tone: 'bull', label: 'Bull Case', value: fmtM(v.ceiling), sub: '12-month upside', text: 'text-emerald-400', border: 'border-emerald-400/30 bg-emerald-400/5', badge: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/30', items: [['Revenue Growth', `+${Math.round(v.growthPct * 1.5)}% YoY`], ['Market Multiple', `${bullMultiple}×`], ['Implied Share', `~$${(v.ceiling / v.sharesM).toFixed(2)}`]] },
   ];
 
+  // Derived from the live method list — never indexed: if the user removes or
+  // renames a method in the config editor, the bridge follows without crashing.
   const BRIDGE = [
-    { name: 'Market Comps', value: METHODS[0].contribution },
-    { name: 'Revenue Mult.', value: METHODS[1].contribution },
-    { name: 'Eqvista Ref.', value: METHODS[2].contribution },
-    { name: 'Tech Premium', value: METHODS[3].contribution },
+    ...METHODS.map((m) => ({ name: m.name, value: m.contribution })),
     { name: 'Total FMV', value: blended },
   ];
 
@@ -176,6 +176,10 @@ export function ValuationTab() {
         </div>
       </Card>
 
+      {/* Real snapshot history (replaces illustrative HISTORY_1Y trend) */}
+      <SnapshotCard wsId={ws?.id} />
+      <CompsCard />
+
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
         <Card className="p-4">
@@ -209,7 +213,7 @@ export function ValuationTab() {
             <Badge className="mb-1 ml-auto bg-emerald-500/10 text-emerald-600">STRONG</Badge>
           </div>
           <div className="mt-1 h-1.5 rounded bg-gradient-to-r from-rose-500 via-amber-500 to-emerald-500" />
-          <p className="mt-1 text-[11px] text-muted-foreground">Price +{v.growthPct}% YoY — Cities +51 — 5 Countries</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Price +{v.growthPct}% YoY — from revenue momentum</p>
         </Card>
         <Card className="p-4">
           <p className="text-xs font-medium text-muted-foreground">Enterprise Value</p>
@@ -252,12 +256,12 @@ export function ValuationTab() {
             <LineChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickMargin={8} />
-              <YAxis yAxisId="usd" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `$${val.toFixed(2)}`} domain={[0.15, 0.3]} />
-              <YAxis yAxisId="eqv" orientation="right" tick={{ fontSize: 10, fill: '#FBBF24' }} tickFormatter={(val) => `$${val.toFixed(1)}M`} domain={[1.5, 2.8]} />
+              <YAxis yAxisId="usd" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `${sym}${val.toFixed(2)}`} domain={['auto', 'auto']} />
+              <YAxis yAxisId="eqv" orientation="right" tick={{ fontSize: 10, fill: '#FBBF24' }} tickFormatter={(val) => `${sym}${val.toFixed(1)}M`} domain={['auto', 'auto']} />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: 11, color: '#9BBFBA' }} />
-              <Line yAxisId="usd" type="monotone" dataKey="usd" name="FMV Price (USD)" stroke="#3D9B8E" strokeWidth={2} dot={{ r: 2, fill: '#3D9B8E' }} />
-              <Line yAxisId="eqv" type="monotone" dataKey="eqv" name="Eqvista Val ($M CAD)" stroke="#FBBF24" strokeDasharray="5 4" dot={false} />
+              <Line yAxisId="usd" type="monotone" dataKey="usd" name={`FMV Price (${ws?.currency ?? 'USD'})`} stroke="#3D9B8E" strokeWidth={2} dot={{ r: 2, fill: '#3D9B8E' }} />
+              <Line yAxisId="eqv" type="monotone" dataKey="eqv" name={`Reference Val ($M ${ws?.currency ?? 'USD'})`} stroke="#FBBF24" strokeDasharray="5 4" dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -352,14 +356,14 @@ export function ValuationTab() {
       {/* Bridge + radar */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-5">
-          <SectionTitle title="Valuation Bridge" sub="Component contributions (CAD $M)" />
+          <SectionTitle title="Valuation Bridge" sub={`Component contributions (${ws?.currency ?? 'USD'} $M)`} />
           <div className="mt-4 h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={BRIDGE} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9BBFBA' }} tickMargin={8} interval={0} />
-                <YAxis tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `$${val.toFixed(1)}M`} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => `$${val.toFixed(2)}M CAD`} />
+                <YAxis tick={{ fontSize: 10, fill: '#9BBFBA' }} tickFormatter={(val) => `${sym}${val.toFixed(1)}M`} />
+                <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => `${sym}${val.toFixed(2)}M ${ws?.currency ?? 'USD'}`} />
                 <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                   {BRIDGE.map((_, i) => (
                     <Cell key={i} fill={i === BRIDGE.length - 1 ? '#4ADE80' : '#2B7A6F'} />
@@ -388,9 +392,68 @@ export function ValuationTab() {
 
       <Card className="p-4">
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          These figures are derived from the live financial ledger and the company knowledge base (source facts under Company &amp; Brand → —Valuation &amp; financial position—). They are informational estimates only and do not constitute financial advice or a certified appraisal. Consult a licensed valuation professional before making investment decisions.
+          These figures are derived from the live financial ledger and the company knowledge base (source facts under Company &amp; Brand → Valuation &amp; financial position). They are informational estimates only and do not constitute financial advice or a certified appraisal. Consult a licensed valuation professional before making investment decisions.
         </p>
       </Card>
     </div>
+  );
+}
+
+function SnapshotCard({ wsId }: { wsId?: string }) {
+  const [snaps, setSnaps] = useState<Array<{ at: string; fmv: number; revenue: number; multiple: number; ev: number; source: string }>>([]);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [cmpA, setCmpA] = useState('');
+  const [cmpB, setCmpB] = useState('');
+  const load = useCallback(async () => {
+    if (!wsId) return;
+    const r = await fetch(`/api/borga/valuation/snapshots?ws=${encodeURIComponent(wsId)}`);
+    const d = await r.json() as { snapshots?: Array<{ at: string; fmv: number; revenue: number; multiple: number; ev: number; source: string }> };
+    setSnaps(d.snapshots ?? []);
+  }, [wsId]);
+  useEffect(() => { void load(); }, [load]);
+  const save = async () => {
+    setMsg(null);
+    const r = await fetch('/api/borga/valuation/snapshots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
+      body: JSON.stringify({ ws: wsId }),
+    });
+    const d = await r.json() as { ok?: boolean; error?: string };
+    setMsg(d.ok ? 'Snapshot saved — history is now real.' : `Failed: ${d.error}`);
+    await load();
+  };
+  const a = snaps.find((s) => s.at === cmpA);
+  const b = snaps.find((s) => s.at === cmpB);
+  const delta = (x?: number, y?: number) => (x === undefined || y === undefined ? '—' : `${x >= y ? '+' : ''}${(x - y).toFixed(2)}`);
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold">Snapshot history ({snaps.length}) — real, saved on demand + monthly via cron</p>
+        <button onClick={save} className="rounded-full bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground">Save snapshot</button>
+      </div>
+      {msg && <p className="mt-1 text-xs text-muted-foreground">{msg}</p>}
+      {snaps.length > 0 && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          {snaps.slice(0, 12).map((s) => (
+            <p key={s.at}>{s.at.slice(0, 10)} — FMV {s.fmv.toFixed(2)}M · rev {s.revenue.toFixed(2)}M · {s.multiple.toFixed(1)}× · {s.source}</p>
+          ))}
+        </div>
+      )}
+      {snaps.length >= 2 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span>Compare:</span>
+          <select className="rounded border px-1 py-0.5" value={cmpA} onChange={(e) => setCmpA(e.target.value)}>
+            <option value="">A…</option>
+            {snaps.map((s) => <option key={s.at} value={s.at}>{s.at.slice(0, 10)}</option>)}
+          </select>
+          <select className="rounded border px-1 py-0.5" value={cmpB} onChange={(e) => setCmpB(e.target.value)}>
+            <option value="">B…</option>
+            {snaps.map((s) => <option key={s.at} value={s.at}>{s.at.slice(0, 10)}</option>)}
+          </select>
+          {a && b && <span>FMV {delta(a.fmv, b.fmv)}M · revenue {delta(a.revenue, b.revenue)}M · multiple {delta(a.multiple, b.multiple)}×</span>}
+        </div>
+      )}
+      <p className="mt-1 text-xs text-muted-foreground">Comps are native-first below (manual peers work fully offline; SEC EDGAR enrichment optional).</p>
+    </Card>
   );
 }

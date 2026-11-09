@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Plus, BrainCircuit, Zap, Pencil, Check, X, Settings2, Phone, Sparkles, GraduationCap } from 'lucide-react';
+import { Plus, Search, BrainCircuit, Zap, Pencil, Check, X, Settings2, Phone, Sparkles, GraduationCap } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,13 +14,21 @@ import { ELEVENLABS_VOICES } from '@/lib/borga/data';
 import { deriveBusinessInsights, insightsToMemories, type InsightSeverity } from '@/lib/borga/insights';
 import { AgentAvatar, StatusPill, SectionTitle } from '../bits';
 import { AgentEditDialog } from './AgentEditDialog';
+import { SearchSelect } from '../SearchSelect';
+import { useVoiceSetup } from '../use-voice-setup';
+import { describeVoice, resolveVoiceRef } from '@/lib/borga/voice-ids';
+import { toast } from '@/lib/toast-bus';
+import { AUTOMATION_LABELS, resolveAutomations } from '@/lib/borga/automation-core';
+import { agentStatusNow } from '@/lib/borga/agent-status';
 import { cn } from '@/lib/utils';
 
 const PALETTE = ['#6366f1', '#22d3ee', '#f472b6', '#f59e0b', '#34d399', '#a78bfa', '#fb7185', '#38bdf8'];
 
 export function AgentsTab() {
   const { agents, updateAgent, addAgent, addMemory, memories, log, activeAgentId, setActiveAgentId, placeCall, elevenlabs, leads,
-    finance, invoices, bills, vendors, customers, goals, journals, bankTxns, bankAccounts, employees, activeWorkspace, llm } = useBorga();
+    finance, invoices, bills, vendors, customers, goals, journals, bankTxns, bankAccounts, employees, activeWorkspace, llm, agentRuns, settings, setSettings } = useBorga();
+  const automations = resolveAutomations(settings.automations);
+  const agentBusy = useBorga((s) => s.agentBusy);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
@@ -32,7 +40,16 @@ export function AgentsTab() {
   const [callContact, setCallContact] = useState('');
   const [callLead, setCallLead] = useState('');
   const [callLeadId, setCallLeadId] = useState('');
-  const voice = ELEVENLABS_VOICES.find((v) => v.id === elevenlabs.voice) ?? ELEVENLABS_VOICES[0];
+  const [q, setQ] = useState('');
+  const [group, setGroup] = useState<string>('all');
+  const voiceSetup = useVoiceSetup({ sync: false });
+  const setElevenlabs = useBorga((st) => st.setElevenlabs);
+  // the voice this agent speaks with: its own pick, else the company's
+  const agentVoiceRef = (callAgent && elevenlabs.agentVoices?.[callAgent.id]) || elevenlabs.voice;
+  const voiceOptions = voiceSetup.voices.length
+    ? voiceSetup.voices.map((v) => ({ value: v.id, label: v.name, detail: describeVoice(v) }))
+    : ELEVENLABS_VOICES.map((v) => ({ value: resolveVoiceRef(v.id) ?? v.id, label: v.label, detail: v.tag }));
+  const voice = voiceOptions.find((o) => o.value === resolveVoiceRef(agentVoiceRef)) ?? voiceOptions[0];
 
   const selectCallLead = (id: string) => {
     setCallLeadId(id);
@@ -45,11 +62,16 @@ export function AgentsTab() {
 
   const placeCallNow = () => {
     if (!callAgent) return;
+    const number = callContact.trim();
+    if (!number) {
+      toast({ title: 'Enter a phone number', description: 'Pick a lead with a number or type one in manually.', variant: 'warning' });
+      return;
+    }
     placeCall({
       agentId: callAgent.id,
       agentName: callAgent.name,
-      contact: callContact.trim() || '+1 555 0100',
-      leadName: callLead.trim() || 'Client',
+      contact: number,
+      leadName: callLead.trim() || number,
     });
     setCallAgent(null);
     setCallContact('');
@@ -69,10 +91,11 @@ export function AgentsTab() {
       skills: ['Auto-assign'],
       model: llm.model,
       tasksCompleted: 0,
-      accuracy: 90,
+      accuracy: 0,
       brainLinked: true,
       description: 'Custom agent added by the user.',
-      instructions: instructions.trim() || 'Follow the shared brain and cooperate with the rest of the fleet.',
+      instructions: instructions.trim() || 'Delegate goals to the right specialist with delegate(toAgentId, goal); store durable observations with store_memory; check the knowledge base before answering; hold consequential actions for approval.',
+      persona: 'agents-orchestrator.md',
     };
     addAgent(a);
     log({ agentId: a.id, agentName: a.name, actor: 'user', kind: 'system', message: `Agent ${a.name} provisioned and linked to the shared brain.` });
@@ -89,17 +112,23 @@ export function AgentsTab() {
     setEditingId(null);
   };
 
-  const evolve = (a: Agent) => {
-    updateAgent(a.id, { status: 'learning', accuracy: Math.min(100, a.accuracy + 1) });
-    log({ agentId: a.id, agentName: a.name, actor: 'agent', kind: 'learn', message: `${a.name} fine-tuned from recent outcomes — accuracy improved.` });
-  };
-
   const collaborate = (a: Agent) => {
     log({ agentId: a.id, agentName: a.name, actor: 'agent', kind: 'handoff', message: `${a.name} requested help from the shared brain and peers.` });
   };
 
-  const totalTasks = agents.reduce((s, a) => s + a.tasksCompleted, 0);
-  const avgAcc = Math.round(agents.reduce((s, a) => s + a.accuracy, 0) / agents.length);
+  // Real track record: finished runs and how many of the finished ones succeeded (a run that errored or was stopped is not a success).
+  const runStats = useMemo(() => {
+    const m = new Map<string, { done: number; finished: number }>();
+    for (const r of agentRuns) {
+      if (r.status === 'running') continue;
+      const e = m.get(r.agentId) ?? { done: 0, finished: 0 };
+      e.finished += 1;
+      if (r.status === 'complete') e.done += 1;
+      m.set(r.agentId, e);
+    }
+    return m;
+  }, [agentRuns]);
+  const totalTasks = [...runStats.values()].reduce((s, e) => s + e.done, 0);
 
   // Live business learning: derive insights from every module; one click makes
   // them durable agent memories (skills) the whole fleet reasons over.
@@ -124,14 +153,46 @@ export function AgentsTab() {
     log({ agentId: 'a-fundraising', agentName: 'Nadia', actor: 'system', kind: 'learn', message: `Trained ${agents.length} agents on ${fresh.length} new business insight${fresh.length === 1 ? '' : 's'} across finance, sales, ops and people.` });
   };
 
+  // The fleet is large (the specialist bench alone is dozens), so people find an agent by name, skill or group.
+  const groups = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of agents) { const g = a.type ?? a.department; m.set(g, (m.get(g) ?? 0) + 1); }
+    return [...m.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+  }, [agents]);
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return agents.filter((a) => {
+      if (group !== 'all' && (a.type ?? a.department) !== group) return false;
+      if (!needle) return true;
+      return [a.name, a.role, a.department, a.type ?? '', a.description ?? '', ...(a.skills ?? [])].some((t) => t.toLowerCase().includes(needle));
+    });
+  }, [agents, q, group]);
+
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Agent fleet" sub={`${agents.length} agents — ${totalTasks} tasks completed — ${avgAcc}% avg accuracy`} />
+        <SectionTitle title="Agent fleet" sub={`${agents.length} agents — ${totalTasks} runs completed`} />
         <Button onClick={() => setOpen(true)}>
           <Plus className="h-4 w-4" /> Add agent
         </Button>
       </div>
+
+      {/* Automatic delegation: which events are handed to an agent without anyone asking */}
+      <Card className="p-4">
+        <p className="flex items-center gap-1.5 text-sm font-semibold"><Zap className="h-4 w-4 text-amber-500" /> Automatic delegation</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">Events are handed to the agent that owns them. Their runs show under Runs &amp; Queue, anything that sends or spends waits for your approval, and each company is capped at 30 automatic runs a day.</p>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {AUTOMATION_LABELS.map((a) => (
+            <label key={a.id} className="flex items-start justify-between gap-3 rounded-lg border bg-muted/10 p-2.5">
+              <span>
+                <span className="block text-xs font-semibold">{a.label}</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">{a.detail}</span>
+              </span>
+              <Switch checked={automations[a.id]} onCheckedChange={(v) => setSettings({ automations: { ...settings.automations, [a.id]: v } })} aria-label={a.label} />
+            </label>
+          ))}
+        </div>
+      </Card>
 
       {/* Business intelligence feed — what the fleet has learned from every module */}
       <Card className="p-4">
@@ -158,8 +219,27 @@ export function AgentsTab() {
         </div>
       </Card>
 
+      <div className="space-y-2">
+        <div className="relative max-w-sm">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents by name, role or skill" className="pl-8" aria-label="Search agents" />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {[['all', agents.length] as [string, number], ...groups].map(([g, n]) => (
+            <button
+              key={g}
+              onClick={() => setGroup(g)}
+              className={cn('rounded-full border px-2.5 py-1 text-xs transition-colors', group === g ? 'border-primary bg-primary text-primary-foreground' : 'hover:bg-accent')}
+            >
+              {g === 'all' ? 'All' : g} <span className="opacity-70">{n}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {shown.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">No agent matches &ldquo;{q}&rdquo;{group !== 'all' ? ` in ${group}` : ''}.</p>}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {agents.map((a) => (
+        {shown.map((a) => (
           <Card
             key={a.id}
             className={cn(
@@ -190,7 +270,8 @@ export function AgentsTab() {
                         setEditingId(a.id);
                         setEditName(a.name);
                       }}
-                      className="text-muted-foreground opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
+                      aria-label={`Rename ${a.name}`}
+                      className="text-muted-foreground opacity-0 transition-opacity hover:text-primary focus-visible:opacity-100 group-hover:opacity-100"
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
@@ -198,7 +279,7 @@ export function AgentsTab() {
                 )}
                 <p className="truncate text-xs text-muted-foreground">{a.role}</p>
               </div>
-              <StatusPill status={a.status} />
+              <StatusPill status={agentStatusNow(a, agentBusy)} />
             </div>
 
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -236,12 +317,14 @@ export function AgentsTab() {
 
             <div className="mt-3 space-y-2 text-xs">
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Tasks done</span>
-                <span className="font-medium">{a.tasksCompleted}</span>
+                <span className="text-muted-foreground">Runs completed</span>
+                <span className="font-medium">{runStats.get(a.id)?.done ?? 0}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Accuracy</span>
-                <span className="font-medium text-emerald-600">{a.accuracy}%</span>
+                <span className="text-muted-foreground">Success rate</span>
+                <span className="font-medium text-emerald-600" title="Finished runs that completed without error">
+                  {(() => { const e = runStats.get(a.id); return e && e.finished > 0 ? `${Math.round((e.done / e.finished) * 100)}%` : '—'; })()}
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Model</span>
@@ -268,9 +351,6 @@ export function AgentsTab() {
                 </Button>
                 <Button size="icon" variant="ghost" className="h-7 w-7" title="Collaborate" onClick={() => collaborate(a)}>
                   <Zap className="h-3.5 w-3.5" />
-                </Button>
-                <Button size="icon" variant="ghost" className="h-7 w-7" title="Evolve & learn" onClick={() => evolve(a)}>
-                  <BrainCircuit className="h-3.5 w-3.5" />
                 </Button>
               </div>
             </div>
@@ -316,31 +396,47 @@ export function AgentsTab() {
           <DialogHeader>
             <DialogTitle>Place an outbound call</DialogTitle>
             <DialogDescription>
-              {callAgent?.name} dials out through ElevenLabs using the <span className="font-medium text-foreground">{voice.label}</span> voice ({voice.tag}).
+              {callAgent?.name} dials out through ElevenLabs using the <span className="font-medium text-foreground">{voice.label}</span> voice ({voice.detail}).
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div>
               <label className="text-xs font-medium text-muted-foreground">Lead / customer (auto-fills number)</label>
-              <select
+              <SearchSelect
+                options={[
+                  { value: '', label: 'Manual entry' },
+                  ...leads.filter((l) => l.stage !== 'lost').map((l) => ({ value: l.id, label: `${l.name} — ${l.company}`, detail: l.phone || 'no number' })),
+                ]}
                 value={callLeadId}
-                onChange={(e) => selectCallLead(e.target.value)}
-                className="mt-1 h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="">Custom / manual entry—</option>
-                {leads.filter((l) => l.stage !== 'lost').map((l) => (
-                  <option key={l.id} value={l.id}>{l.name} — {l.company}</option>
-                ))}
-              </select>
+                onChange={selectCallLead}
+                placeholder="Manual entry"
+                searchPlaceholder="Search leads"
+                clearable={false}
+                className="mt-1"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Phone number to dial</label>
-              <Input value={callContact} onChange={(e) => setCallContact(e.target.value)} placeholder="+1 555 0100" className="mt-1 font-mono" />
+              <Input value={callContact} onChange={(e) => setCallContact(e.target.value)} placeholder="Phone number" className="mt-1 font-mono" />
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Lead / contact name</label>
               <Input value={callLead} onChange={(e) => setCallLead(e.target.value)} placeholder="e.g. Marcus Webb" className="mt-1" />
             </div>
+            {elevenlabs.connected && callAgent && (
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Voice for {callAgent.name}</label>
+                <SearchSelect
+                  options={voiceOptions}
+                  value={voice.value}
+                  onChange={(v) => { if (v) setElevenlabs({ agentVoices: { ...(elevenlabs.agentVoices ?? {}), [callAgent.id]: v } }); }}
+                  placeholder="Select a voice"
+                  searchPlaceholder="Search voices"
+                  clearable={false}
+                  className="mt-1"
+                />
+              </div>
+            )}
             {!elevenlabs.connected && (
               <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600">
                 ElevenLabs isn&apos;t connected yet — connect it in Settings to place real outbound calls. The call will still be simulated below.

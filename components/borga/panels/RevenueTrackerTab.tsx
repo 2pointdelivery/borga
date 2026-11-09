@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, Trash2, TrendingUp, Target, Gauge, CalendarRange, Pencil } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -10,14 +11,14 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Label } from '@/components/ui/label';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import {
-  CURRENCY_SYMBOL,
-  fmtNum,
-  type RevenueTrack,
+      type RevenueTrack,
   type RevenueLine,
 } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
 import { ledgerActualsByService, makeServiceLines, parseMonthLabel, reconcileServiceLines } from '@/lib/borga/services';
 import { CreatePlanDialog, ServicesCard, useCompanyServices } from './RevenueServices';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { toast } from '@/lib/toast-bus';
 import { cn } from '@/lib/utils';
 
@@ -37,13 +38,26 @@ export function RevenueTrackerTab() {
   const { services, save: saveServices } = useCompanyServices();
   const [planOpen, setPlanOpen] = useState(false);
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${n < 0 ? '−' : ''}${CURRENCY_SYMBOL[currency]}${fmtNum(Math.abs(n))}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [trackId, setTrackId] = useState<string | null>(null);
   const track = revenueTracks.find((t) => t.id === trackId) ?? revenueTracks[0];
   const [view, setView] = useState<string>('all');
   const [addTrackOpen, setAddTrackOpen] = useState(false);
   const [addLineOpen, setAddLineOpen] = useState(false);
+  const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  const [editingLineName, setEditingLineName] = useState('');
+  const [confirmDeleteLine, setConfirmDeleteLine] = useState<RevenueLine | null>(null);
+  const [confirmDeleteTrack, setConfirmDeleteTrack] = useState(false);
+
+  const commitLineRename = () => {
+    if (!track || !editingLineId) return;
+    const name = editingLineName.trim();
+    if (name) {
+      updateRevenueTrack(track.id, { lines: track.lines.map((x) => (x.id === editingLineId ? { ...x, name } : x)) });
+    }
+    setEditingLineId(null);
+  };
   const [editTargets, setEditTargets] = useState(false);
 
   const months = useMemo(() => track?.months ?? [], [track]);
@@ -147,21 +161,27 @@ export function RevenueTrackerTab() {
     setAddTrackOpen(false);
   }
 
-  function addLine(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  const [lineName, setLineName] = useState('');
+  const [lineColor, setLineColor] = useState('#2a78d6');
+  const [lineTargets, setLineTargets] = useState<string[]>([]);
+
+  function openAddLine() {
+    setLineName('');
+    setLineColor('#2a78d6');
+    setLineTargets(months.map(() => ''));
+    setAddLineOpen(true);
+  }
+
+  function addLine() {
     if (!track) return;
-    const fd = new FormData(e.currentTarget);
-    const name = String(fd.get('name') ?? '').trim();
+    const name = lineName.trim();
     if (!name) return;
-    const targets = String(fd.get('targets') ?? '')
-      .split(',')
-      .map((v) => Number(v.trim()) || 0);
-    while (targets.length < months.length) targets.push(0);
+    const targets = months.map((_, i) => Number(lineTargets[i]) || 0);
     const line: RevenueLine = {
       id: `rl-${Date.now()}`,
       name,
-      color: String(fd.get('color') ?? '#2a78d6'),
-      targets: targets.slice(0, months.length),
+      color: lineColor || '#2a78d6',
+      targets,
       actuals: months.map(() => 0),
     };
     updateRevenueTrack(track.id, { lines: [...track.lines, line] });
@@ -200,23 +220,23 @@ export function RevenueTrackerTab() {
         </div>
         <div className="flex items-center gap-2">
           {revenueTracks.length > 1 && (
-            <select
-              className="h-8 rounded-md border bg-background px-2 text-xs"
+            <SearchSelect
+              options={revenueTracks.map((t) => ({ value: t.id, label: t.name, detail: t.periodLabel }))}
               value={track.id}
-              onChange={(e) => { setTrackId(e.target.value); setView('all'); }}
-            >
-              {revenueTracks.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+              onChange={(v) => { if (v) { setTrackId(v); setView('all'); } }}
+              placeholder="Select tracker"
+              searchPlaceholder="Search trackers"
+              clearable={false}
+              className="h-8 text-xs"
+            />
           )}
-          <Button size="sm" variant="outline" onClick={() => setAddLineOpen(true)}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> Line
+          <Button size="sm" variant="outline" onClick={openAddLine}>
+            <Plus className="mr-1 h-3.5 w-3.5" /> Add line
           </Button>
           <Button size="sm" variant="outline" onClick={() => setAddTrackOpen(true)}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> Tracker
+            <Plus className="mr-1 h-3.5 w-3.5" /> New tracker
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => deleteRevenueTrack(track.id)}>
+          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" title="Delete tracker" onClick={() => setConfirmDeleteTrack(true)}>
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -405,8 +425,37 @@ export function RevenueTrackerTab() {
                 return (
                   <tr key={l.id} className="border-b last:border-0 hover:bg-muted/40">
                     <td className="py-2 pr-3 font-medium">
-                      <span className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ background: l.color }} />
-                      {l.name}
+                      <div className="group flex items-center gap-1.5">
+                        <span className="mr-0.5 inline-block h-2 w-2 shrink-0 rounded-sm" style={{ background: l.color }} />
+                        <span className="min-w-0 truncate">{l.name}</span>
+                        {editingLineId === l.id ? (
+                          <Input
+                            autoFocus
+                            value={editingLineName}
+                            onChange={(e) => setEditingLineName(e.target.value)}
+                            onBlur={commitLineRename}
+                            onKeyDown={(e) => { if (e.key === 'Enter') commitLineRename(); if (e.key === 'Escape') setEditingLineId(null); }}
+                            className="h-6 w-32 text-xs"
+                          />
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => { setEditingLineId(l.id); setEditingLineName(l.name); }}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-primary/10 hover:text-primary group-hover:opacity-100"
+                              title="Rename line"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteLine(l)}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                              title="Delete line — zeroes its targets but recorded actuals are kept on the other lines"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                     {months.map((_, i) => {
                       const t = l.targets[i] ?? 0;
@@ -458,25 +507,65 @@ export function RevenueTrackerTab() {
       <Dialog open={addLineOpen} onOpenChange={setAddLineOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Add service line</DialogTitle></DialogHeader>
-          <form onSubmit={addLine} className="space-y-3">
+          <div className="space-y-3">
             <div className="space-y-1">
               <Label htmlFor="rl-name">Name</Label>
-              <Input id="rl-name" name="name" placeholder="e.g. Same-Day Delivery" required />
+              <Input id="rl-name" value={lineName} onChange={(e) => setLineName(e.target.value)} placeholder="e.g. Same-Day Delivery" />
             </div>
             <div className="space-y-1">
               <Label htmlFor="rl-color">Color</Label>
-              <Input id="rl-color" name="color" type="color" defaultValue="#2a78d6" className="h-9 w-20 p-1" />
+              <Input id="rl-color" type="color" value={lineColor} onChange={(e) => setLineColor(e.target.value)} className="h-9 w-20 p-1" />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="rl-targets">Monthly targets (comma separated, {months.length} months)</Label>
-              <Input id="rl-targets" name="targets" placeholder={months.map(() => '0').join(', ')} />
+              <Label>Monthly targets — one per month ({months.length} months)</Label>
+              <div className="grid grid-cols-4 gap-2">
+                {months.map((m, i) => (
+                  <div key={m} className="flex items-center gap-1">
+                    <span className="w-8 shrink-0 text-[10px] text-muted-foreground">{m}</span>
+                    <Input
+                      type="number" min={0}
+                      value={lineTargets[i] ?? ''}
+                      onChange={(e) => setLineTargets((cur) => { const next = [...cur]; next[i] = e.target.value; return next; })}
+                      placeholder="0"
+                      className="h-7 text-right text-xs"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
-            <DialogFooter>
-              <Button type="submit">Add line</Button>
-            </DialogFooter>
-          </form>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddLineOpen(false)}>Cancel</Button>
+            <Button onClick={addLine} disabled={!lineName.trim()}>Add line</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDeleteLine}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteLine(null); }}
+        title={`Delete line "${confirmDeleteLine?.name ?? ''}"?`}
+        description="Its targets are removed. This does not touch actuals recorded on other lines."
+        confirmLabel="Delete line"
+        onConfirm={() => {
+          if (!track || !confirmDeleteLine) return;
+          updateRevenueTrack(track.id, { lines: track.lines.filter((x) => x.id !== confirmDeleteLine.id) });
+          setConfirmDeleteLine(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteTrack}
+        onOpenChange={setConfirmDeleteTrack}
+        title={`Delete tracker "${track?.name ?? ''}"?`}
+        description="The whole plan — every line, target and recorded actual — is removed permanently."
+        confirmLabel="Delete tracker"
+        onConfirm={() => {
+          if (!track) return;
+          deleteRevenueTrack(track.id);
+          setConfirmDeleteTrack(false);
+        }}
+      />
     </div>
   );
 }

@@ -73,6 +73,23 @@ test('customer merge upserts by CRM id, then email, then name; never erases or t
   assert.deepEqual(again.summary, { added: 0, updated: 0, unchanged: 3 });
 });
 
+test('name-only customer matches need corroboration, or they stay separate', () => {
+  const existing = [cust({ id: 'local1', name: 'Acme Ltd', city: 'Accra', country: 'GH' })];
+  const bare = (o: object) => ({
+    crmId: 'x-1', name: 'Acme Ltd', email: '', phone: '', website: '', industry: '',
+    addressLine: '', city: '', state: '', country: '', status: 'active' as const, ...o,
+  });
+  // Same name, same city: merges.
+  const sameCity = mergeCustomers(existing, [bare({ crmId: 'x-1', city: 'Accra', country: 'GH' })], '2026-10-01T00:00:00Z');
+  assert.deepEqual(sameCity.summary, { added: 0, updated: 1, unchanged: 0 });
+  // Same name everywhere else, different city: stays a separate record.
+  const otherCity = mergeCustomers(existing, [bare({ crmId: 'x-2', city: 'Lagos', country: 'NG' })], '2026-10-01T00:00:00Z');
+  assert.deepEqual(otherCity.summary, { added: 1, updated: 0, unchanged: 0 });
+  // Same name, no discriminators at all: also stays separate (false merge is worse than a visible dup).
+  const sparse = mergeCustomers(existing, [bare({ crmId: 'x-3' })], '2026-10-01T00:00:00Z');
+  assert.deepEqual(sparse.summary, { added: 1, updated: 0, unchanged: 0 });
+});
+
 test('lead merge upserts by CRM id, links customers, and tracks stage changes', () => {
   const customers = [cust({ id: 'cu1', name: 'Acme Ltd', email: 'ops@acme.test' })];
   const inc = [{ crmId: 'd1', name: 'Fleet deal', company: 'Acme Ltd', email: '', phone: '', value: 30000, stage: 'proposal' as const, source: 'CRM' }];

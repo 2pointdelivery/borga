@@ -1,5 +1,6 @@
 import 'server-only';
-import { callLlm, resolveLlm, getConfiguredLlm } from './agent-context';
+import { resolveLlm, getConfiguredLlm } from './agent-context';
+import { callLlmResilient } from './llm-fallback';
 
 /**
  * Tier 1 unified brain — single entry point for every text turn.
@@ -12,6 +13,12 @@ import { callLlm, resolveLlm, getConfiguredLlm } from './agent-context';
 export interface BrainMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+}
+
+/** Whose company a turn is for: lets the fallback find that company's other activated models. */
+export interface BrainContext {
+  ws?: string | null;
+  userId?: string | null;
 }
 
 export interface BrainProvider {
@@ -37,11 +44,15 @@ export async function resolveBrain(
 }
 
 /** Friendly, non-crashing failure text — never a stack trace to the user. */
-export function brainUnavailableMessage(providerId?: string): string {
-  if (!providerId || providerId === 'llm-demo') {
-    return 'Borga is in demo mode (no AI provider connected). Add a provider key in Integrations → AI & Voice for open-ended answers.';
+export function brainUnavailableMessage(providerId?: string, detail?: string): string {
+  if (!providerId) {
+    return 'Borga has no AI provider connected. Add one in Integrations → AI & Voice for open-ended answers.';
   }
   const label = providerId.replace('llm-', '');
+  // Free tiers (especially the no-account ones) throttle bursts with 429 or 402: say so, instead of a vague "trouble reaching".
+  if (detail && /(402|429)/.test(detail)) {
+    return `The ${label} service declined the request: you have hit its free-tier or rate limit. Wait a few seconds and try again, or pick another provider.`;
+  }
   return `Borga had trouble reaching the ${label} model. Please try again shortly.`;
 }
 
@@ -52,14 +63,21 @@ export function brainUnavailableMessage(providerId?: string): string {
 export async function sendBrainTurn(
   messages: BrainMessage[],
   provider: BrainProvider | null,
+  ctx: BrainContext = {},
 ): Promise<string> {
-  if (!provider) return brainUnavailableMessage();
   try {
-    const reply = await callLlm(messages, provider);
-    return reply || 'Borga received no answer. Please try again.';
+    // The requested model first; when it fails (or none was usable) the company's other activated models answer instead.
+    const answer = await callLlmResilient(messages, provider, ctx);
+    return answer.text || 'Borga received no answer. Please try again.';
   } catch (e) {
     console.error('Brain turn failed', (e as Error).message);
-    return brainUnavailableMessage(provider.providerId);
+    if ((e as Error).name === 'AllModelsFailed') {
+      const none = !provider && /^No AI model/.test((e as Error).message);
+      return none
+        ? brainUnavailableMessage()
+        : `${(e as Error).message} Check Integrations → AI & Voice, or try again shortly.`;
+    }
+    return brainUnavailableMessage(provider?.providerId, (e as Error).message);
   }
 }
 
@@ -71,19 +89,18 @@ export async function streamBrainTurn(
   messages: BrainMessage[],
   provider: BrainProvider | null,
   onToken: (token: string) => void,
+  ctx: BrainContext = {},
 ): Promise<string> {
-  if (!provider) {
-    const msg = brainUnavailableMessage();
-    onToken(msg);
-    return msg;
+  if (provider) {
+    try {
+      const streamed = await tryStream(provider, messages, onToken);
+      if (streamed !== null) return streamed;
+    } catch (e) {
+      console.error('Brain stream failed, falling back', (e as Error).message);
+    }
   }
-  try {
-    const streamed = await tryStream(provider, messages, onToken);
-    if (streamed !== null) return streamed;
-  } catch (e) {
-    console.error('Brain stream failed, falling back', (e as Error).message);
-  }
-  const full = await sendBrainTurn(messages, provider);
+  // Streaming was refused or failed: the non-streaming turn tries the same model, then the other activated ones.
+  const full = await sendBrainTurn(messages, provider, ctx);
   // sendBrainTurn already handled errors gracefully; emit once for SSE callers.
   onToken(full);
   return full;
@@ -95,6 +112,8 @@ async function tryStream(
   onToken: (token: string) => void,
 ): Promise<string | null> {
   const { providerId, model, apiKey, baseUrl } = provider;
+  // Muse's address comes from a setting and is checked (https, public) on the non-streaming path, so it is not streamed from here.
+  if (providerId === 'llm-muse') return null;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 

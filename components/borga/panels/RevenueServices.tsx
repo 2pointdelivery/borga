@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { CURRENCY_SYMBOL, type RevenueTrack } from '@/lib/borga/data';
 import { makeServiceLines, monthLabels, parseServices, periodLabel, servicesFromKnowledge } from '@/lib/borga/services';
+import { toast } from '@/lib/toast-bus';
 import { useBorga } from '@/lib/borga/store';
 
 const newTrackId = () => 'rt-' + Date.now().toString(36);
@@ -27,8 +28,15 @@ export function useCompanyServices(): { services: string[]; fromProfile: boolean
 export function ServicesCard({ services, onChange }: { services: string[]; onChange: (next: string[]) => void }) {
   const [draft, setDraft] = useState('');
   const add = () => {
-    const merged = parseServices([...services, ...parseServices(draft)].join(','));
-    if (merged.length !== services.length) onChange(merged);
+    const names = parseServices(draft);
+    const dupes = names.filter((n) => services.some((s) => s.toLowerCase() === n.toLowerCase()));
+    const merged = parseServices([...services, ...names].join(','));
+    if (merged.length !== services.length) {
+      onChange(merged);
+      if (dupes.length) toast({ title: `Already in the list: ${dupes.join(', ')}`, variant: 'warning' });
+    } else if (names.length) {
+      toast({ title: 'Already in the list', variant: 'warning' });
+    }
     setDraft('');
   };
   return (

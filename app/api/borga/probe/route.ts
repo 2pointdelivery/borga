@@ -1,4 +1,6 @@
+import { isIP } from 'node:net';
 import { NextResponse, type NextRequest } from 'next/server';
+import { isPrivateIp } from '@/lib/borga/safe-url';
 import { getApiKey } from '@/lib/borga/secrets';
 import { DEFAULT_PROVIDER_CONFIG, resolveProviderConfig } from '@/lib/borga/llm-providers';
 import { sessionUserId } from '@/lib/borga/features-server';
@@ -9,10 +11,14 @@ export const runtime = 'nodejs';
 const PLACEHOLDER_URLS = ['example', 'placeholder', ''];
 const PLACEHOLDER_KEYS = ['xxx', 'placeholder', 'your-key', ''];
 
-async function ollamaUp(baseUrl: string): Promise<boolean> {
+/** A Muse base URL counts only when it is a remote https address (the chat route refuses anything internal, so it would never work). */
+function museConfigured(baseUrl: string): boolean {
   try {
-    const res = await fetch(`${baseUrl.replace(/\/v1\/?$/, '')}/api/tags`, { signal: AbortSignal.timeout(2000) });
-    return res.ok;
+    const u = new URL(baseUrl);
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    if (u.protocol !== 'https:' || u.username || u.password) return false;
+    if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return false;
+    return !(isIP(host) && isPrivateIp(host));
   } catch {
     return false;
   }
@@ -30,11 +36,10 @@ export async function GET(req: NextRequest) {
 
   const providers = await Promise.all(
     Object.keys(DEFAULT_PROVIDER_CONFIG).map(async (id) => {
-      if (id === 'llm-demo') return { id, configured: true };
       const cfg = await resolveProviderConfig(id, ws, userId);
-      if (id === 'llm-ollama') {
-        const base = (await getApiKey('OLLAMA_BASE_URL')) || cfg.baseUrl;
-        return { id, configured: await ollamaUp(base) };
+      if (id === 'llm-muse') {
+        const base = (await getApiKey('MUSE_BASE_URL')) || cfg.baseUrl;
+        return { id, configured: museConfigured(base) };
       }
       if (id === 'llm-custom') {
         const url = (await getApiKey('LLM_BASE_URL')) || cfg.baseUrl;

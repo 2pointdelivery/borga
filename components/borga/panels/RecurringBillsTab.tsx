@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import { Plus, Pause, Play, Trash2, Pencil, RefreshCw, Repeat } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -10,12 +11,14 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CURRENCY_SYMBOL, PAYMENT_METHOD_LABEL, fmtNum, type BillLine, type PaymentMethod } from '@/lib/borga/data';
+import { PAYMENT_METHOD_LABEL, type BillLine, type PaymentMethod } from '@/lib/borga/data';
 import { FREQUENCY_LABEL, TERMS_DAYS, isFinished, nextRunIso, type RecurringBill, type RecurringFrequency } from '@/lib/borga/recurring';
 import { useBorga } from '@/lib/borga/store';
 import { toast } from '@/lib/toast-bus';
 import { SectionTitle } from '../bits';
+import { SearchSelect } from '../SearchSelect';
 import { AccountSelect, DateInput, Field, ProjectSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { documentTotals } from '@/lib/borga/pricing';
 
 type EndMode = 'never' | 'date' | 'count';
 const UNIT: Record<RecurringFrequency, string> = { weekly: 'week', monthly: 'month', quarterly: 'quarter', yearly: 'year' };
@@ -49,9 +52,9 @@ const emptyForm = (taxId?: string): Form => ({
 });
 
 export function RecurringBillsTab() {
-  const { recurringBills, addRecurringBill, updateRecurringBill, deleteRecurringBill, runRecurringBills, bills, vendors, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
+  const { recurringBills, addRecurringBill, updateRecurringBill, deleteRecurringBill, runRecurringServer, bills, vendors, taxProfiles, defaultTaxProfileId, activeWorkspace, log } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -59,17 +62,18 @@ export function RecurringBillsTab() {
   const [confirmDelete, setConfirmDelete] = useState<RecurringBill | null>(null);
 
   const taxRate = taxProfiles.filter((t) => form.taxProfileIds.includes(t.id)).reduce((s, t) => s + t.rate, 0);
-  const subtotal = form.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-  const total = subtotal + (subtotal * taxRate) / 100;
+  // Same arithmetic the server applies when the occurrence becomes a bill.
+  const totals = documentTotals(form.lines, { taxRate, currency });
+  const subtotal = totals.subtotal;
+  const total = totals.total;
 
   const rows = useMemo(
     () => recurringBills.map((r) => {
       const generated = bills.filter((b) => b.externalRef?.startsWith(`rec:${r.id}:`));
       const rate = taxProfiles.filter((t) => r.taxProfileIds.includes(t.id)).reduce((s, t) => s + t.rate, 0);
-      const sub = r.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-      return { r, generated, amount: sub + (sub * rate) / 100 };
+      return { r, generated, amount: documentTotals(r.lines, { taxRate: rate, currency }).total };
     }),
-    [recurringBills, bills, taxProfiles],
+    [recurringBills, bills, taxProfiles, currency],
   );
 
   const openCreate = () => {
@@ -116,13 +120,15 @@ export function RecurringBillsTab() {
     }
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Recurring bill "${fields.name}" ${editingId ? 'updated' : 'created'}: ${cadence(fields)} from ${fields.startDateIso}.` });
     setOpen(false);
-    const r = runRecurringBills();
-    if (r.created) toast({ title: `${r.created} bill${r.created === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')} (unpaid)`, variant: 'success' });
+    void runRecurringServer().then((r) => {
+      if (r.bills.length) toast({ title: `${r.bills.length} bill${r.bills.length === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')} (unpaid)`, variant: 'success' });
+    });
   };
 
   const runNow = () => {
-    const r = runRecurringBills();
-    toast(r.created ? { title: `${r.created} bill${r.created === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')}. Nothing was paid; review them under Vendors & AP.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    void runRecurringServer().then((r) => {
+      toast(r.bills.length ? { title: `${r.bills.length} bill${r.bills.length === 1 ? '' : 's'} recorded`, description: `${r.bills.join(', ')}. Nothing was paid; review them under Vendors & AP.`, variant: 'success' } : { title: 'Nothing is due', description: 'Every active schedule is up to date.', variant: 'info' });
+    });
   };
 
   const setLine = (id: string, patch: Partial<BillLine>) => setForm((f) => ({ ...f, lines: f.lines.map((l) => (l.id === id ? { ...l, ...patch } : l)) }));
@@ -201,10 +207,14 @@ export function RecurringBillsTab() {
           <div className="grid gap-3">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Vendor">
-                <Select value={form.vendorId || undefined} onValueChange={pickVendor}>
-                  <SelectTrigger><SelectValue placeholder="Choose a vendor" /></SelectTrigger>
-                  <SelectContent>{vendors.map((v) => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}</SelectContent>
-                </Select>
+                <SearchSelect
+                  options={vendors.map((v) => ({ value: v.id, label: v.name, detail: v.service }))}
+                  value={form.vendorId}
+                  onChange={pickVendor}
+                  placeholder="Choose a vendor"
+                  searchPlaceholder="Search vendors"
+                  clearable={false}
+                />
               </Field>
               <Field label="Schedule name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Office rent" /></Field>
             </div>

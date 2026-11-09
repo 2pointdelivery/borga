@@ -1,6 +1,10 @@
+import { isEmailConfigured, sendEmail } from '@/lib/auth/mailer';
+import { renderPasswordChanged } from '@/lib/auth/email-templates';
+import { appOrigin } from '@/lib/auth/app-url';
 import { NextResponse } from 'next/server';
-import { hashPassword, hashToken, verifyToken } from '@/lib/auth/password';
+import { hashPassword, hashToken } from '@/lib/auth/password';
 import { getUserByResetToken, updatePassword } from '@/lib/auth/queries';
+import { takeRouteLimit } from '@/lib/borga/route-limits';
 
 export const runtime = 'nodejs';
 
@@ -12,6 +16,9 @@ export async function POST(req: Request) {
 
     if (!token) {
       return NextResponse.json({ ok: false, error: 'Missing reset token.' }, { status: 400 });
+    }
+    if (password.length > 200) {
+      return NextResponse.json({ ok: false, error: 'Password must be at most 200 characters.' }, { status: 400 });
     }
     if (password.length < 8) {
       return NextResponse.json({ ok: false, error: 'Password must be at least 8 characters.' }, { status: 400 });
@@ -25,6 +32,20 @@ export async function POST(req: Request) {
     }
 
     await updatePassword(user.id, hashPassword(password));
+    // A reset is usually done because someone else may have access: end every session that exists.
+    await (await import('@/lib/auth/session-revocation')).revokeAllSessions(user.id).catch(() => undefined);
+    // Tell the owner, so a reset they did not ask for is noticed. Capped like
+    // every other outbound form; a repeat request still succeeds, it just skips
+    // sending another message.
+    const origin = appOrigin(req);
+    const mailLimit = takeRouteLimit('passwordReset', user.id);
+    if (origin && !mailLimit.limited) {
+      void (async () => {
+        if (!(await isEmailConfigured())) return;
+        const mail = renderPasswordChanged({ name: user.name, signInUrl: `${origin}/login` });
+        await sendEmail({ to: user.email, subject: mail.subject, html: mail.html, text: mail.text });
+      })().catch(() => undefined);
+    }
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ ok: false, error: 'Could not reset password.' }, { status: 500 });

@@ -12,6 +12,7 @@ import {
 import { userWsKey } from './keys';
 import { encryptSecret, decryptSecret } from './secrets';
 import { sendThreadedEmail, isEmailConfigured } from '@/lib/auth/mailer';
+import { renderTicketReply } from './email-core';
 import type { ProactiveNotice } from './data';
 import {
   DEFAULT_TICKET_SETTINGS,
@@ -149,10 +150,69 @@ export async function getTicket(u: string, ws: string, id: string): Promise<Tick
   return getBorgaState<Ticket>(ticketKey(u, ws, id));
 }
 
+/**
+ * Delete a ticket — only closed or resolved ones. Open SLA records stay
+ * auditable: their history must survive, so active tickets cannot be deleted
+ * (resolve or close them first).
+ */
+export async function deleteTicket(u: string, ws: string, id: string): Promise<{ ok: boolean; error?: string }> {
+  const ticket = await getTicket(u, ws, id);
+  if (!ticket) return { ok: false, error: 'Ticket not found' };
+  if (ticket.status !== 'closed' && ticket.status !== 'resolved') {
+    return { ok: false, error: `Only closed or resolved tickets can be deleted — ${id} is ${ticket.status}. SLA history stays auditable.` };
+  }
+  await deleteBorgaState(ticketKey(u, ws, id));
+  return { ok: true };
+}
+
 async function saveTicket(u: string, ws: string, t: Ticket): Promise<Ticket> {
   const next = { ...t, updatedAt: now(), comments: t.comments.slice(-300), messageIds: t.messageIds.slice(-60) };
   await setBorgaState(ticketKey(u, ws, t.id), next);
   return next;
+}
+
+/**
+ * Merge a duplicate ticket into a primary: the duplicate's conversation
+ * (comments, participants, email message-ids) moves to the primary, both get a
+ * cross-link system comment, and the duplicate closes — numbers stay reserved
+ * so the audit trail never renumbers. Refuses merging a ticket into itself.
+ */
+export async function mergeTickets(
+  u: string, ws: string, primaryId: string, duplicateId: string, actor: string,
+): Promise<{ primary?: Ticket; duplicate?: Ticket; error?: string }> {
+  if (primaryId === duplicateId) return { error: 'A ticket cannot be merged into itself.' };
+  const primary = await getTicket(u, ws, primaryId);
+  const duplicate = await getTicket(u, ws, duplicateId);
+  if (!primary) return { error: `Ticket ${primaryId} not found` };
+  if (!duplicate) return { error: `Ticket ${duplicateId} not found` };
+  if (isDoneStatus(primary.status)) return { error: `${primaryId} is ${primary.status} — reopen it before merging into it.` };
+
+  const at = now();
+  const moved = duplicate.comments
+    .filter((c) => c.kind !== 'system')
+    .map((c) => ({ ...c, at: c.at, body: `[from ${duplicate.id}] ${c.body}` }));
+  const merged: Ticket = {
+    ...primary,
+    comments: [...primary.comments, sysComment(`Merged ${duplicate.id} (“${duplicate.subject}”) into this ticket by ${actor}.`, actor), ...moved],
+    participants: [...new Set([...primary.participants, ...duplicate.participants])].slice(0, 40),
+    messageIds: [...new Set([...primary.messageIds, ...duplicate.messageIds])].slice(0, 60),
+    labels: [...new Set([...primary.labels, ...duplicate.labels])].slice(0, 12),
+    customerId: primary.customerId ?? duplicate.customerId,
+    projectId: primary.projectId ?? duplicate.projectId,
+    updatedAt: at,
+  };
+  const savedPrimary = await saveTicket(u, ws, merged);
+
+  const closedDup: Ticket = {
+    ...duplicate,
+    status: 'closed',
+    closedAt: at,
+    resolvedAt: duplicate.resolvedAt ?? at,
+    comments: [...duplicate.comments, sysComment(`Merged into ${primaryId} by ${actor}. Further replies thread there.`, actor)],
+    updatedAt: at,
+  };
+  const savedDup = await saveTicket(u, ws, closedDup);
+  return { primary: savedPrimary, duplicate: savedDup };
 }
 
 export function summarize(t: Ticket): TicketSummary {
@@ -178,6 +238,7 @@ export const createInputSchema = z.object({
   requesterName: z.string().trim().max(120).default(''),
   requesterEmail: z.string().trim().toLowerCase().max(254).refine((v) => v === '' || EMAIL_RE.test(v)).default(''),
   assignee: z.string().trim().max(120).default(''),
+  assigneeId: z.string().max(64).optional(),
   labels: z.array(z.string().trim().min(1).max(40)).max(12).default([]),
   projectId: z.string().max(64).optional(),
   customerId: z.string().max(64).optional(),
@@ -189,7 +250,7 @@ export async function createTicket(
   u: string,
   ws: string,
   raw: CreateTicketInput,
-  ctx: { source: TicketSource; actor: string; messageId?: string; extraComments?: TicketComment[] },
+  ctx: { source: TicketSource; actor: string; messageId?: string; extraComments?: TicketComment[]; fromAgent?: boolean },
 ): Promise<Ticket> {
   const input = createInputSchema.parse(raw);
   const settings = await loadSettings(u, ws);
@@ -205,6 +266,7 @@ export async function createTicket(
     requesterEmail: input.requesterEmail,
     participants: [],
     assignee: input.assignee,
+    assigneeId: input.assigneeId,
     labels: input.labels,
     projectId: input.projectId,
     customerId: input.customerId,
@@ -231,6 +293,8 @@ export async function createTicket(
       const latest = await loadSettings(u, ws);
       if (latest.nextNumber <= n) await setBorgaState(settingsKey(u, ws), { ...latest, nextNumber: n + 1 });
       if (ctx.messageId) await setBorgaState(midKey(u, ws, ctx.messageId), { ticketId: id });
+      // Hand it to the support agent. Not for tickets an agent opened itself (that would loop), and never allowed to delay or fail creation.
+      if (!ctx.fromAgent) void import('./automations').then((m) => m.onTicketCreated(u, ws, ticket)).catch((e) => console.error('[automation] ticket hand-off failed', e));
       return ticket;
     }
   }
@@ -244,6 +308,7 @@ export const updateInputSchema = z.object({
   priority: z.enum(TICKET_PRIORITIES as [TicketPriority, ...TicketPriority[]]).optional(),
   status: z.enum(TICKET_STATUSES as [TicketStatus, ...TicketStatus[]]).optional(),
   assignee: z.string().trim().max(120).optional(),
+  assigneeId: z.string().max(64).nullable().optional(),
   labels: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
   projectId: z.string().max(64).nullable().optional(),
   customerId: z.string().max(64).nullable().optional(),
@@ -290,6 +355,7 @@ export async function updateTicket(u: string, ws: string, id: string, patch: Upd
   if (patch.type) t.type = patch.type;
   if (patch.priority) t.priority = patch.priority;
   if (patch.assignee !== undefined) t.assignee = patch.assignee;
+  if (patch.assigneeId !== undefined) t.assigneeId = patch.assigneeId ?? undefined;
   if (patch.labels) t.labels = patch.labels;
   if (patch.projectId !== undefined) t.projectId = patch.projectId ?? undefined;
   if (patch.customerId !== undefined) t.customerId = patch.customerId ?? undefined;
@@ -323,8 +389,6 @@ function fromHeader(s: TicketSettings): string | undefined {
   return s.mailbox.address ? `${s.mailbox.displayName.replace(/[<>"\r\n]/g, '') || 'Support'} <${s.mailbox.address}>` : undefined;
 }
 
-const escapeHtml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 async function sendToRequester(
   u: string,
   ws: string,
@@ -334,19 +398,18 @@ async function sendToRequester(
   auto: boolean,
 ): Promise<{ messageId?: string; delivery: 'sent' | 'failed' | 'not-configured' }> {
   if (!t.requesterEmail) return { delivery: 'failed' };
-  if (!(await isEmailConfigured())) return { delivery: 'not-configured' };
+  if (!(await isEmailConfigured({ userId: u, ws }))) return { delivery: 'not-configured' };
   const refs = t.messageIds.slice(-20);
   const r = await sendThreadedEmail({
     to: t.requesterEmail,
     subject: `Re: ${ticketToken(t.id)} ${normalizeSubject(t.subject)}`,
-    text: body,
-    html: `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap">${escapeHtml(body)}</div>`,
+    ...renderTicketReply({ body, companyName: settings.mailbox.displayName || 'Support', ticketRef: t.id }),
     from: fromHeader(settings),
     replyTo: settings.mailbox.address || undefined,
     inReplyTo: refs[refs.length - 1],
     references: refs,
     headers: auto ? { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All' } : undefined,
-  });
+  }, { userId: u, ws });
   if (!r.ok) return { delivery: 'failed' };
   if (r.messageId) {
     t.messageIds.push(r.messageId);
@@ -500,7 +563,7 @@ async function routeMail(u: string, ws: string, mail: InboundEmail, settings: St
     { subject: normalizeSubject(mail.subject).slice(0, 200), description: text, requesterEmail: fromEmail, requesterName: name },
     { source: 'email', actor: name || fromEmail, messageId },
   );
-  if (settings.mailbox.autoAck && (await isEmailConfigured())) {
+  if (settings.mailbox.autoAck && (await isEmailConfigured({ userId: u, ws }))) {
     const fresh = (await getTicket(u, ws, ticket.id)) ?? ticket;
     const sent = await sendToRequester(
       u,
@@ -639,21 +702,29 @@ export async function sweepSla(u: string, ws: string): Promise<{ checked: number
     if (dirty) await saveTicket(u, ws, t);
     // One email per ticket, even when both the response and the resolution clock are breached.
     if (newlyBreached.length) void import('./email-notify').then((m) => m.notifyEvent(u, ws, 'sla_breach', { ticketId: t.id, subject: t.subject, priority: t.priority, which: newlyBreached.join(' + ') })).catch(() => undefined);
+    // Fresh breaches are workflow events too (user flows decide what escalation means here).
+    if (newlyBreached.length) {
+      void import('./flows-server')
+        .then((m) => m.fireEvent(u, ws, 'sla.breach', { ticketId: t.id, subject: t.subject, priority: t.priority }, `sla:${t.id}:${newlyBreached.join('+')}`))
+        .catch(() => undefined);
+    }
   }
 
   if (notices.length) {
     const key = userWsKey(u, ws, 'notices');
     const existing = (await getBorgaState<ProactiveNotice[]>(key)) ?? [];
     await setBorgaState(key, [...notices, ...existing].slice(0, 100));
+    // SLA breaches also try browser push (this path batches, so it cannot use addNotice; prefs still gate delivery).
+    void import('./push-server').then((m) => m.pushForNotices(u, ws, notices)).catch(() => undefined);
   }
-  if (emails.length && settings.escalationEmail && (await isEmailConfigured())) {
+  if (emails.length && settings.escalationEmail && (await isEmailConfigured({ userId: u, ws }))) {
     await sendThreadedEmail({
       to: settings.escalationEmail,
       subject: `[SLA] ${emails.length} breach${emails.length === 1 ? '' : 'es'} need attention`,
       text: emails.join('\n'),
       from: fromHeader(settings),
       headers: { 'Auto-Submitted': 'auto-generated' },
-    });
+    }, { userId: u, ws });
   }
   return out;
 }

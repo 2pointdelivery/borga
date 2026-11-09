@@ -99,6 +99,7 @@ import {
   type Workflow,
   type BookClosure,
   type TimeEntry,
+  type PayrollRun,
   type TeamInvite,
   type TaxProfile,
   type Budget,
@@ -107,8 +108,22 @@ import {
   type ReconciliationRule,
   type McpServer,
 } from '@/lib/borga/data';
-import { getBorgaStatesByPrefixOrThrow, setBorgaState } from '@/lib/borga/persistence';
+import { getBorgaRowsByPrefixOrThrow, getBorgaState, setBorgaState, setBorgaStateIfVersion } from '@/lib/borga/persistence';
+import { ownsWorkspace } from '@/lib/borga/workspace-access';
+import { isMoneyEntity, prepareEntityForSave } from '@/lib/borga/save-value';
+import { invalidateTenantCache } from '@/lib/borga/tenant-guard';
 import type { RecurringBill, RecurringInvoice } from '@/lib/borga/recurring';
+import { EMPTY_FILINGS, type FilingsState } from '@/lib/borga/filing-catalog';
+import { EMPTY_CAP_TABLE, type CapTableState } from '@/lib/borga/cap-table';
+import { EMPTY_QUOTES, type Quote } from '@/lib/borga/quotes';
+import { EMPTY_POS, type PurchaseOrder } from '@/lib/borga/procurement';
+import { EMPTY_SNAPSHOTS, EMPTY_PEERS, type ValuationSnapshot, type ValuationPeer } from '@/lib/borga/valuation-history';
+import type { PayrollSettings } from '@/lib/borga/payroll-engine';
+import { EMPTY_FX, type FxRates } from '@/lib/borga/fx';
+import { EMPTY_TILL_SESSIONS, type TillSession } from '@/lib/borga/inventory';
+import { billingInfo, paymentRequired } from '@/lib/borga/billing-server';
+import { EMPTY_FIXED_ASSETS, type FixedAssetsState } from '@/lib/borga/fixed-asset-journals';
+import { INITIAL_WAREHOUSES, type InventoryItem, type StockMovement, type PosSale, type Warehouse } from '@/lib/borga/inventory';
 import { verifySessionToken, sessionCookieName } from '@/lib/auth/session';
 import { userWorkspacesKey, userWsKey, isValidUserId, isValidWsId } from '@/lib/borga/keys';
 
@@ -122,8 +137,10 @@ export const WORKSPACE_ENTITIES = [
   'activity', 'memories', 'scheduledTasks', 'agentRuns', 'notices',
   'employees', 'leave', 'invoices', 'messagingChannels', 'secureChats',
   'customers', 'contacts', 'vendors', 'bills', 'coa', 'journals', 'bankAccounts', 'bankTxns',
-  'workflows', 'closures', 'timeEntries', 'invites', 'taxProfiles', 'budgets', 'revenueTracks', 'projects', 'reconciliationRules',
-  'mcpServers', 'recurringInvoices', 'recurringBills',
+  'workflows', 'closures', 'timeEntries', 'payrollRuns', 'invites', 'taxProfiles', 'budgets', 'revenueTracks', 'projects', 'reconciliationRules',
+  'mcpServers', 'recurringInvoices', 'recurringBills', 'filings', 'fixedAssets',
+  'inventoryItems', 'warehouses', 'stockMovements', 'posSales',
+  'capTable', 'quotes', 'purchaseOrders', 'valuationSnapshots', 'valuationPeers', 'payrollSettings', 'fxRates', 'tillSessions',
 ] as const;
 
 const GLOBAL_ENTITIES = ['workspaces'] as const;
@@ -177,7 +194,8 @@ const DEFAULT_STATE = {
   bankTxns: INITIAL_BANK_TXNS,
   workflows: INITIAL_WORKFLOWS,
   closures: [],
-  timeEntries: [],
+    timeEntries: [],
+    payrollRuns: [],
   invites: [],
   taxProfiles: INITIAL_TAX_PROFILES,
   budgets: INITIAL_BUDGETS,
@@ -187,7 +205,21 @@ const DEFAULT_STATE = {
   mcpServers: INITIAL_MCP_SERVERS,
   recurringInvoices: [] as RecurringInvoice[],
   recurringBills: [] as RecurringBill[],
+  filings: EMPTY_FILINGS,
+  fixedAssets: EMPTY_FIXED_ASSETS,
   notices: INITIAL_NOTICES,
+  inventoryItems: [] as InventoryItem[],
+  warehouses: INITIAL_WAREHOUSES,
+  stockMovements: [] as StockMovement[],
+  posSales: [] as PosSale[],
+  capTable: EMPTY_CAP_TABLE as CapTableState,
+  quotes: EMPTY_QUOTES as Quote[],
+  purchaseOrders: EMPTY_POS as PurchaseOrder[],
+  valuationSnapshots: EMPTY_SNAPSHOTS as ValuationSnapshot[],
+  valuationPeers: EMPTY_PEERS as ValuationPeer[],
+  payrollSettings: null as PayrollSettings | null,
+  fxRates: EMPTY_FX as FxRates,
+  tillSessions: EMPTY_TILL_SESSIONS as TillSession[],
 };
 
 /** Resolve the authenticated user id from the session cookie. */
@@ -195,6 +227,11 @@ async function getUserId(req: NextRequest): Promise<string | null> {
   const c = req.cookies.get(sessionCookieName());
   const token = typeof c === 'string' ? c : c?.value;
   return verifySessionToken(token);
+}
+
+/** 403 response when ws is not in the caller's registry (a foreign or deleted workspace). */
+function forbiddenWorkspace() {
+  return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
 }
 
 export async function GET(req: NextRequest) {
@@ -207,19 +244,29 @@ export async function GET(req: NextRequest) {
   const wsParam = url.searchParams.get('ws');
   const ws = isValidWsId(wsParam) ? wsParam : null;
 
+  // A workspace id that is not in the caller's registry is foreign (or
+  // deleted): refuse instead of reading a shadow key that can never be real.
+  if (ws && !(await ownsWorkspace(userId, ws))) {
+    return NextResponse.json({ error: 'forbidden_workspace' }, { status: 403 });
+  }
+
   // Single bulk fetch — one DB query instead of dozens of parallel ones.
   // The ping write runs concurrently to stamp the sentinel key.
   // A database error must not look like "no data": that would be shown as seed data and
   // then saved back over the user's real records. Fail with 503 and let the client hold writes.
-  let all: Record<string, unknown>;
+  const all: Record<string, unknown> = {};
+  // Version of each stored entity, keyed by entity name. The dashboard saves with the version it last read (see POST).
+  const versions: Record<string, number> = {};
   let pinged: boolean;
   try {
-    [all, pinged] = await Promise.all([
-      ws
-        ? getBorgaStatesByPrefixOrThrow(userWsKey(userId, ws, ''))
-        : getBorgaStatesByPrefixOrThrow(userWorkspacesKey(userId)),
-      setBorgaState('borga_ping', Date.now()),
-    ]);
+    const prefix = ws ? userWsKey(userId, ws, '') : userWorkspacesKey(userId);
+    const [rows, ok] = await Promise.all([getBorgaRowsByPrefixOrThrow(prefix), setBorgaState('borga_ping', Date.now())]);
+    pinged = ok;
+    for (const [k, r] of Object.entries(rows)) {
+      all[k] = r.value;
+      if (ws) versions[k.slice(prefix.length)] = r.version;
+      else if (k === prefix) versions.workspaces = r.version;
+    }
   } catch {
     return NextResponse.json({ error: 'database_unavailable', workspaces: [], persisted: false }, { status: 503 });
   }
@@ -233,14 +280,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       workspaces: workspaces.length ? workspaces : INITIAL_WORKSPACES,
       persisted: pinged === true,
+      versions,
     });
   }
 
   const get = <T>(entity: string): T | null => rawGet<T>(userWsKey(userId, ws, entity));
 
+  // what this company is charged and whether it may be used: the dashboard shows the paywall from this
+  const billing = await billingInfo(userId, ws, { sync: false }).catch(() => null);
+
   return NextResponse.json({
     workspace: ws,
     workspaces,
+    versions,
+    billing,
     agents: get<Agent[]>('agents') ?? DEFAULT_STATE.agents,
     goals: get<Goal[]>('goals') ?? DEFAULT_STATE.goals,
     approvals: get<Approval[]>('approvals') ?? DEFAULT_STATE.approvals,
@@ -253,7 +306,13 @@ export async function GET(req: NextRequest) {
     })(),
     connections: get<AppConnection[]>('connections') ?? DEFAULT_STATE.connections,
     ops: get<OpsState>('ops') ?? DEFAULT_STATE.ops,
-    composio: get<ComposioConfig>('composio') ?? DEFAULT_STATE.composio,
+    // The Composio key lives encrypted in the connection store, never in the
+    // dashboard's bulk state: report only whether one is configured.
+    composio: (() => {
+      const c = get<ComposioConfig>('composio') ?? DEFAULT_STATE.composio;
+      const configured = c.configured || Boolean(c.apiKey && c.apiKey.length > 8);
+      return { ...c, apiKey: '', configured };
+    })(),
     messages: get<CommsMessage[]>('messages') ?? DEFAULT_STATE.messages,
     ads: get<AdCampaign[]>('ads') ?? DEFAULT_STATE.ads,
     webhooks: get<Webhook[]>('webhooks') ?? DEFAULT_STATE.webhooks,
@@ -269,7 +328,12 @@ export async function GET(req: NextRequest) {
     calls: get<CallRecord[]>('calls') ?? DEFAULT_STATE.calls,
     knowledge: get<KnowledgeEntry[]>('knowledge') ?? DEFAULT_STATE.knowledge,
     kbquestions: get<KbQuestion[]>('kbquestions') ?? DEFAULT_STATE.kbquestions,
-    settings: get<SettingsState>('settings') ?? DEFAULT_STATE.settings,
+    settings: (() => {
+      const s = get<SettingsState>('settings') ?? DEFAULT_STATE.settings;
+      const safe = { ...s };
+      delete safe.engineApiKey; // legacy plaintext key: replaced by the encrypted Company Engine connection
+      return safe;
+    })(),
     tasks: get<Task[]>('tasks') ?? DEFAULT_STATE.tasks,
     posts: get<SocialPost[]>('posts') ?? DEFAULT_STATE.posts,
     leads: get<Lead[]>('leads') ?? DEFAULT_STATE.leads,
@@ -294,6 +358,7 @@ export async function GET(req: NextRequest) {
     workflows: get<Workflow[]>('workflows') ?? DEFAULT_STATE.workflows,
     closures: get<BookClosure[]>('closures') ?? DEFAULT_STATE.closures,
     timeEntries: get<TimeEntry[]>('timeEntries') ?? DEFAULT_STATE.timeEntries,
+    payrollRuns: get<PayrollRun[]>('payrollRuns') ?? DEFAULT_STATE.payrollRuns,
     invites: get<TeamInvite[]>('invites') ?? DEFAULT_STATE.invites,
     taxProfiles: get<TaxProfile[]>('taxProfiles') ?? DEFAULT_STATE.taxProfiles,
     budgets: get<Budget[]>('budgets') ?? DEFAULT_STATE.budgets,
@@ -303,10 +368,35 @@ export async function GET(req: NextRequest) {
     mcpServers: get<McpServer[]>('mcpServers') ?? DEFAULT_STATE.mcpServers,
     recurringInvoices: get<RecurringInvoice[]>('recurringInvoices') ?? DEFAULT_STATE.recurringInvoices,
     recurringBills: get<RecurringBill[]>('recurringBills') ?? DEFAULT_STATE.recurringBills,
+    filings: get<FilingsState>('filings') ?? DEFAULT_STATE.filings,
+    fixedAssets: get<FixedAssetsState>('fixedAssets') ?? DEFAULT_STATE.fixedAssets,
+    inventoryItems: get<InventoryItem[]>('inventoryItems') ?? DEFAULT_STATE.inventoryItems,
+    warehouses: get<Warehouse[]>('warehouses') ?? DEFAULT_STATE.warehouses,
+    stockMovements: get<StockMovement[]>('stockMovements') ?? DEFAULT_STATE.stockMovements,
+    posSales: get<PosSale[]>('posSales') ?? DEFAULT_STATE.posSales,
+    capTable: get<CapTableState>('capTable') ?? DEFAULT_STATE.capTable,
+    quotes: get<Quote[]>('quotes') ?? DEFAULT_STATE.quotes,
+    purchaseOrders: get<PurchaseOrder[]>('purchaseOrders') ?? DEFAULT_STATE.purchaseOrders,
+    valuationSnapshots: get<ValuationSnapshot[]>('valuationSnapshots') ?? DEFAULT_STATE.valuationSnapshots,
+    valuationPeers: get<ValuationPeer[]>('valuationPeers') ?? DEFAULT_STATE.valuationPeers,
+    payrollSettings: get<PayrollSettings>('payrollSettings') ?? DEFAULT_STATE.payrollSettings,
+    fxRates: get<FxRates>('fxRates') ?? DEFAULT_STATE.fxRates,
+    tillSessions: get<TillSession[]>('tillSessions') ?? DEFAULT_STATE.tillSessions,
   });
 }
 
-const MAX_PAYLOAD_BYTES = 500_000; // ~0.5 MB per entity write
+// One entity is saved as a whole list (invoices, journals, bank transactions...), so this is the size of
+// that list. 8 MB is far below the database limit (JSON values may be as large as max_allowed_packet,
+// 64 MB by default on MySQL 8.4) and still small enough that one request cannot exhaust memory.
+const MAX_PAYLOAD_BYTES = 8_000_000;
+
+/** Saving leads, tasks or invoices can hand work to an agent (see lib/borga/automations.ts). Never delays or fails the save. */
+const AUTOMATION_SCOPE: Record<string, 'leads' | 'tasks' | 'invoices'> = { leads: 'leads', tasks: 'tasks', invoices: 'invoices' };
+function handOffSoon(userId: string, ws: unknown, entity: string): void {
+  const scope = AUTOMATION_SCOPE[entity];
+  if (!scope || !isValidWsId(ws)) return;
+  void import('@/lib/borga/automations').then((m) => m.runAutomationsSoon(userId, ws as string, [scope])).catch(() => undefined);
+}
 
 export async function POST(req: NextRequest) {
   const userId = await getUserId(req);
@@ -314,11 +404,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
   try {
-    const raw = await req.text();
-    if (!raw || raw.length > MAX_PAYLOAD_BYTES) {
+    // Refuse by the declared size first so an oversized body is never read into memory.
+    if (Number(req.headers.get('content-length') ?? 0) > MAX_PAYLOAD_BYTES) {
       return NextResponse.json({ ok: false, error: 'Payload too large' }, { status: 413 });
     }
-    const body = JSON.parse(raw) as { entity?: string; value?: unknown; ws?: unknown };
+    const raw = await req.text();
+    if (!raw || Buffer.byteLength(raw) > MAX_PAYLOAD_BYTES) {
+      return NextResponse.json({ ok: false, error: 'Payload too large' }, { status: 413 });
+    }
+    const body = JSON.parse(raw) as { entity?: string; value?: unknown; ws?: unknown; baseVersion?: unknown };
     const entity = body?.entity;
     if (typeof entity !== 'string' || !ALLOWED_ENTITIES.has(entity)) {
       return NextResponse.json({ ok: false, error: 'Unknown entity' }, { status: 400 });
@@ -331,11 +425,61 @@ export async function POST(req: NextRequest) {
       if (!isValidWsId(body.ws)) {
         return NextResponse.json({ ok: false, error: 'Workspace id required for this entity' }, { status: 400 });
       }
+      // Refuse writes to a workspace outside the caller's registry: without
+      // this the write lands in an unreachable shadow key (writes that look
+      // accepted but are never readable again).
+      if (!(await ownsWorkspace(userId, body.ws as string))) return forbiddenWorkspace();
       key = userWsKey(userId, body.ws as string, entity);
+      // A workspace that has not paid cannot be set up or used: nothing of its own is saved (see lib/borga/billing.ts).
+      const unpaid = await paymentRequired(userId, body.ws as string);
+      if (unpaid) return NextResponse.json({ ok: false, error: unpaid.error, billing: unpaid.billing }, { status: 402 });
     }
 
-    const ok = await setBorgaState(key, body.value ?? null);
+    // Optimistic save: the client says which version of this entity it last read. If the stored version has moved on (another
+    // tab or device saved, or an agent changed it), nothing is written and the current copy comes back with 409, so a stale
+    // tab can never silently overwrite newer data. A body without baseVersion is the older unconditional save.
+    // A present but malformed baseVersion is an error, never "no check": a buggy client must not switch the protection off.
+    if (body.baseVersion !== undefined && !(typeof body.baseVersion === 'number' && Number.isInteger(body.baseVersion) && body.baseVersion >= 0)) {
+      return NextResponse.json({ ok: false, error: 'baseVersion must be a non-negative integer' }, { status: 400 });
+    }
+    const baseVersion = body.baseVersion as number | undefined;
+    // Recalculate money from the lines and drop client-supplied privilege fields.
+    // The browser's totals and role/plan claims are never what gets stored. The
+    // transform lives in lib/borga/save-value.ts so the save path itself is tested.
+    let currency = 'USD';
+    if (isMoneyEntity(entity) && isValidWsId(body.ws)) {
+      try {
+        const registry = await getBorgaState<Workspace[]>(userWorkspacesKey(userId));
+        currency = registry?.find((w) => w.id === body.ws)?.currency || 'USD';
+      } catch {
+        currency = 'USD';
+      }
+    }
+    const value = prepareEntityForSave(entity, body.value ?? null, currency);
+    if (baseVersion !== undefined) {
+      let r;
+      try {
+        r = await setBorgaStateIfVersion(key, value, baseVersion);
+      } catch {
+        return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
+      }
+      if (!r.ok) return NextResponse.json({ ok: false, saved: false, error: 'conflict', current: r.current }, { status: 409 });
+      if (entity === 'workspaces') invalidateTenantCache(userId); // a new/renamed company must be usable immediately
+      handOffSoon(userId, body.ws, entity);
+      if (typeof body.ws === 'string') {
+        const ws = body.ws;
+        void import('@/lib/borga/audit').then((m) => m.appendAudit(userId, ws, entity, r.version)).catch(() => undefined);
+      }
+      return NextResponse.json({ ok: true, saved: true, version: r.version });
+    }
+    const ok = await setBorgaState(key, value);
     if (!ok) return NextResponse.json({ ok: false, saved: false, error: 'database_unavailable' }, { status: 503 });
+    if (entity === 'workspaces') invalidateTenantCache(userId);
+    handOffSoon(userId, body.ws, entity);
+    if (entity !== 'workspaces' && typeof body.ws === 'string') {
+      const ws = body.ws;
+      void import('@/lib/borga/audit').then((m) => m.appendAudit(userId, ws, entity, null)).catch(() => undefined);
+    }
     return NextResponse.json({ ok: true, saved: true });
   } catch {
     return NextResponse.json({ ok: false, error: 'Invalid body' }, { status: 400 });

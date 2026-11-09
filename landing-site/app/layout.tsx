@@ -2,9 +2,9 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Borga — Agentic Command Center',
+  title: 'Borga — AI Company OS for Sales, Marketing, Finance & Agents',
   description:
-    'Borga is an animated agentic assistant dashboard with a voice assistant, real-time agent status, task progress and per-department KPIs. Orchestrate your business, delegate tasks by voice and watch agents collaborate.',
+    'Borga runs your whole company in one workspace: sales pipeline, social and paid marketing, double-entry finance, HR, and a fleet of AI agents — with regional privacy (GDPR, CCPA, NDPR, POPIA) built in.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

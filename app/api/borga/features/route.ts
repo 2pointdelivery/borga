@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { FEATURES, isFeatureId } from '@/lib/borga/features';
 import { loadFeatures, setFeatureOverride, sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
+import { ownsWorkspaceStrict } from '@/lib/borga/workspace-access';
 
 export const runtime = 'nodejs';
 
@@ -10,6 +11,7 @@ export async function GET(req: NextRequest) {
   if (!userId) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   const ws = new URL(req.url).searchParams.get('ws');
   if (!isValidWsId(ws)) return NextResponse.json({ ok: false, error: 'ws required' }, { status: 400 });
+  if (!(await ownsWorkspaceStrict(userId, ws))) return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
   const { flags, locked } = await loadFeatures(userId, ws);
   return NextResponse.json({ ok: true, catalog: FEATURES, flags, locked });
 }
@@ -26,6 +28,7 @@ export async function POST(req: NextRequest) {
   if (!isValidWsId(body.ws) || !isFeatureId(body.id) || typeof body.enabled !== 'boolean') {
     return NextResponse.json({ ok: false, error: 'ws, id and enabled are required' }, { status: 400 });
   }
+  if (!(await ownsWorkspaceStrict(userId, body.ws))) return NextResponse.json({ ok: false, error: 'forbidden_workspace' }, { status: 403 });
   const current = await loadFeatures(userId, body.ws);
   if (current.locked.includes(body.id)) {
     return NextResponse.json({ ok: false, error: 'This feature is disabled by the deployment (BORGA_FEATURES_OFF).' }, { status: 409 });

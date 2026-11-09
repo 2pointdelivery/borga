@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Plus, Trash2, Pencil, ReceiptText, Download, Search, Mail, Send, CircleDollarSign, X, Ban, BellRing,
@@ -11,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -22,28 +24,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { effectiveInvoiceStatus } from '@/lib/borga/lifecycles';
 import {
   INVOICE_STATUS_STYLE,
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABEL,
-  fmtNum,
-  INITIAL_TAX_PROFILES,
+    INITIAL_TAX_PROFILES,
   DEFAULT_TAX_PROFILE_ID,
   type Invoice,
   type InvoiceLine,
   type InvoiceStatus,
   type PaymentMethod,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { invoiceHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { useBorga } from '@/lib/borga/store';
+import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
+import { toast } from '@/lib/toast-bus';
+import { findInvoiceDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
-import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { DateInput, Field, ProjectSelect, AccountSelect,
+  TaxProfilesMultiSelect, CurrencySelect } from '../form-widgets';
+import { rateFor } from '@/lib/borga/fx';
+import { documentTotals, convertToWorkspace, normalizeInvoice } from '@/lib/borga/pricing';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { cn } from '@/lib/utils';
 
 interface InvoiceForm {
   number: string;
   client: string;
+  /** Linked customer account id (set when a known customer is picked in the search picker). */
+  customerId?: string;
   status: InvoiceStatus;
   issued: string;
   due: string;
@@ -55,11 +67,20 @@ interface InvoiceForm {
   lines: InvoiceLine[];
   projectId?: string;
   accountId?: string;
+  /** Billing currency (ISO). Empty = workspace currency. */
+  currency: string;
 }
 
 // Module-scope helper keeps impure clock access out of component render.
 function dueSoonCutoff(): number {
   return Date.now() + 30 * 86400000;
+}
+
+/** Parses both invoice date shapes: ISO "YYYY-MM-DD" (dialogs, recurring) and "Oct 03" style. */
+function parseDue(due: string): number {
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec((due ?? '').trim());
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime();
+  return new Date(`${due} ${new Date().getFullYear()}`).getTime();
 }
 
 let idSeq = 0;
@@ -74,6 +95,7 @@ function emptyForm(number: string, defaultTaxProfileId?: string): InvoiceForm {
     issued: new Date().toISOString().slice(0, 10),
     due: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
     taxProfileIds: defaultTaxProfileId ? [defaultTaxProfileId] : [], externalRef: '', paymentMethod: 'bank-transfer', notes: '', description: '',
+    currency: '',
     lines: [
       { id: nextLineId(), description: '', qty: 1, unitPrice: 0 },
       { id: nextLineId(), description: '', qty: 1, unitPrice: 0 },
@@ -84,19 +106,19 @@ function emptyForm(number: string, defaultTaxProfileId?: string): InvoiceForm {
 export function InvoiceTab() {
   const {
     invoices, addInvoice, updateInvoice, deleteInvoice, voidInvoice, payInvoice, runDunningSweep,
-    customers, composio, log, activeWorkspace,
+    customers, inventoryItems, fxRates, composio, log, activeWorkspace, activeWorkspaceId,
     taxProfiles, defaultTaxProfileId,
     settings, addApproval,
   } = useBorga();
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Invoice | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Invoice | null>(null);
-  const [payTarget, setPayTarget] = useState<Invoice | null>(null);
+    const [payTarget, setPayTarget] = useState<Invoice | null>(null);
   const [payMethod, setPayMethod] = useState<PaymentMethod>('bank-transfer');
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [confirmDuplicateInvoice, setConfirmDuplicateInvoice] = useState<{ data: Invoice; flags: DuplicateFlag[] } | null>(null);  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payExternalRef, setPayExternalRef] = useState('');
   const [emailTarget, setEmailTarget] = useState<Invoice | null>(null);
   const [emailForm, setEmailForm] = useState({ to: '', subject: '', body: '' });
@@ -108,6 +130,7 @@ export function InvoiceTab() {
       setForm({
         number: editing.number,
         client: editing.client,
+        customerId: editing.customerId,
         status: editing.status,
         issued: editing.issued,
         due: editing.due,
@@ -116,6 +139,7 @@ export function InvoiceTab() {
         paymentMethod: editing.paymentMethod ?? 'bank-transfer',
         notes: editing.notes ?? '',
         description: editing.description ?? '',
+        currency: editing.currency ?? '',
         lines: editing.lines?.length ? editing.lines : [
           { id: nextLineId(), description: 'Services rendered', qty: 1, unitPrice: editing.amount },
         ],
@@ -138,24 +162,29 @@ export function InvoiceTab() {
     [taxProfiles, form.taxProfileIds],
   );
 
-  const formTotals = useMemo(() => {
-    const subtotal = form.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const tax = (subtotal * formTaxRate) / 100;
-    return { subtotal, tax, total: subtotal + tax };
-  }, [form.lines, formTaxRate]);
+  const formTotals = useMemo(
+    () => documentTotals(form.lines, { taxRate: formTaxRate, currency: form.currency.trim().toUpperCase() || currency }),
+    [form.lines, formTaxRate, form.currency, currency],
+  );
 
   const submit = () => {
     if (!form.client.trim() || form.lines.length === 0) return;
     const lines = form.lines.filter((l) => l.description.trim() || l.unitPrice);
     if (lines.length === 0) return;
-    const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const total = subtotal + (subtotal * formTaxRate) / 100;
+    // The server reprices from these lines; use the same helpers here so the
+    // preview, the stored invoice and an emailed copy cannot disagree.
+    const docCcy = form.currency.trim().toUpperCase() || currency;
+    const rate = docCcy === currency ? null : rateFor(fxRates, docCcy, currency);
+    if (docCcy !== currency && rate === null) {
+      toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or bill in ${currency}.`, variant: 'error' });
+      return;
+    }
     const profileNames = taxProfiles.filter((t) => form.taxProfileIds.includes(t.id)).map((t) => t.name).join(' + ');
-    const base: Invoice = {
+    const draft: Invoice = {
       id: editing?.id ?? `inv-${Date.now().toString(36)}`,
       number: form.number.trim() || `#${2200 + invoices.length}`,
       client: form.client.trim(),
-      amount: Math.round(total * 100) / 100,
+      amount: 0,
       status: form.status,
       issued: form.issued,
       due: form.due,
@@ -168,17 +197,53 @@ export function InvoiceTab() {
       taxProfileName: profileNames || undefined,
       externalRef: form.externalRef?.trim() || undefined,
       paymentMethod: form.paymentMethod,
-      customerId: editing?.customerId,
+      customerId: form.customerId ?? editing?.customerId,
       projectId: form.projectId,
       accountId: form.accountId,
+      currency: docCcy === currency ? undefined : docCcy,
+      fxRate: rate ?? undefined,
     };
+    // The saved amount is the server's arithmetic, mirrored locally.
+    const base = normalizeInvoice(draft, currency);
     if (editing) {
       updateInvoice(editing.id, base);
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Invoice ${base.number} updated — ${lines.length} line(s), total ${money(base.amount)}.` });
     } else {
+      const flags = findInvoiceDuplicates({ id: '', number: base.number, client: base.client, amount: base.amount, issued: base.issued }, invoices);
+      const exact = flags.find((f) => f.level === 'exact');
+      if (exact) {
+        toast({ title: 'Duplicate invoice blocked', description: exact.message, variant: 'error' });
+        log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `Duplicate invoice blocked: ${base.number} for ${base.client} — ${exact.message}` });
+        return;
+      }
+      const likely = flags.filter((f) => f.level === 'likely');
+      if (likely.length) {
+        setConfirmDuplicateInvoice({ data: base, flags: likely });
+        return;
+      }
       addInvoice(base);
       log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Invoice ${base.number} created for ${base.client} — ${lines.length} line(s), total ${money(base.amount)}, settlement via ${PAYMENT_METHOD_LABEL[base.paymentMethod ?? 'bank-transfer']}.` });
     }
+    setCreateOpen(false);
+    setEditing(null);
+  };
+
+  const doConfirmDuplicateInvoice = () => {
+    const p = confirmDuplicateInvoice;
+    if (!p) return;
+    addInvoice(p.data);
+    addApproval({
+      id: `ap-${Date.now().toString(36)}`,
+      title: `Possible duplicate invoice — review ${p.data.number} (${p.data.client})`,
+      description: `Recorded despite matching ${p.flags.map((f) => f.matchLabel).join('; ')} for ${money(p.data.amount)}. Please confirm it is a separate invoice, not a double bill.`,
+      category: 'spend',
+      amount: p.data.amount,
+      status: 'pending',
+      submittedBy: 'Atlas',
+      createdAt: new Date().toISOString(),
+    });
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Invoice ${p.data.number} recorded over a duplicate warning — routed to the approval queue for review.` });
+    setConfirmDuplicateInvoice(null);
     setCreateOpen(false);
     setEditing(null);
   };
@@ -207,7 +272,7 @@ export function InvoiceTab() {
     setEmailState('idle');
   };
 
-  /** Send via the company's linked Gmail (composio.dev OAuth); falls back to mailto. */
+  /** Send via the company's Gmail, else its own mail server; falls back to mailto. */
   const sendEmail = async () => {
     const inv = emailTarget;
     if (!inv || !emailForm.to.trim()) return;
@@ -229,30 +294,35 @@ export function InvoiceTab() {
     }
     setEmailState('sending');
     try {
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'execute',
-          appName: 'GMAIL_SEND_EMAIL',
-          entityId: 'workspace-inbox',
-          apiKey: composio.apiKey,
-          params: {
-            recipient_email: emailForm.to.trim(),
-            subject: emailForm.subject,
-            body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
-          },
-        }),
+      const r = await sendCompanyEmail({
+        ws: activeWorkspaceId,
+        to: emailForm.to,
+        subject: emailForm.subject,
+        body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
+        document: {
+          kind: 'invoice',
+          workspaceName: activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? 'Company',
+          documentNumber: inv.number,
+          recipientName: inv.client,
+          currency: inv.currency ?? currency,
+          totalAmount: inv.amount,
+          dueOrValidDate: inv.due,
+          lines: inv.lines?.map((l) => ({
+            label: l.description,
+            qty: l.qty,
+            unitPrice: l.unitPrice,
+            amount: l.qty * l.unitPrice,
+          })),
+        },
       });
-      const d = (await res.json()) as { ok?: boolean; error?: string };
-      if (d.ok) {
+      if (r.ok) {
         setEmailState('sent');
         updateInvoice(inv.id, { sentAt: new Date().toISOString(), status: inv.status === 'draft' ? 'sent' : inv.status });
-        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Invoice ${inv.number} emailed to ${emailForm.to} via Gmail (composio.dev).` });
+        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Invoice ${inv.number} emailed to ${emailForm.to} via ${r.via ?? 'Gmail'}.` });
         setTimeout(() => setEmailTarget(null), 1400);
         return;
       }
-      throw new Error(d.error ?? 'send failed');
+      throw new Error(r.note ?? 'send failed');
     } catch {
       // Fallback: open the user's mail client with the message pre-filled.
       const ws = activeWorkspace();
@@ -271,12 +341,16 @@ export function InvoiceTab() {
     if (!ws) return;
     const rows = [
       ['number', 'client', 'issued', 'due', 'subtotal', 'tax_rate', 'tax_profile', 'total', 'external_ref', 'status', 'payment_method', 'paid_at'],
-      ...filteredInvoices.map((i) => [
-        i.number, i.client, i.issued, i.due,
-        String(i.amount), String(i.taxRate ?? 0), i.taxProfileName ?? '', String(i.amount),
-        i.externalRef ?? '',
-        i.status, PAYMENT_METHOD_LABEL[i.paidMethod ?? i.paymentMethod ?? 'bank-transfer'], i.paidAt ?? '',
-      ]),
+      ...filteredInvoices.map((i) => {
+        const rate = i.taxRate ?? 0;
+        const subtotal = rate > 0 ? i.amount / (1 + rate / 100) : i.amount;
+        return [
+          i.number, i.client, i.issued, i.due,
+          subtotal.toFixed(2), String(rate), i.taxProfileName ?? '', String(i.amount),
+          i.externalRef ?? '',
+          i.status, PAYMENT_METHOD_LABEL[i.paidMethod ?? i.paymentMethod ?? 'bank-transfer'], i.paidAt ?? '',
+        ];
+      }),
     ];
     downloadTextFile(`invoices-${new Date().toISOString().slice(0, 10)}.csv`, csvWithHeader(ws, 'Invoice register', `${filteredInvoices.length} invoices`, rows));
     log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'sync', message: `${filteredInvoices.length} invoices exported with company header.` });
@@ -284,19 +358,19 @@ export function InvoiceTab() {
 
   // ── Advanced: stats, search, filters ──────────────────────────────────────
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'draft' | 'paid'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'overdue' | 'draft' | 'paid'>('all');
 
   const stats = useMemo(() => {
     const unpaid = invoices.filter((i) => i.status === 'sent' || i.status === 'overdue');
     const totalUnpaid = unpaid.reduce((s, i) => s + i.amount, 0);
-    const overdueAmount = invoices.filter((i) => i.status === 'overdue').reduce((s, i) => s + i.amount, 0);
+    const overdueAmount = invoices.filter((i) => effectiveInvoiceStatus(i) === 'overdue').reduce((s, i) => s + i.amount, 0);
     const paid = invoices.filter((i) => i.status === 'paid');
     const nonDraft = invoices.filter((i) => i.status !== 'draft');
     const avgTotal = nonDraft.length ? nonDraft.reduce((s, i) => s + i.amount, 0) / nonDraft.length : 0;
     const soonCutoff = dueSoonCutoff();
     const dueSoon = unpaid.filter((i) => {
-      const d = new Date(`${i.due} ${new Date().getFullYear()}`);
-      return !Number.isNaN(d.getTime()) && d.getTime() <= soonCutoff;
+      const d = parseDue(i.due);
+      return !Number.isNaN(d) && d <= soonCutoff;
     });
     return {
       totalUnpaid,
@@ -311,9 +385,11 @@ export function InvoiceTab() {
   const filteredInvoices = useMemo(
     () =>
       invoices.filter((i) => {
-        if (statusFilter === 'open' && !(i.status === 'sent' || i.status === 'overdue')) return false;
-        if (statusFilter === 'draft' && i.status !== 'draft') return false;
-        if (statusFilter === 'paid' && i.status !== 'paid') return false;
+        const eff = effectiveInvoiceStatus(i);
+        if (statusFilter === 'open' && !(eff === 'sent' || eff === 'overdue')) return false;
+        if (statusFilter === 'overdue' && eff !== 'overdue') return false;
+        if (statusFilter === 'draft' && eff !== 'draft') return false;
+        if (statusFilter === 'paid' && eff !== 'paid') return false;
         if (query && !`${i.number} ${i.client} ${i.issued} ${i.due}`.toLowerCase().includes(query.toLowerCase())) return false;
         return true;
       }),
@@ -372,7 +448,7 @@ export function InvoiceTab() {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-lg bg-muted p-1 text-xs">
-          {(['all', 'open', 'draft', 'paid'] as const).map((f) => (
+          {(['all', 'open', 'overdue', 'draft', 'paid'] as const).map((f) => (
             <button key={f} onClick={() => setStatusFilter(f)} className={cn('rounded-md px-4 py-1.5 font-medium capitalize', statusFilter === f ? 'bg-background shadow-sm' : 'text-muted-foreground')}>
               {f}
             </button>
@@ -389,7 +465,7 @@ export function InvoiceTab() {
           <thead className="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-4 py-2.5 font-medium">Invoice</th>
-              <th className="hidden px-4 py-2.5 font-medium sm:table-cell">Client</th>
+              <th className="hidden px-4 py-2.5 font-medium sm:table-cell">Customer</th>
               <th className="hidden px-4 py-2.5 font-medium md:table-cell">Issued → Due</th>
               <th className="hidden px-4 py-2.5 font-medium lg:table-cell">Method</th>
               <th className="px-4 py-2.5 text-right font-medium">Amount</th>
@@ -412,10 +488,11 @@ export function InvoiceTab() {
                 </td>
                 <td className="px-4 py-2.5 text-right font-mono text-xs">
                   {money(i.amount)}
+                  {i.foreignAmount !== undefined && i.currency && <span className="block text-[10px] font-normal text-muted-foreground">{i.currency} {i.foreignAmount.toFixed(2)}</span>}
                   {i.taxProfileName && <span className="block text-[10px] font-normal text-muted-foreground">{i.taxProfileName} {i.taxRate ?? 0}%</span>}
                 </td>
                 <td className="px-4 py-2.5">
-                  <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1', i.voidedAt ? 'bg-rose-500/10 text-rose-600 ring-rose-500/30' : INVOICE_STATUS_STYLE[i.status])}>{i.voidedAt ? 'voided' : i.status}</span>
+                  <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1', i.voidedAt ? 'bg-rose-500/10 text-rose-600 ring-rose-500/30' : INVOICE_STATUS_STYLE[effectiveInvoiceStatus(i)])}>{i.voidedAt ? 'voided' : effectiveInvoiceStatus(i)}</span>
                 </td>
                 <td className="px-2 py-2.5">
                   <div className="flex justify-end gap-0.5">
@@ -476,19 +553,34 @@ export function InvoiceTab() {
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editing ? `Edit invoice ${editing.number}` : 'New invoice'}</DialogTitle>
+            <DialogDescription>Bill a customer for work done. Totals add up as you type; sending starts the payment clock.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <Field label="Number">
                 <Input value={form.number} onChange={(e) => setForm({ ...form, number: e.target.value })} placeholder="#2223" />
               </Field>
-              <Field label="Client *" className="col-span-2">
-                <Input list="invoice-customers" value={form.client} onChange={(e) => setForm({ ...form, client: e.target.value })} placeholder="Acme Industries" />
-                <datalist id="invoice-customers">
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.name} />
-                  ))}
-                </datalist>
+              <Field label="Customer *" className="col-span-2">
+                <SearchSelect
+                  options={customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry }))}
+                  value={form.customerId && customers.some((c) => c.id === form.customerId) ? form.customerId : form.client}
+                  onChange={(v, option) => {
+                    const picked = customers.find((c) => c.id === v);
+                    if (picked) {
+                      setForm({ ...form, customerId: picked.id, client: picked.name });
+                    } else if (option) {
+                      // picked an option not resolved above — fall back to its label
+                      setForm({ ...form, customerId: undefined, client: option.label });
+                    } else {
+                      // custom typed name or cleared
+                      const match = customers.find((c) => c.name.toLowerCase() === v.toLowerCase());
+                      setForm({ ...form, customerId: match?.id, client: v });
+                    }
+                  }}
+                  placeholder="Acme Industries"
+                  searchPlaceholder="Search customers"
+                  allowCustom
+                />
               </Field>
             </div>
 
@@ -496,17 +588,31 @@ export function InvoiceTab() {
               <Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. September freight services — Vancouver–Calgary lane" />
             </Field>
 
-            {/* Line items */}
+            {/* Line items — pick from the catalog (price fills in) or type free text */}
             <div className="rounded-xl border p-3">
-              <div className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
+              <div className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <span>Catalog item</span><span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
               </div>
               <div className="space-y-2">
                 {form.lines.map((line, idx) => (
-                  <div key={line.id} className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2">
+                  <div key={line.id} className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2">
+                    <SearchSelect
+                      options={[
+                        { value: '', label: 'Free text…' },
+                        ...inventoryItems.filter((x) => x.active).map((x) => ({ value: x.id, label: x.name, detail: `$${x.price}` })),
+                      ]}
+                      value={line.itemId ?? ''}
+                      onChange={(v) => {
+                        const item = inventoryItems.find((x) => x.id === v);
+                        setForm({ ...form, lines: form.lines.map((l) => (l.id === line.id ? { ...l, itemId: item?.id, description: item ? item.name : l.description, unitPrice: item ? item.price : l.unitPrice } : l)) });
+                      }}
+                      placeholder="Free text…"
+                      searchPlaceholder="Search catalog"
+                      clearable={false}
+                    />
                     <Input
                       value={line.description}
-                      onChange={(e) => setForm({ ...form, lines: form.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value } : l)) })}
+                      onChange={(e) => setForm({ ...form, lines: form.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value, itemId: undefined } : l)) })}
                       placeholder={idx === 0 ? 'e.g. Freight services — Vancouver run' : 'Line description'}
                       className="h-8 text-xs"
                     />
@@ -574,6 +680,18 @@ export function InvoiceTab() {
                 </Select>
               </Field>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Billing currency" hint={form.currency && form.currency.toUpperCase() !== currency ? `Converts to ${currency} at the FX table rate on save.` : `Same as the company (${currency}) — no conversion.`}>
+                <CurrencySelect value={form.currency || currency} onChange={(v) => setForm({ ...form, currency: v === currency ? '' : v })} />
+              </Field>
+              <Field label="Total">
+                <p className="py-2 font-mono text-sm font-semibold">
+                  {form.currency && form.currency.toUpperCase() !== currency
+                    ? (() => { const r = rateFor(fxRates, form.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(convertToWorkspace(formTotals.total, r, currency))} (${form.currency.toUpperCase()} ${formTotals.total.toFixed(2)})`; })()
+                    : money(formTotals.total)}
+                </p>
+              </Field>
+            </div>
             <Field label="Taxes" hint="Select every tax that applies — rates stack (e.g. GST + PST).">
               <TaxProfilesMultiSelect taxProfiles={taxProfiles} selectedIds={form.taxProfileIds} onChange={(ids) => setForm({ ...form, taxProfileIds: ids })} />
             </Field>
@@ -593,9 +711,10 @@ export function InvoiceTab() {
             </Field>
           </div>
           <DialogFooter>
+            <Button variant="ghost" onClick={() => { setCreateOpen(false); setEditing(null); }}>Cancel</Button>
             <Button onClick={submit} disabled={!form.client.trim() || formTotals.total <= 0}>
               <ReceiptText className="mr-1 h-3.5 w-3.5" />
-              {editing ? 'Save changes' : 'Create invoice'}
+              ＋ {editing ? 'Save changes' : 'Create invoice'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -653,9 +772,10 @@ export function InvoiceTab() {
             <Field label="Message">
               <Textarea rows={6} value={emailForm.body} onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })} />
             </Field>
-            <p className="text-[11px] text-muted-foreground">
-              Sent through the company&apos;s linked Gmail (composio.dev OAuth). If Gmail isn&apos;t linked, the message opens in your mail client instead.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <span>Sent as a formatted HTML + plain-text invoice via your mail server (SMTP/Postmark) or Gmail.</span>
+              <ConfigDeepLinkButton target="smtp" label="Configure SMTP" />
+            </div>
             {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Sent — invoice marked as sent.</p>}
             {emailState === 'fallback' && <p className="text-xs font-medium text-amber-600">Opened in your mail client (Gmail not linked for this workspace).</p>}
           </div>
@@ -685,6 +805,15 @@ export function InvoiceTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmDuplicateInvoice}
+        onOpenChange={(o) => { if (!o) setConfirmDuplicateInvoice(null); }}
+        title="Possible duplicate invoice — record anyway?"
+        description={confirmDuplicateInvoice ? `This looks like ${confirmDuplicateInvoice.flags.map((f) => f.matchLabel).join('; ')} for ${money(confirmDuplicateInvoice.data.amount)}. Recording it raises a review approval so someone confirms it is a separate invoice.` : ''}
+        confirmLabel="Record + flag for review"
+        onConfirm={doConfirmDuplicateInvoice}
+      />
     </div>
   );
 }

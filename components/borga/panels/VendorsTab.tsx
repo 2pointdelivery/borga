@@ -1,5 +1,6 @@
 'use client';
 
+import { fmtMoney } from '@/lib/borga/currencies';
 import { useMemo, useState } from 'react';
 import {
   Plus, Trash2, Pencil, Truck, ReceiptText, CircleDollarSign, Download, Mail, Send, X, Ban,
@@ -11,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -23,16 +25,23 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  PAYMENT_TERMS_LABEL, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, fmtNum,
-  computeVendorRisk, VENDOR_RISK_STYLE,
+  PAYMENT_TERMS_LABEL, PAYMENT_METHODS, PAYMENT_METHOD_LABEL, computeVendorRisk, VENDOR_RISK_STYLE,
   INITIAL_TAX_PROFILES, DEFAULT_TAX_PROFILE_ID,
   AUTONOMOUS_PAYMENT_APPROVAL_THRESHOLD,
   type Vendor, type Bill, type BillLine, type PaymentTerms, type PaymentMethod,
 } from '@/lib/borga/data';
-import { CURRENCY_SYMBOL } from '@/lib/borga/data';
 import { useBorga } from '@/lib/borga/store';
+import { sendCompanyEmail } from '@/lib/borga/send-mail-client';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
+import { toast } from '@/lib/toast-bus';
+import { findBillDuplicates, type DuplicateFlag } from '@/lib/borga/duplicates';
 import { SectionTitle } from '../bits';
-import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect } from '../form-widgets';
+import { SearchSelect } from '../SearchSelect';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { DateInput, Field, ProjectSelect, AccountSelect, TaxProfilesMultiSelect, CountrySelect, CityInput, CurrencySelect } from '../form-widgets';
+import { rateFor } from '@/lib/borga/fx';
+import { documentTotals, convertToWorkspace, normalizeBill } from '@/lib/borga/pricing';
+import { FormDialog, FieldGrid, TextField, SelectField } from '../form-kit';
 import { billHtml, openPrintWindow, csvWithHeader, downloadTextFile } from '@/lib/borga/report-template';
 import { cn } from '@/lib/utils';
 
@@ -45,11 +54,13 @@ interface VendorForm {
 }
 
 interface BillForm {
-  vendorId: string; number: string; amount: string;
+  vendorId: string; number: string;
   received: string; due: string; status: Bill['status'];
   taxProfileIds: string[]; externalRef?: string;
   paymentMethod: PaymentMethod; notes: string; description: string; lines: BillLine[];
   projectId?: string; accountId?: string;
+  /** Billing currency (ISO). Empty = workspace currency. */
+  currency: string;
 }
 
 const EMPTY_VENDOR: VendorForm = {
@@ -63,10 +74,11 @@ const nextBillLine = () => { billLineSeq += 1; return `bl-${Date.now().toString(
 
 function emptyBill(vendorId: string, defaultTaxProfileId?: string): BillForm {
   return {
-    vendorId, number: '', amount: '',
+    vendorId, number: '',
     received: new Date().toISOString().slice(0, 10),
     due: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
     status: 'unpaid', taxProfileIds: defaultTaxProfileId ? [defaultTaxProfileId] : [], externalRef: '', paymentMethod: 'bank-transfer', notes: '', description: '',
+    currency: '',
     lines: [{ id: nextBillLine(), description: '', qty: 1, unitPrice: 0 }],
   };
 }
@@ -75,13 +87,13 @@ export function VendorsTab() {
   const {
     vendors, addVendor, updateVendor, deleteVendor,
     bills, addBill, updateBill, setBillStatus, deleteBill, voidBill, payBill,
-    composio, log, activeWorkspace,
+    inventoryItems, fxRates, composio, log, activeWorkspace, activeWorkspaceId,
     taxProfiles, defaultTaxProfileId,
     settings, addApproval,
   } = useBorga();
 
   const currency = activeWorkspace()?.currency ?? 'USD';
-  const money = (n: number) => `${CURRENCY_SYMBOL[currency]}${fmtNum(n)}`;
+  const money = (n: number) => fmtMoney(n, currency);
 
   const [vendorDialogOpen, setVendorDialogOpen] = useState(false);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
@@ -89,18 +101,19 @@ export function VendorsTab() {
 
   const [billDialogOpen, setBillDialogOpen] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<{ kind: 'bill' | 'vendor'; id: string; name: string } | null>(null);
   const [billForm, setBillForm] = useState<BillForm>(() => emptyBill(vendors[0]?.id ?? '', DEFAULT_TAX_PROFILE_ID));
 
-  const [payTarget, setPayTarget] = useState<Bill | null>(null);
+    const [payTarget, setPayTarget] = useState<Bill | null>(null);
   const [payMethod, setPayMethod] = useState<PaymentMethod>('bank-transfer');
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [confirmDuplicateBill, setConfirmDuplicateBill] = useState<{ data: Omit<Bill, 'id'> & { number: string }; flags: DuplicateFlag[] } | null>(null);  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payExternalRef, setPayExternalRef] = useState('');
   const [emailTarget, setEmailTarget] = useState<Bill | null>(null);
   const [emailForm, setEmailForm] = useState({ to: '', subject: '', body: '' });
   const [emailState, setEmailState] = useState<'idle' | 'sending' | 'sent' | 'fallback'>('idle');
 
   const outstanding = bills.filter((b) => b.status !== 'paid').reduce((s, b) => s + b.amount, 0);
-  const overdue = bills.filter((b) => b.status === 'unpaid').length;
+  const unpaidCount = bills.filter((b) => b.status === 'unpaid').length;
 
   const risks = useMemo(
     () => new Map(vendors.map((v) => [v.id, computeVendorRisk(v.id, bills.map((b) => ({ vendorId: b.vendorId, status: b.status, amount: b.amount })))])),
@@ -111,13 +124,14 @@ export function VendorsTab() {
     if (b) {
       setEditingBill(b);
       setBillForm({
-        vendorId: b.vendorId, number: b.number, amount: String(b.amount),
+        vendorId: b.vendorId, number: b.number,
         received: b.received, due: b.due, status: b.status,
         taxProfileIds: b.taxProfileIds ?? (b.taxProfileId ? [b.taxProfileId] : []),
         externalRef: b.externalRef ?? '',
         paymentMethod: b.paymentMethod ?? 'bank-transfer',
         notes: b.notes ?? '',
         description: b.description ?? '',
+        currency: b.currency ?? '',
         lines: b.lines?.length ? b.lines : [{ id: nextBillLine(), description: 'Services / goods received', qty: 1, unitPrice: b.amount }],
         projectId: b.projectId,
         accountId: b.accountId,
@@ -178,23 +192,28 @@ export function VendorsTab() {
     [taxProfiles, billForm.taxProfileIds],
   );
 
-  const billTotals = useMemo(() => {
-    const subtotal = billForm.lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const tax = (subtotal * billTaxRate) / 100;
-    return { subtotal, tax, total: subtotal + tax };
-  }, [billForm.lines, billTaxRate]);
+  const billTotals = useMemo(
+    () => documentTotals(billForm.lines, { taxRate: billTaxRate, currency: billForm.currency.trim().toUpperCase() || currency }),
+    [billForm.lines, billTaxRate, billForm.currency, currency],
+  );
 
   const submitBill = () => {
     const vendor = vendors.find((v) => v.id === billForm.vendorId);
-    if (!vendor || !billForm.amount) return;
+    if (!vendor || billTotals.total <= 0) return;
     const lines = billForm.lines.filter((l) => l.description.trim() || l.unitPrice);
     if (lines.length === 0) return;
-    const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-    const total = subtotal + (subtotal * billTaxRate) / 100;
+    // The server reprices bills from these lines; mirror its helpers here so the
+    // preview, the stored bill and an emailed copy cannot disagree.
+    const docCcy = billForm.currency.trim().toUpperCase() || currency;
+    const rate = docCcy === currency ? null : rateFor(fxRates, docCcy, currency);
+    if (docCcy !== currency && rate === null) {
+      toast({ title: 'No exchange rate', description: `No ${docCcy} → ${currency} rate. Refresh Exchange rates under Finance → Banking, or record in ${currency}.`, variant: 'error' });
+      return;
+    }
     const profileNames = taxProfiles.filter((t) => billForm.taxProfileIds.includes(t.id)).map((t) => t.name).join(' + ');
-    const shared = {
+    const draft = {
       vendorId: vendor.id, vendorName: vendor.name, number: billForm.number.trim(),
-      amount: Math.round(total * 100) / 100, received: billForm.received, due: billForm.due,
+      amount: 0, received: billForm.received, due: billForm.due,
       status: billForm.status, lines, taxRate: billTaxRate,
       taxProfileIds: billForm.taxProfileIds,
       taxProfileId: billForm.taxProfileIds[0],
@@ -205,14 +224,50 @@ export function VendorsTab() {
       paymentMethod: billForm.paymentMethod,
       projectId: billForm.projectId,
       accountId: billForm.accountId,
+      currency: docCcy === currency ? undefined : docCcy,
+      fxRate: rate ?? undefined,
     };
+    const shared = normalizeBill(draft as Bill, currency);
     if (editingBill) {
       updateBill(editingBill.id, shared);
-      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill ${billForm.number.trim()} updated — ${lines.length} line(s), total ${money(Math.round(total * 100) / 100)}.` });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill ${billForm.number.trim()} updated — ${lines.length} line(s), total ${money(shared.amount)}.` });
     } else {
-      addBill({ id: `b-${Date.now()}`, ...shared, number: shared.number || `BILL-${Date.now().toString().slice(-4)}` });
-      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill recorded from ${vendor.name}: ${money(Math.round(total * 100) / 100)} (${PAYMENT_METHOD_LABEL[billForm.paymentMethod]}).` });
+      const number = shared.number || `BILL-${Date.now().toString().slice(-4)}`;
+      const flags = findBillDuplicates({ id: '', vendorId: vendor.id, vendorName: vendor.name, number, amount: shared.amount, received: shared.received, externalRef: shared.externalRef }, bills);
+      const exact = flags.find((f) => f.level === 'exact');
+      if (exact) {
+        toast({ title: 'Duplicate bill blocked', description: exact.message, variant: 'error' });
+        log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'system', kind: 'system', message: `Duplicate bill blocked: ${number} from ${vendor.name} — ${exact.message}` });
+        return;
+      }
+      const likely = flags.filter((f) => f.level === 'likely');
+      if (likely.length) {
+        setConfirmDuplicateBill({ data: { ...shared, number }, flags: likely });
+        return;
+      }
+      addBill({ ...shared, id: `b-${Date.now()}`, number });
+      log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'task', message: `Bill recorded from ${vendor.name}: ${money(shared.amount)} (${PAYMENT_METHOD_LABEL[billForm.paymentMethod]}).` });
     }
+    setBillDialogOpen(false);
+    setEditingBill(null);
+  };
+
+  const doConfirmDuplicateBill = () => {
+    const p = confirmDuplicateBill;
+    if (!p) return;
+    addBill({ id: `b-${Date.now()}`, ...p.data });
+    addApproval({
+      id: `ap-${Date.now().toString(36)}`,
+      title: `Possible duplicate bill — review ${p.data.number} (${p.data.vendorName})`,
+      description: `Recorded despite matching ${p.flags.map((f) => f.matchLabel).join('; ')} for ${money(p.data.amount)}. Please confirm it is a separate bill, not a double entry.`,
+      category: 'spend',
+      amount: p.data.amount,
+      status: 'pending',
+      submittedBy: 'Sage',
+      createdAt: new Date().toISOString(),
+    });
+    log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${p.data.number} recorded over a duplicate warning — routed to the approval queue for review.` });
+    setConfirmDuplicateBill(null);
     setBillDialogOpen(false);
     setEditingBill(null);
   };
@@ -278,30 +333,30 @@ export function VendorsTab() {
     }
     setEmailState('sending');
     try {
-      const res = await fetch('/api/borga/composio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Borga-Client': 'borga-dashboard' },
-        body: JSON.stringify({
-          action: 'execute',
-          appName: 'GMAIL_SEND_EMAIL',
-          entityId: 'workspace-inbox',
-          apiKey: composio.apiKey,
-          params: {
-            recipient_email: emailForm.to.trim(),
-            subject: emailForm.subject,
-            body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
-          },
-        }),
+      const r = await sendCompanyEmail({
+        ws: activeWorkspaceId,
+        to: emailForm.to,
+        subject: emailForm.subject,
+        body: `${emailForm.body}\n\n—\n${activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? ''} — ${activeWorkspace()?.email ?? ''}`,
+        document: {
+          kind: 'bill',
+          workspaceName: activeWorkspace()?.legalName ?? activeWorkspace()?.name ?? 'Company',
+          documentNumber: b.number,
+          recipientName: b.vendorName,
+          currency: b.currency ?? currency,
+          totalAmount: b.amount,
+          dueOrValidDate: b.due,
+          lines: [{ label: b.description || `Vendor Bill ${b.number}`, qty: 1, unitPrice: b.amount, amount: b.amount }],
+        },
       });
-      const d = (await res.json()) as { ok?: boolean; error?: string };
-      if (d.ok) {
+      if (r.ok) {
         setEmailState('sent');
         updateBill(b.id, { status: b.status === 'unpaid' ? 'scheduled' : b.status });
-        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Bill ${b.number} remittance emailed to ${emailForm.to} via Gmail (composio.dev).` });
+        log({ agentId: 'a-comms', agentName: 'Nova', actor: 'user', kind: 'task', message: `Bill ${b.number} remittance emailed to ${emailForm.to} via ${r.via ?? 'Gmail'}.` });
         setTimeout(() => setEmailTarget(null), 1400);
         return;
       }
-      throw new Error(d.error ?? 'send failed');
+      throw new Error(r.note ?? 'send failed');
     } catch {
       const ws = activeWorkspace();
       window.location.href = `mailto:${encodeURIComponent(emailForm.to)}?subject=${encodeURIComponent(emailForm.subject)}&body=${encodeURIComponent(emailForm.body)}`;
@@ -329,7 +384,7 @@ export function VendorsTab() {
   return (
     <div className="borga-fade-up space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SectionTitle title="Vendors & payables" sub={`${vendors.length} vendors — ${money(outstanding)} outstanding across ${overdue} unpaid bill${overdue === 1 ? '' : 's'}`} />
+        <SectionTitle title="Vendors & payables" sub={`${vendors.length} vendors — ${money(outstanding)} outstanding across ${unpaidCount} unpaid bill${unpaidCount === 1 ? '' : 's'}`} />
         <div className="flex gap-2">
           <Button variant="outline" onClick={exportCsv}>
             <Download className="h-4 w-4" /> Export
@@ -354,7 +409,7 @@ export function VendorsTab() {
           <p className="mt-1 text-xl font-semibold">{money(bills.filter((b) => b.status === 'scheduled').reduce((s, b) => s + b.amount, 0))}</p>
         </Card>
         <Card className="p-3">
-          <p className="text-[11px] text-muted-foreground">Paid this period</p>
+          <p className="text-[11px] text-muted-foreground">Paid to date</p>
           <p className="mt-1 text-xl font-semibold">{money(bills.filter((b) => b.status === 'paid').reduce((s, b) => s + b.amount, 0))}</p>
         </Card>
       </div>
@@ -401,32 +456,34 @@ export function VendorsTab() {
                   </td>
                   <td className="px-4 py-2.5 text-right font-mono text-xs">
                     {money(b.amount)}
+                    {b.foreignAmount !== undefined && b.currency && <span className="block text-[10px] font-normal text-muted-foreground">{b.currency} {b.foreignAmount.toFixed(2)}</span>}
                     {b.taxProfileName && <span className="block text-[10px] font-normal text-muted-foreground">{b.taxProfileName} {b.taxRate ?? 0}%</span>}
                   </td>
                   <td className="px-4 py-2.5">
-                    <select
-                      value={b.status}
-                      onChange={(e) => setBillStatus(b.id, e.target.value as Bill['status'])}
-                      className={cn(
-                        'rounded-md px-1.5 py-0.5 text-[10px] font-semibold ring-1 outline-none',
+                    <Select value={b.status} onValueChange={(v) => setBillStatus(b.id, v as Bill['status'])}>
+                      <SelectTrigger className={cn(
+                        'h-6 w-24 border-0 bg-transparent px-1.5 py-0.5 text-[10px] font-semibold shadow-none outline-none [&>svg]:hidden',
                         b.status === 'paid'
-                          ? 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/30'
+                          ? 'bg-emerald-500/10 text-emerald-600 ring-1 ring-emerald-500/30'
                           : b.status === 'scheduled'
-                            ? 'bg-sky-500/10 text-sky-600 ring-sky-500/30'
-                            : 'bg-amber-500/10 text-amber-600 ring-amber-500/30',
-                      )}
-                    >
-                      <option value="unpaid">unpaid</option>
-                      <option value="scheduled">scheduled</option>
-                      <option value="paid">paid</option>
-                    </select>
+                            ? 'bg-sky-500/10 text-sky-600 ring-1 ring-sky-500/30'
+                            : 'bg-amber-500/10 text-amber-600 ring-1 ring-amber-500/30',
+                      )}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unpaid">unpaid</SelectItem>
+                        <SelectItem value="scheduled">scheduled</SelectItem>
+                        <SelectItem value="paid">paid</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </td>
                   <td className="px-2 py-2.5">
                     <div className="flex justify-end gap-0.5">
                       {/* Lock rule: only unpaid drafts delete — scheduled/paid void with audit trace. */}
                       {b.status === 'unpaid' && !b.voidedAt && (
                         <button
-                          onClick={() => { if (deleteBill(b.id)) log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${b.number} deleted.` }); }}
+                          onClick={() => setConfirmTarget({ kind: 'bill', id: b.id, name: b.number })}
                           className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                           title="Delete draft bill"
                         >
@@ -534,7 +591,7 @@ export function VendorsTab() {
                       <button onClick={() => { setEditingVendor(v); setVendorForm({ name: v.name, service: v.service, email: v.email, phone: v.phone, website: v.website, terms: v.terms, status: v.status, since: v.since, legalName: v.legalName ?? '', tradingName: v.tradingName ?? '', addressLine: v.addressLine ?? '', city: v.city ?? '', country: v.country ?? '', billingAddress: v.billingAddress ?? '', contactName: v.contactName ?? '', contactEmail: v.contactEmail ?? '', contactPhone: v.contactPhone ?? '', taxNumber: v.taxNumber ?? '' }); setVendorDialogOpen(true); }} className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary" title="Edit vendor">
                         <Pencil className="h-3 w-3" />
                       </button>
-                      <button onClick={() => { deleteVendor(v.id); log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Vendor ${v.name} removed.` }); }} className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Remove vendor">
+                      <button onClick={() => setConfirmTarget({ kind: 'vendor', id: v.id, name: v.name })} className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="Remove vendor">
                         <Trash2 className="h-3 w-3" />
                       </button>
                     </div>
@@ -550,134 +607,72 @@ export function VendorsTab() {
       </Card>
 
       {/* Vendor dialog */}
-      <Dialog open={vendorDialogOpen} onOpenChange={(o) => { setVendorDialogOpen(o); if (!o) setEditingVendor(null); }}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingVendor ? `Edit ${editingVendor.name}` : 'New vendor'}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Vendor name *</label>
-                <Input value={vendorForm.name} onChange={(e) => setVendorForm({ ...vendorForm, name: e.target.value })} placeholder="Acme Supplies" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Service / category</label>
-                <Input value={vendorForm.service} onChange={(e) => setVendorForm({ ...vendorForm, service: e.target.value })} placeholder="Office supplies" className="mt-1" />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Email</label>
-                <Input type="email" value={vendorForm.email} onChange={(e) => setVendorForm({ ...vendorForm, email: e.target.value })} placeholder="ap@acme.com" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Phone</label>
-                <Input value={vendorForm.phone} onChange={(e) => setVendorForm({ ...vendorForm, phone: e.target.value })} placeholder="+1 555 0400" className="mt-1" />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Website</label>
-                <Input value={vendorForm.website} onChange={(e) => setVendorForm({ ...vendorForm, website: e.target.value })} placeholder="acme.com" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Payment terms</label>
-                <Select value={vendorForm.terms} onValueChange={(v) => setVendorForm({ ...vendorForm, terms: v as PaymentTerms })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {(Object.keys(PAYMENT_TERMS_LABEL) as PaymentTerms[]).map((t) => (
-                      <SelectItem key={t} value={t}>{PAYMENT_TERMS_LABEL[t]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Status</label>
-                <Select value={vendorForm.status} onValueChange={(v) => setVendorForm({ ...vendorForm, status: v as VendorForm['status'] })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="paused">Paused</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Legal name</label>
-                <Input value={vendorForm.legalName} onChange={(e) => setVendorForm({ ...vendorForm, legalName: e.target.value })} placeholder="Acme Supplies Inc." className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Trading name</label>
-                <Input value={vendorForm.tradingName} onChange={(e) => setVendorForm({ ...vendorForm, tradingName: e.target.value })} placeholder="Acme" className="mt-1" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Address</label>
-              <Input value={vendorForm.addressLine} onChange={(e) => setVendorForm({ ...vendorForm, addressLine: e.target.value })} placeholder="123 Market St, Suite 400" className="mt-1" />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">City</label>
-                <Input value={vendorForm.city} onChange={(e) => setVendorForm({ ...vendorForm, city: e.target.value })} placeholder="Toronto" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Country</label>
-                <Input value={vendorForm.country} onChange={(e) => setVendorForm({ ...vendorForm, country: e.target.value })} placeholder="Canada" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Tax number</label>
-                <Input value={vendorForm.taxNumber} onChange={(e) => setVendorForm({ ...vendorForm, taxNumber: e.target.value })} placeholder="VAT / GST" className="mt-1" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground">Billing address (if different)</label>
-              <Input value={vendorForm.billingAddress} onChange={(e) => setVendorForm({ ...vendorForm, billingAddress: e.target.value })} placeholder="PO Box 9001, Springfield" className="mt-1" />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Contact person</label>
-                <Input value={vendorForm.contactName} onChange={(e) => setVendorForm({ ...vendorForm, contactName: e.target.value })} placeholder="Jordan Lee" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Contact email</label>
-                <Input type="email" value={vendorForm.contactEmail} onChange={(e) => setVendorForm({ ...vendorForm, contactEmail: e.target.value })} placeholder="ap@acme.com" className="mt-1" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Contact phone</label>
-                <Input value={vendorForm.contactPhone} onChange={(e) => setVendorForm({ ...vendorForm, contactPhone: e.target.value })} placeholder="+1 555 0100" className="mt-1" />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button onClick={submitVendor} disabled={!vendorForm.name.trim()}>
-              {editingVendor ? 'Save changes' : 'Add vendor'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <FormDialog
+        open={vendorDialogOpen}
+        onOpenChange={(o) => { setVendorDialogOpen(o); if (!o) setEditingVendor(null); }}
+        title={editingVendor ? `Edit ${editingVendor.name}` : 'New vendor'}
+        description="Who you buy from. Bills, purchase orders and payment history live under this record."
+        submitLabel={editingVendor ? 'Save changes' : 'Add vendor'}
+        onSubmit={submitVendor}
+        submitDisabled={!vendorForm.name.trim()}
+        wide
+      >
+        <FieldGrid cols={2}>
+          <TextField label="Vendor name *" value={vendorForm.name} onChange={(v) => setVendorForm({ ...vendorForm, name: v })} placeholder="Acme Supplies" />
+          <TextField label="What they sell you" value={vendorForm.service} onChange={(v) => setVendorForm({ ...vendorForm, service: v })} placeholder="Office supplies" hint="Used to suggest them on orders." />
+        </FieldGrid>
+        <FieldGrid cols={2}>
+          <TextField label="Email" value={vendorForm.email} onChange={(v) => setVendorForm({ ...vendorForm, email: v })} placeholder="ap@acme.com" type="email" />
+          <TextField label="Phone" value={vendorForm.phone} onChange={(v) => setVendorForm({ ...vendorForm, phone: v })} placeholder="+1 555 0400" />
+        </FieldGrid>
+        <FieldGrid cols={3}>
+          <TextField label="Website" value={vendorForm.website} onChange={(v) => setVendorForm({ ...vendorForm, website: v })} placeholder="acme.com" />
+          <SelectField label="Payment terms" value={vendorForm.terms} onChange={(v) => setVendorForm({ ...vendorForm, terms: v as PaymentTerms })} options={(Object.keys(PAYMENT_TERMS_LABEL) as PaymentTerms[]).map((t) => ({ value: t, label: PAYMENT_TERMS_LABEL[t] }))} hint="When you usually pay them." />
+          <SelectField label="Status" value={vendorForm.status} onChange={(v) => setVendorForm({ ...vendorForm, status: v as VendorForm['status'] })} options={[{ value: 'active', label: 'Active' }, { value: 'paused', label: 'Paused' }]} hint="Paused hides them from new orders." />
+        </FieldGrid>
+        <FieldGrid cols={2}>
+          <TextField label="Legal name" value={vendorForm.legalName} onChange={(v) => setVendorForm({ ...vendorForm, legalName: v })} placeholder="Acme Supplies Inc." hint="Exactly as on their invoice." />
+          <TextField label="Trading name" value={vendorForm.tradingName} onChange={(v) => setVendorForm({ ...vendorForm, tradingName: v })} placeholder="Acme" />
+        </FieldGrid>
+        <TextField label="Street address" value={vendorForm.addressLine} onChange={(v) => setVendorForm({ ...vendorForm, addressLine: v })} placeholder="123 Market St, Suite 400" />
+        <FieldGrid cols={3}>
+          <Field label="City">
+            <CityInput country={vendorForm.country} value={vendorForm.city} onChange={(v) => setVendorForm({ ...vendorForm, city: v })} />
+          </Field>
+          <Field label="Country">
+            <CountrySelect value={vendorForm.country} onChange={(v) => setVendorForm({ ...vendorForm, country: v, city: '' })} />
+          </Field>
+          <TextField label="Tax number" value={vendorForm.taxNumber} onChange={(v) => setVendorForm({ ...vendorForm, taxNumber: v })} placeholder="VAT / GST ID" />
+        </FieldGrid>
+        <TextField label="Billing address (if different)" value={vendorForm.billingAddress} onChange={(v) => setVendorForm({ ...vendorForm, billingAddress: v })} placeholder="PO Box 9001, Springfield" />
+        <FieldGrid cols={3}>
+          <TextField label="Contact person" value={vendorForm.contactName} onChange={(v) => setVendorForm({ ...vendorForm, contactName: v })} placeholder="Jordan Lee" />
+          <TextField label="Contact email" value={vendorForm.contactEmail} onChange={(v) => setVendorForm({ ...vendorForm, contactEmail: v })} placeholder="ap@acme.com" type="email" />
+          <TextField label="Contact phone" value={vendorForm.contactPhone} onChange={(v) => setVendorForm({ ...vendorForm, contactPhone: v })} placeholder="+1 555 0100" />
+        </FieldGrid>
+      </FormDialog>
 
       {/* Bill dialog */}
       <Dialog open={billDialogOpen} onOpenChange={(o) => { setBillDialogOpen(o); if (!o) setEditingBill(null); }}>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingBill ? `Edit bill ${editingBill.number}` : 'Record a bill'}</DialogTitle>
+            <DialogDescription>A supplier invoice you need to pay. Totals add up as you type; paying posts it to your books.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <Field label="Vendor *" className="col-span-2">
-                <Select value={billForm.vendorId} onValueChange={(v) => setBillForm({ ...billForm, vendorId: v })}>
-                  <SelectTrigger><SelectValue placeholder="Choose…" /></SelectTrigger>
-                  <SelectContent>
-                    {vendors.map((v) => (
-                      <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchSelect
+                  options={vendors.map((v) => ({ value: v.id, label: v.name, detail: v.service }))}
+                  value={billForm.vendorId}
+                  onChange={(v) => setBillForm({ ...billForm, vendorId: v })}
+                  placeholder="Choose…"
+                  searchPlaceholder="Search vendors"
+                  clearable={false}
+                />
               </Field>
               <Field label="Bill number">
-                <Input value={billForm.number} onChange={(e) => setBillForm({ ...billForm, number: e.target.value })} placeholder="INV-1001" />
+                <Input value={billForm.number} onChange={(e) => setBillForm({ ...billForm, number: e.target.value })} placeholder="BILL-1001" />
               </Field>
             </div>
 
@@ -685,15 +680,29 @@ export function VendorsTab() {
               <Textarea rows={2} value={billForm.description} onChange={(e) => setBillForm({ ...billForm, description: e.target.value })} placeholder="e.g. August cloud hosting — AWS production environment" />
             </Field>
 
-            {/* Line items */}
+            {/* Line items — pick from the catalog (cost fills in) or type free text */}
             <div className="rounded-xl border p-3">
-              <div className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
+              <div className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <span>Catalog item</span><span>Description</span><span className="text-right">Qty</span><span className="text-right">Unit price</span><span className="text-right">Amount</span><span />
               </div>
               <div className="space-y-2">
                 {billForm.lines.map((line, idx) => (
-                  <div key={line.id} className="grid grid-cols-[1fr_64px_96px_96px_28px] items-center gap-2">
-                    <Input value={line.description} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value } : l)) })} placeholder={idx === 0 ? 'e.g. Cloud hosting — August' : 'Line description'} className="h-8 text-xs" />
+                  <div key={line.id} className="grid grid-cols-[1fr_1fr_64px_96px_96px_28px] items-center gap-2">
+                    <SearchSelect
+                      options={[
+                        { value: '', label: 'Free text…' },
+                        ...inventoryItems.filter((x) => x.active).map((x) => ({ value: x.id, label: x.name, detail: `$${x.costPrice}` })),
+                      ]}
+                      value={line.itemId ?? ''}
+                      onChange={(v) => {
+                        const item = inventoryItems.find((x) => x.id === v);
+                        setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, itemId: item?.id, description: item ? item.name : l.description, unitPrice: item ? item.costPrice : l.unitPrice } : l)) });
+                      }}
+                      placeholder="Free text…"
+                      searchPlaceholder="Search catalog"
+                      clearable={false}
+                    />
+                    <Input value={line.description} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, description: e.target.value, itemId: undefined } : l)) })} placeholder={idx === 0 ? 'e.g. Cloud hosting — August' : 'Line description'} className="h-8 text-xs" />
                     <Input type="number" min={0} step="any" value={line.qty} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, qty: Number(e.target.value) || 0 } : l)) })} className="h-8 text-right text-xs" />
                     <Input type="number" min={0} step="any" value={line.unitPrice} onChange={(e) => setBillForm({ ...billForm, lines: billForm.lines.map((l) => (l.id === line.id ? { ...l, unitPrice: Number(e.target.value) || 0 } : l)) })} className="h-8 text-right text-xs" />
                     <span className="text-right font-mono text-xs">{money((Number(line.qty) || 0) * (Number(line.unitPrice) || 0))}</span>
@@ -715,6 +724,18 @@ export function VendorsTab() {
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Billing currency" hint={billForm.currency && billForm.currency.toUpperCase() !== currency ? `Converts to ${currency} at the FX table rate on save.` : `Same as the company (${currency}) — no conversion.`}>
+                <CurrencySelect value={billForm.currency || currency} onChange={(v) => setBillForm({ ...billForm, currency: v === currency ? '' : v })} />
+              </Field>
+              <Field label="Total">
+                <p className="py-2 font-mono text-sm font-semibold">
+                  {billForm.currency && billForm.currency.toUpperCase() !== currency
+                    ? (() => { const r = rateFor(fxRates, billForm.currency.toUpperCase(), currency); return r === null ? 'no rate — refresh Exchange rates' : `${money(convertToWorkspace(billTotals.total, r, currency))} (${billForm.currency.toUpperCase()} ${billTotals.total.toFixed(2)})`; })()
+                    : money(billTotals.total)}
+                </p>
+              </Field>
+            </div>
             <Field label="Taxes" hint="Select every tax that applies — rates stack (e.g. GST + PST).">
               <TaxProfilesMultiSelect taxProfiles={taxProfiles} selectedIds={billForm.taxProfileIds} onChange={(ids) => setBillForm({ ...billForm, taxProfileIds: ids })} />
             </Field>
@@ -764,9 +785,10 @@ export function VendorsTab() {
             </Field>
           </div>
           <DialogFooter>
+            <Button variant="ghost" onClick={() => { setBillDialogOpen(false); setEditingBill(null); }}>Cancel</Button>
             <Button onClick={submitBill} disabled={!billForm.vendorId || billTotals.total <= 0}>
               <ReceiptText className="mr-1 h-3.5 w-3.5" />
-              {editingBill ? 'Save changes' : 'Record bill'}
+              ＋ {editingBill ? 'Save changes' : 'Record bill'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -824,10 +846,11 @@ export function VendorsTab() {
             <Field label="Message">
               <Textarea rows={6} value={emailForm.body} onChange={(e) => setEmailForm({ ...emailForm, body: e.target.value })} />
             </Field>
-            <p className="text-[11px] text-muted-foreground">
-              Sent through the company&apos;s linked Gmail (composio.dev OAuth). If Gmail isn&apos;t linked, the message opens in your mail client instead.
-            </p>
-            {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Sent — bill marked scheduled.</p>}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <span>Sent as a formatted HTML + plain-text remittance via your mail server (SMTP/Postmark) or Gmail.</span>
+              <ConfigDeepLinkButton target="smtp" label="Configure SMTP" />
+            </div>
+            {emailState === 'sent' && <p className="text-xs font-medium text-emerald-600">Remittance emailed — bill marked scheduled. The payment itself still needs to be made.</p>}
             {emailState === 'fallback' && <p className="text-xs font-medium text-amber-600">Opened in your mail client (Gmail not linked for this workspace).</p>}
           </div>
           <DialogFooter>
@@ -838,6 +861,40 @@ export function VendorsTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!confirmTarget}
+        onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
+        title={confirmTarget?.kind === 'bill' ? `Delete bill ${confirmTarget?.name ?? ''}?` : `Remove vendor "${confirmTarget?.name ?? ''}"?`}
+        description={confirmTarget?.kind === 'bill'
+          ? 'The unpaid draft bill is removed. Scheduled and paid bills void with an audit trail instead.'
+          : (() => {
+              const open = bills.filter((b) => b.vendorId === confirmTarget?.id && b.status !== 'paid');
+              return open.length
+                ? `${confirmTarget?.name ?? 'The vendor'} has ${open.length} open bill${open.length !== 1 ? 's' : ''} — they lose their vendor link. The vendor is removed anyway.`
+                : 'The vendor is removed. Paid bill history keeps the name for reference.';
+            })()}
+        confirmLabel={confirmTarget?.kind === 'bill' ? 'Delete bill' : 'Remove vendor'}
+        onConfirm={() => {
+          if (!confirmTarget) return;
+          if (confirmTarget.kind === 'bill') {
+            if (deleteBill(confirmTarget.id)) log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Bill ${confirmTarget.name} deleted.` });
+          } else {
+            deleteVendor(confirmTarget.id);
+            log({ agentId: 'a-finance', agentName: 'Ledger', actor: 'user', kind: 'system', message: `Vendor ${confirmTarget.name} removed.` });
+          }
+          setConfirmTarget(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!confirmDuplicateBill}
+        onOpenChange={(o) => { if (!o) setConfirmDuplicateBill(null); }}
+        title="Possible duplicate bill — record anyway?"
+        description={confirmDuplicateBill ? `This looks like ${confirmDuplicateBill.flags.map((f) => f.matchLabel).join('; ')} for ${money(confirmDuplicateBill.data.amount)}. Recording it raises a review approval so someone confirms it is a separate bill.` : ''}
+        confirmLabel="Record + flag for review"
+        onConfirm={doConfirmDuplicateBill}
+      />
     </div>
   );
 }

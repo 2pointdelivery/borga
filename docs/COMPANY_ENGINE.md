@@ -1,10 +1,10 @@
 # Company Engine (the company's API portal)
 
-AI Platform → **Company Engine** (formerly "2Point Engine"). Each company connects its own CRM or company API, and Borga pulls customers and deals from it. It also drives the engine workflow calls (`/api/borga/orchestrate`).
+Company → **Company Engine**. Blank by default — each workspace connects its own CRM or company API, and Borga pulls customers and deals from it. It also drives the engine workflow calls (`/api/borga/orchestrate`). Pulled customers and deals flow into the system: Sales → Customers and the pipeline, the agents' context, `query_state`, insights and the advisor.
 
 ## Connect
 1. Create an API key in your CRM (read access is enough).
-2. AI Platform → Company Engine → enter the **API base URL** and **key**. The key is stored encrypted, per company, and is never returned to the browser.
+2. Company → Company Engine → enter the **API base URL** and **key**. The key is stored encrypted, per company, and is never returned to the browser.
 3. If your API differs from the defaults, set the optional fields: auth header (default `Authorization`), prefix (default `Bearer`; `none` sends the raw key), **customers path** (`/customers`), **deals path** (`/leads`), **list key** (the field holding the array).
 4. **Test connection**, then **Pull now**.
 
@@ -16,7 +16,7 @@ AI Platform → **Company Engine** (formerly "2Point Engine"). Each company conn
 
 ## Safety
 - The URL is fetched from the server, so it must be **https and a public address** (DNS is resolved and private/internal addresses are refused; redirects are not followed). For a CRM on a private network set `BORGA_ALLOW_PRIVATE_ENGINE=1`; local development allows it automatically.
-- Deployment-wide fallbacks: `BORGA_ENGINE_URL`, `COMPANY_ENGINE_API_KEY` (legacy `TWOPOINT_API_KEY` values saved earlier still resolve).
+- Resolution order per workspace: its saved connection first, then its legacy Settings endpoint, then the deployment-wide fallbacks `BORGA_ENGINE_URL` / `COMPANY_ENGINE_API_KEY` (both blank by default — no shared vendor is ever assumed).
 
 ## Notes
 - The collapsed "Operations dashboard" on the tab (bookings, fleet, drivers) is **sample logistics data** and is not pulled from your CRM.

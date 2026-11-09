@@ -16,10 +16,64 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Fails on any high or critical advisory in what ships (production dependencies).
+      - run: pnpm audit --prod --audit-level=high
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build
         env:
-          SESSION_SECRET: ci-only-not-a-secret-0123456789abcdef
+          SESSION_SECRET: 9f3a7c1e5b2d48a6c0e7b9d1f4a82c63
           DATABASE_URL: mysql://ci:ci@127.0.0.1:3306/ci
+
+  # Live isolation suites (T12 tenancy, T21 concurrency) plus the migration
+  # scenarios. Needs a real MySQL + running server, so it is a separate job
+  # with a MySQL service. Fails the build if any tenant can see another's data.
+  isolation:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-pass-123
+          MYSQL_DATABASE: ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+    env:
+      DATABASE_URL: mysql://root:ci-root-pass-123@127.0.0.1:3306/ci
+      SESSION_SECRET: 9f3a7c1e5b2d48a6c0e7b9d1f4a82c63
+      BORGA_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      CRON_SECRET: b81d4e6f2a9c3057d6e1f8a4c2b7093e
+      SIGNUP_MODE: open
+      BORGA_OPERATOR_EMAILS: nobody@example.test
+      BASE_URL: http://localhost:13000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:migrate
+      - run: pnpm db:migrate
+      - run: pnpm build
+      # next start -p 13000 (see the start script); backgrounded for the live suites below.
+      - run: nohup pnpm start > /tmp/borga-ci.log 2>&1 &
+      - name: Wait for the server
+        run: |
+          for i in $(seq 1 45); do
+            curl -fsS http://localhost:13000/api/health && exit 0
+            sleep 2
+          done
+          echo "server did not become healthy; its log:"
+          cat /tmp/borga-ci.log
+          exit 1
+      - run: pnpm test:tenancy
+      - run: pnpm test:concurrency
+      - name: Server log (on failure)
+        if: failure()
+        run: tail -n 120 /tmp/borga-ci.log || true

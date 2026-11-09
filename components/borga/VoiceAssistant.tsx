@@ -22,7 +22,9 @@ const SUGGESTIONS = [
 export function VoiceAssistant({ expanded }: { expanded: boolean }) {
   const { voice, setVoice, userName, settings, setSettings, agents, placeCall: storePlaceCall } = useBorga();
   const { startListening, stopListening, askBorga, startPushTalk, stopPushTalk } = useVoice();
-  const wakeWordEnabled = !!settings.notifications.voice;
+  // Always-on mic is its own setting (Settings → Voice assistant); older
+  // workspaces that enabled it via notifications.voice keep working.
+  const wakeWordEnabled = settings.alwaysListening ?? !!settings.notifications.voice;
   const [pttActive, setPttActive] = useState(false);
 
   // Tier 3 push-to-talk triggers: hold the talk button, or hold Space outside
@@ -98,7 +100,7 @@ export function VoiceAssistant({ expanded }: { expanded: boolean }) {
     } finally {
       setCalling(false);
     }
-  }, [callTo, callMsg]);
+  }, [callTo, callMsg, agents, storePlaceCall]);
 
   const toggle = useCallback(() => {
     if (voice.listening) {

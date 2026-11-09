@@ -1,17 +1,30 @@
+import { isEmailConfigured, sendEmail } from '@/lib/auth/mailer';
+import { renderWelcome } from '@/lib/auth/email-templates';
+import { appOrigin } from '@/lib/auth/app-url';
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { createSessionToken, sessionCookieName, sessionMaxAge, isSecureContext } from '@/lib/auth/session';
 import { hashPassword } from '@/lib/auth/password';
 import { createUser, getUserByEmail } from '@/lib/auth/queries';
-import { setBorgaState } from '@/lib/borga/persistence';
+import { setBorgaState, getBorgaState, insertBorgaStateIfAbsent, deleteBorgaState } from '@/lib/borga/persistence';
+import { checkInvite, decideSignup, hashInviteCode, inviteKey, inviteUsedKey, isOperator, signupMode, type InviteRecord } from '@/lib/auth/signup-policy';
+import { evaluateLoginRailGuard, normalizeLoginRail, resolveRailRedirect } from '@/lib/auth/login-rails';
+import { upsertAdvisorProfile } from '@/lib/borga/shared-services-server';
 import { userWorkspacesKey } from '@/lib/borga/keys';
 import { makeOnboarding, type Workspace } from '@/lib/borga/data';
+import { takeRouteLimit } from '@/lib/borga/route-limits';
 
 export const runtime = 'nodejs';
 
 const COLORS = ['#6366f1', '#0ea5e9', '#059669', '#f59e0b', '#ec4899', '#8b5cf6'];
 
+/** Lets the signup page know whether to ask for an invite code. */
+export async function GET() {
+  return NextResponse.json({ ok: true, mode: signupMode(process.env) });
+}
+
 export async function POST(req: Request) {
+  let claimed: string | null = null;
   try {
     const body = await req.json().catch(() => null);
     const email = String(body?.email ?? '').toLowerCase().trim();
@@ -21,6 +34,18 @@ export async function POST(req: Request) {
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return NextResponse.json({ ok: false, error: 'A valid email is required.' }, { status: 400 });
     }
+    // The welcome mail goes to an address the visitor chooses: cap it per address
+    // so signup cannot be used to send someone a stream of welcome messages.
+    const welcomeLimit = takeRouteLimit('signup', email);
+    if (welcomeLimit.limited) {
+      return NextResponse.json(
+        { ok: false, error: 'Too many signup attempts for this address. Try again later.' },
+        { status: 429, headers: { 'Retry-After': String(welcomeLimit.retryAfterSec) } },
+      );
+    }
+    if (password.length > 200) {
+      return NextResponse.json({ ok: false, error: 'Password must be at most 200 characters.' }, { status: 400 });
+    }
     if (password.length < 8) {
       return NextResponse.json({ ok: false, error: 'Password must be at least 8 characters.' }, { status: 400 });
     }
@@ -28,9 +53,36 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'Your name is required.' }, { status: 400 });
     }
 
+    const rail = normalizeLoginRail(body?.role, body?.next);
+    const op = isOperator(email, process.env);
+    const railGuard = evaluateLoginRailGuard({ rail, isOperator: op, advisorStatus: null });
+    if (!railGuard.allowed) {
+      return NextResponse.json({ ok: false, error: railGuard.error, rail }, { status: railGuard.status });
+    }
+
+    // Decide access before looking the email up, so an uninvited visitor cannot probe which emails have accounts.
+    const inviteCode = String(body?.inviteCode ?? '').trim();
+    const decision = decideSignup(signupMode(process.env), email, inviteCode.length > 0, process.env);
+    if (!decision.allow) {
+      return NextResponse.json({ ok: false, error: decision.error }, { status: decision.status });
+    }
+    let inviteHash: string | null = null;
+    if (decision.consumeInvite) {
+      inviteHash = hashInviteCode(inviteCode);
+      const check = checkInvite(await getBorgaState<InviteRecord>(inviteKey(inviteHash)), email, Date.now());
+      if (!check.ok) return NextResponse.json({ ok: false, error: check.error }, { status: 403 });
+    }
+
     const existing = await getUserByEmail(email);
     if (existing) {
       return NextResponse.json({ ok: false, error: 'An account with this email already exists.' }, { status: 409 });
+    }
+
+    // Single use: only one concurrent signup can claim the code. Released again if account creation fails.
+    if (inviteHash) {
+      const won = await insertBorgaStateIfAbsent(inviteUsedKey(inviteHash), { email, at: Date.now() });
+      if (!won) return NextResponse.json({ ok: false, error: 'That invite code has already been used.' }, { status: 403 });
+      claimed = inviteHash;
     }
 
     const user = await createUser({
@@ -49,14 +101,38 @@ export async function POST(req: Request) {
       color: COLORS[Math.floor(Math.random() * COLORS.length)],
       currency: 'USD',
       createdAt: new Date().toLocaleDateString([], { month: 'short', year: 'numeric' }),
+      createdAtIso: new Date().toISOString(),
       onboarding: makeOnboarding(),
     };
     await setBorgaState(userWorkspacesKey(user.id), [ws]);
 
+    let advisorStatus: string | null = null;
+    if (rail === 'advisor') {
+      const profile = await upsertAdvisorProfile(user.id, user.email, {
+        name: user.name,
+        agencyName: typeof body?.agencyName === 'string' ? body.agencyName : undefined,
+        autoApproveIfOperator: true,
+      }).catch(() => null);
+      advisorStatus = profile?.status ?? null;
+    }
+
+    // A short welcome, in the background: a mail server being slow or absent must never hold up or fail signup.
+    const appUrl = appOrigin(req);
+    if (appUrl) {
+      void (async () => {
+        if (!(await isEmailConfigured())) return;
+        const mail = renderWelcome({ name: user.name, companyName: ws.name, appUrl: `${appUrl}/app` });
+        await sendEmail({ to: user.email, subject: mail.subject, html: mail.html, text: mail.text });
+      })().catch(() => undefined);
+    }
+
     const token = await createSessionToken(user.id);
+    const redirectTo = resolveRailRedirect(rail, 'signup', body?.next);
     const res = NextResponse.json({
       ok: true,
-      user: { id: user.id, email: user.email, name: user.name },
+      rail,
+      redirectTo,
+      user: { id: user.id, email: user.email, name: user.name, isOperator: op, advisorStatus },
       workspaceId: ws.id,
     });
     res.cookies.set(sessionCookieName(), token, {
@@ -68,6 +144,7 @@ export async function POST(req: Request) {
     });
     return res;
   } catch {
+    if (claimed) await deleteBorgaState(inviteUsedKey(claimed)).catch(() => false);
     return NextResponse.json({ ok: false, error: 'Could not create account. Try again.' }, { status: 500 });
   }
 }

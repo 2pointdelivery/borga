@@ -5,11 +5,20 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { SocialMediaTab } from '../panels/SocialMediaTab';
 import { AdvertisingTab } from '../panels/AdvertisingTab';
 import { useFeature } from '@/lib/borga/features-client';
+import { ConfigDeepLinkButton } from '../ConfigDeepLink';
 
 export function MarketingPage({ initialTab }: { initialTab?: string }) {
   const social = useFeature('social');
   const ads = useFeature('advertising');
   const [tab, setTab] = useState(initialTab ?? (social ? 'social' : 'advertising'));
+  if (!social && !ads) {
+    return (
+      <div className="flex flex-col items-center gap-3 p-10 text-center text-sm text-muted-foreground">
+        <p>All marketing features are switched off — enable them under Settings → Features.</p>
+        <ConfigDeepLinkButton target="features" />
+      </div>
+    );
+  }
   return (
     <Tabs value={tab} onValueChange={setTab} className="borga-fade-up">
       <TabsList>

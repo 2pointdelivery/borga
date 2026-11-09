@@ -7,11 +7,12 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SearchSelect } from '../SearchSelect';
 import { useBorga } from '@/lib/borga/store';
 import { PRIORITY_LABEL, type Bucket, type Priority, type Task } from '@/lib/borga/data';
 
 export function TaskEditDialog({ task, open, onOpenChange }: { task: Task | null; open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { updateTask, deleteTask, agents, log } = useBorga();
+  const { updateTask, deleteTask, agents, projects, customers, log } = useBorga();
   const [form, setForm] = useState<Task | null>(null);
   const editing = form ?? task;
   const patch = (p: Partial<Task>) => setForm((f) => (task ? { ...(f ?? task), ...p } : f));
@@ -25,10 +26,12 @@ export function TaskEditDialog({ task, open, onOpenChange }: { task: Task | null
       status: editing.status,
       bucket: editing.bucket,
       assignee: editing.assignee,
+      projectId: editing.projectId,
+      customerId: editing.customerId,
       due: editing.due,
       progress: editing.progress,
     });
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'task', message: `Updated task: ${editing.title.trim()}` });
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'task', message: `Updated task: ${editing.title.trim()}` });
     setForm(null);
     onOpenChange(false);
   };
@@ -36,7 +39,7 @@ export function TaskEditDialog({ task, open, onOpenChange }: { task: Task | null
   const remove = () => {
     if (!task) return;
     deleteTask(task.id);
-    log({ agentId: 'a1', agentName: 'Borga', actor: 'user', kind: 'task', message: `Deleted task: ${task.title}` });
+    log({ agentId: 'a-borga', agentName: 'Borga', actor: 'user', kind: 'task', message: `Deleted task: ${task.title}` });
     setForm(null);
     onOpenChange(false);
   };
@@ -80,12 +83,15 @@ export function TaskEditDialog({ task, open, onOpenChange }: { task: Task | null
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Assign to</label>
-                  <Select value={editing.assignee} onValueChange={(v) => patch({ assignee: v })}>
-                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {agents.map((a) => <SelectItem key={a.id} value={a.name}>{a.name} — {a.department}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <div className="mt-1">
+                    <SearchSelect
+                      options={agents.map((a) => ({ value: a.name, label: a.name, detail: a.department }))}
+                      value={editing.assignee}
+                      onChange={(v) => patch({ assignee: v })}
+                      placeholder="Unassigned"
+                      searchPlaceholder="Search agents"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground">Status</label>
@@ -97,6 +103,40 @@ export function TaskEditDialog({ task, open, onOpenChange }: { task: Task | null
                       <SelectItem value="done">Done</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Project (optional)</label>
+                  <div className="mt-1">
+                    <SearchSelect
+                      options={[
+                        { value: '', label: 'No project' },
+                        ...projects.map((p) => ({ value: p.id, label: p.name, detail: p.status })),
+                      ]}
+                      value={editing.projectId ?? ''}
+                      onChange={(v) => patch({ projectId: v || undefined })}
+                      placeholder="No project"
+                      searchPlaceholder="Search projects"
+                      clearable={false}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground">Customer (optional)</label>
+                  <div className="mt-1">
+                    <SearchSelect
+                      options={[
+                        { value: '', label: 'No customer' },
+                        ...customers.map((c) => ({ value: c.id, label: c.name, detail: c.industry })),
+                      ]}
+                      value={editing.customerId ?? ''}
+                      onChange={(v) => patch({ customerId: v || undefined })}
+                      placeholder="No customer"
+                      searchPlaceholder="Search customers"
+                      clearable={false}
+                    />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

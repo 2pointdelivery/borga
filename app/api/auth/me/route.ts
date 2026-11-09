@@ -4,6 +4,8 @@ import { getUserById } from '@/lib/auth/queries';
 import { getBorgaStatesByPrefix } from '@/lib/borga/persistence';
 import { userWorkspacesKey, isValidUserId } from '@/lib/borga/keys';
 import type { Workspace } from '@/lib/borga/data';
+import { isOperator } from '@/lib/auth/signup-policy';
+import { getAdvisorByUserId } from '@/lib/borga/shared-services-server';
 
 export const runtime = 'nodejs';
 
@@ -15,11 +17,21 @@ export async function GET(req: NextRequest) {
   const user = await getUserById(userId);
   if (!user) return NextResponse.json({ user: null }, { status: 401 });
 
-  const rows = await getBorgaStatesByPrefix(userWorkspacesKey(user.id));
+  const [rows, advisor] = await Promise.all([
+    getBorgaStatesByPrefix(userWorkspacesKey(user.id)),
+    getAdvisorByUserId(user.id).catch(() => null),
+  ]);
   const workspaces = (rows[userWorkspacesKey(user.id)] as Workspace[] | undefined) ?? [];
 
   return NextResponse.json({
-    user: { id: user.id, email: user.email, name: user.name },
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      isOperator: isOperator(user.email, process.env),
+      isAdvisor: !!advisor,
+      advisorStatus: advisor?.status ?? null,
+    },
     workspaces,
     activeWorkspaceId: workspaces[0]?.id ?? null,
   });

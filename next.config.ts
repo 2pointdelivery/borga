@@ -6,6 +6,8 @@ dotenv.config({ path: '.env', override: true });
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  poweredByHeader: false,
+  productionBrowserSourceMaps: false,
   turbopack: {},
   typescript: {
     ignoreBuildErrors: false,
@@ -22,7 +24,11 @@ const nextConfig: NextConfig = {
   async headers() {
     const isDev = process.env.NODE_ENV === 'development';
 
-    // Allow a configured Umami analytics host in the CSP (only when set).
+    // NOTE: script-src lives in proxy.ts (per-request nonce). This static
+    // policy deliberately omits it: two CSP headers are enforced as an
+    // intersection, so a static script-src here would re-allow what the nonce
+    // policy forbids. Static assets keep every other directive below.
+    // Allow a configured Umami analytics host in connect-src (only when set).
     let umamiHost = '';
     try {
       const u = process.env.NEXT_PUBLIC_UMAMI_SCRIPT_URL;
@@ -32,17 +38,22 @@ const nextConfig: NextConfig = {
     } catch {
       umamiHost = '';
     }
+    // The Company Engine API host is per-workspace and user-supplied; when the
+    // deployment sets a shared fallback (BORGA_ENGINE_URL), allow the browser
+    // to reach that origin too. Nothing is hardcoded — blank means self-only.
+    let engineHost = '';
+    try {
+      const raw = process.env.BORGA_ENGINE_URL;
+      if (raw && raw.startsWith('http')) engineHost = new URL(raw).origin;
+    } catch {
+      engineHost = '';
+    }
     // Vercel Web Analytics is only present on real Vercel deployments.
     const vercelAnalytics = !!process.env.VERCEL;
-    const scriptExtra = [
-      umamiHost ? `https://${umamiHost}` : '',
-      vercelAnalytics ? 'https://va.vercel-analytics.com https://*.vercel-insights.com' : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
     const connectExtra = [
       umamiHost ? `https://${umamiHost}` : '',
       vercelAnalytics ? 'https://va.vercel-analytics.com https://*.vercel-insights.com' : '',
+      engineHost,
     ]
       .filter(Boolean)
       .join(' ');
@@ -55,23 +66,29 @@ const nextConfig: NextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Permissions-Policy', value: 'camera=(), geolocation=()' },
           { key: 'X-XSS-Protection', value: '0' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+          // HSTS only where it is real: on localhost it would pin the dev host to https.
+          ...(isDev ? [] : [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' }]),
           {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              // 'unsafe-eval' is required by Turbopack/Next.js in development; removed in production.
-              isDev
-                ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${scriptExtra}`.trim()
-                : `script-src 'self' 'unsafe-inline' ${scriptExtra}`.trim(),
               "style-src 'self' 'unsafe-inline'",
               // happyseeds.ai required for the watermark logo image.
               "img-src 'self' data: blob: https://happyseeds.ai https://*.happyseeds.ai",
               "font-src 'self' data:",
-              // *.happyseeds.ai required for the watermark API; 2pointlogistics.com for the engine API.
+              // *.happyseeds.ai required for the watermark API. Engine calls are
+              // proxied through our own API routes; connectExtra only adds the
+              // deployment fallback origin when BORGA_ENGINE_URL is set.
               // Composio calls are proxied through our own API routes, so no direct browser→composio connection needed.
-              `connect-src 'self' https://2pointlogistics.com https://*.happyseeds.ai ${connectExtra}`.trim(),
+              `connect-src 'self' https://*.happyseeds.ai ${connectExtra}`.trim(),
               "object-src 'none'",
               "base-uri 'self'",
+              // No other site may frame the app (clickjacking), and forms may only post back to it.
+              "frame-ancestors 'none'",
+              "form-action 'self'",
+              ...(isDev ? [] : ['upgrade-insecure-requests']),
             ].join('; '),
           },
         ],

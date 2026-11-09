@@ -49,6 +49,7 @@
   "exclude": [
     "node_modules",
     "llm-server",
-    "landing-site"
+    "landing-site",
+    "mobile"
   ]
 }
