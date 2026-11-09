@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { featureGate, sessionUserId } from '@/lib/borga/features-server';
 import { isValidWsId } from '@/lib/borga/keys';
+import { TenantAccessError } from '@/lib/borga/tenant-guard';
 import { TICKET_STATUSES, type TicketStatus } from '@/lib/borga/tickets';
 import {
   addComment,
@@ -147,6 +148,7 @@ export async function POST(req: NextRequest) {
       }
     }
   } catch (e) {
+    if (e instanceof TenantAccessError) return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
     console.error('[tickets] action failed', e);
     return NextResponse.json({ ok: false, error: 'Request failed' }, { status: 500 });
   }
