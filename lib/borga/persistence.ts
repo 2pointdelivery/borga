@@ -2,7 +2,7 @@ import 'server-only';
 import { and, eq, like, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { borgaState } from '@/db/schemas/borga';
-import { assertTenantKey } from './tenant-guard';
+import { assertTenantKey, TenantAccessError } from './tenant-guard';
 
 /**
  * Borga persistence layer. Reads/writes JSON documents to Postgres keyed by
@@ -199,6 +199,7 @@ export async function insertBorgaStateIfAbsent<T>(key: string, value: T): Promis
     const [header] = await db.insert(borgaState).ignore().values({ key, value, updatedAt: new Date() });
     return (header as { affectedRows?: number }).affectedRows === 1;
   } catch (error) {
+    if (error instanceof TenantAccessError) throw error;
     console.error(`Failed to insert borga state for key "${key}":`, error);
     return false;
   }
