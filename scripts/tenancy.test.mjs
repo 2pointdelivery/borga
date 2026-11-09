@@ -195,7 +195,8 @@ test("everything B writes into A's workspace id lands in B's own space and never
     call(B, 'POST', `/api/borga/connections?ws=${A.ws}`, { action: 'delete', provider: 'supermemory' }),
     call(B, 'POST', `/api/borga/supermemory?ws=${A.ws}`, { action: 'purge', confirm: 'DELETE' }),
   ];
-  for (const r of await Promise.all(writes)) assert.ok(r.status < 500, `server error ${r.status}: ${r.text.slice(0, 120)}`);
+  const results = await Promise.all(writes);
+  results.forEach((r, i) => assert.ok(r.status < 500, `write #${i} (${['data', 'tickets', 'features', 'email', 'memory store', 'memory clear', 'scheduler', 'connections delete', 'supermemory purge'][i]}) server error ${r.status}: ${r.text.slice(0, 120)}`));
 
   // A's view afterwards: still all A's data, none of B's.
   const data = await call(A, 'GET', `/api/borga/data?ws=${A.ws}`);

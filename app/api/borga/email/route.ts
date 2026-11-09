@@ -26,7 +26,7 @@ const body = z.discriminatedUnion('action', [
   z.object({ action: z.literal('digestNow') }),
   z.object({ action: z.literal('removeSuppression'), email: z.string().max(254) }),
   // Events only the browser can see (approvals created in the UI, recurring runs). Validated and size-limited.
-  z.object({ action: z.literal('notify'), event: z.enum(CLIENT_EMAIL_EVENTS as [EmailEventId, ...EmailEventId[]]), data: z.record(z.unknown()).refine((d) => JSON.stringify(d).length < 4000) }),
+  z.object({ action: z.literal('notify'), event: z.enum(CLIENT_EMAIL_EVENTS as [EmailEventId, ...EmailEventId[]]), data: z.record(z.string(), z.unknown()).refine((d) => JSON.stringify(d).length < 4000) }),
 ]);
 
 function origin(req: NextRequest): string | undefined {

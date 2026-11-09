@@ -10,7 +10,7 @@ export const runtime = 'nodejs';
 const provider = z.enum(PROVIDER_IDS as [ProviderId, ...ProviderId[]]);
 
 const body = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('save'), provider, values: z.record(z.string().max(2048)), clear: z.array(z.string().max(64)).max(20).optional() }),
+  z.object({ action: z.literal('save'), provider, values: z.record(z.string(), z.string().max(2048)), clear: z.array(z.string().max(64)).max(20).optional() }),
   z.object({ action: z.literal('test'), provider }),
   z.object({ action: z.literal('delete'), provider }),
 ]);

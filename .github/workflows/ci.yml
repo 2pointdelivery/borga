@@ -74,3 +74,6 @@ jobs:
           exit 1
       - run: pnpm test:tenancy
       - run: pnpm test:concurrency
+      - name: Server log (on failure)
+        if: failure()
+        run: tail -n 120 /tmp/borga-ci.log || true
